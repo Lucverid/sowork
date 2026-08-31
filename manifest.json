@@ -1,0 +1,9 @@
+{
+  "name": "SoWork Operations Hub v1.2.0",
+  "short_name": "SoWork",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f7",
+  "theme_color": "#0f1f2e",
+  "description": "Jadwal, checklist, stock, stock opname, prediksi order, dan operasional kerja."
+}
