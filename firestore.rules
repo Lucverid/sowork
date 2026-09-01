@@ -1,0 +1,156 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Admin utama dikenali langsung dari Firebase Authentication UID.
+    // Ini menghindari permission check berantai lewat get(users/{uid})
+    // pada setiap operasi Admin.
+    function isAdmin() {
+      return signedIn()
+        && request.auth.uid == "uTBNtKIL3iTHx1JGg1AHwM5HLYi2";
+    }
+
+    // Profile lookup hanya digunakan untuk akun non-admin / Viewer.
+    function viewerProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isActiveViewer() {
+      return signedIn()
+        && !isAdmin()
+        && viewerProfile().data.active == true
+        && viewerProfile().data.role == "viewer";
+    }
+
+    function activeUser() {
+      return isAdmin() || isActiveViewer();
+    }
+
+    // ------------------------------------------------------------
+    // USERS
+    // ------------------------------------------------------------
+    match /users/{uid} {
+      // Admin bisa melihat semua profil.
+      // User login hanya bisa membaca profil dirinya sendiri.
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == uid);
+
+      // Registrasi dari frontend hanya boleh membuat profil milik sendiri
+      // dan SELALU sebagai viewer aktif.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == "viewer"
+        && request.resource.data.active == true;
+
+      // Admin bisa update profil siapa pun.
+      // Viewer hanya boleh update profil sendiri tanpa mengubah role/active.
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.active == resource.data.active
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------
+    // VIEWER: READ ONLY
+    // ------------------------------------------------------------
+    match /schedules/{docId} {
+      allow read: if activeUser();
+      allow write: if isAdmin();
+    }
+
+    match /dailyChecklists/{docId} {
+      allow read: if activeUser();
+      allow write: if isAdmin();
+    }
+
+    match /checklistCompletions/{docId} {
+      allow read: if activeUser();
+      allow write: if isAdmin();
+    }
+
+    match /scheduleRules/{docId} {
+      allow read: if activeUser();
+      allow write: if isAdmin();
+    }
+
+    // ------------------------------------------------------------
+    // ADMIN ONLY — CREW / OPERATIONS
+    // ------------------------------------------------------------
+    match /crew/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ------------------------------------------------------------
+    // ADMIN ONLY — STOCK
+    // ------------------------------------------------------------
+    match /items/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /stockMovements/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /stockOpnames/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /purchaseOrders/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Client hanya boleh membaca histori alert.
+    // Penulisan alert nantinya dilakukan oleh Cloud Function / Admin SDK.
+    match /stockAlertEvents/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------
+    // ADMIN ONLY — WASTE
+    // ------------------------------------------------------------
+    match /wasteItems/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /wasteMonths/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Legacy collection tetap diizinkan untuk Admin kalau masih ada data lama.
+    match /waste/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ------------------------------------------------------------
+    // ADMIN ONLY — REPORTS / AUDIT / SETTINGS
+    // ------------------------------------------------------------
+    match /personalReports/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /auditLogs/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /settings/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ------------------------------------------------------------
+    // DEFAULT DENY
+    // ------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

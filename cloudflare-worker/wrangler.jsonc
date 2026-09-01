@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "sowork-telegram-free",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-28",
+  "vars": {
+    "FIREBASE_PROJECT_ID": "sowork-ab04d",
+    "ADMIN_UID": "uTBNtKIL3iTHx1JGg1AHwM5HLYi2",
+    "APP_NAME": "SoWork"
+  },
+  "triggers": {
+    "crons": [
+      "30 23 * * *",
+      "0 1 * * *"
+    ]
+  }
+}

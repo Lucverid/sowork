@@ -1,0 +1,26 @@
+{
+  "name": "sowork",
+  "private": true,
+  "version": "1.3.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cf:login": "wrangler login --config cloudflare-worker/wrangler.jsonc",
+    "cf:create-db": "wrangler d1 create sowork-telegram --binding DB --update-config --config cloudflare-worker/wrangler.jsonc",
+    "cf:init-db": "wrangler d1 execute DB --remote --file=cloudflare-worker/schema.sql --config cloudflare-worker/wrangler.jsonc",
+    "cf:deploy": "wrangler deploy --config cloudflare-worker/wrangler.jsonc",
+    "cf:dev": "wrangler dev --config cloudflare-worker/wrangler.jsonc",
+    "deploy": "gh-pages -d dist -r https://github.com/Lucverid/sowork.git"
+  },
+  "dependencies": {
+    "firebase": "latest",
+    "xlsx-js-style": "^1.2.0"
+  },
+  "devDependencies": {
+    "vite": "latest",
+    "wrangler": "^4.0.0",
+    "gh-pages": "^6.3.0"
+  }
+}
