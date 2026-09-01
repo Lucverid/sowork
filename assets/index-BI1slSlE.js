@@ -267,57 +267,57 @@ Total Duration: ${c-l}ms`),K.resolve({didRun:!0,sequenceNumbersCollected:r,targe
         </nav>
       </section>
     </div>
-  `,document.querySelectorAll(`[data-page]`).forEach(e=>{e.onclick=()=>{Z.page=e.dataset.page,sk()}}),document.querySelector(`#logout-btn`).onclick=ET,ck(),dk()}function ck(){let e=document.querySelector(`#network-status`);if(!e)return;let t=navigator.onLine;e.className=`network-pill ${t?`online`:`offline`}`,e.innerHTML=`<span></span>${t?`Online`:`Offline cache`}`}window.addEventListener(`online`,ck),window.addEventListener(`offline`,ck);function lk(e){return{dashboard:`Dashboard`,schedule:`Jadwal Kerja`,checklist:`Daily Checklist`,stock:`Stock`,opname:`Stock Opname`,order:`Order Planner`,waste:`Waste`,calculator:`Kalkulator Kerja`,reports:`Laporan Pribadi`,data:`Data & Sheet`,settings:`Settings`}[e]||`SoWork`}function uk(e){return{dashboard:`Ringkasan operasional hari ini`,schedule:`Shift, role, fairness & lembur`,checklist:`Task harian berdasarkan shift dan role`,stock:`Master barang, alert & pergerakan stok`,opname:`Input stok aktual & histori SO`,order:`Prediksi kebutuhan dan waktu order`,waste:`Input harian, trend & waste intelligence`,calculator:`Tool hitung operasional`,reports:`Catatan kerja pribadi`,data:`Export, import & template spreadsheet`,settings:`Workspace, profil & default sistem`}[e]||`Operations workspace`}function dk(){let e=document.querySelector(`#page-content`);if(e){if(!kT(Z.profile)&&![`dashboard`,`schedule`,`checklist`].includes(Z.page)){Z.page=`dashboard`,sk();return}return Z.page===`dashboard`?fk(e):Z.page===`schedule`?pk(e):Z.page===`checklist`?Ek(e):Z.page===`stock`?Mk(e):Z.page===`opname`?Nk(e):Z.page===`order`?Pk(e):Z.page===`waste`?Kk(e):Z.page===`calculator`?Xk(e):Z.page===`reports`?Jk(e):Z.page===`data`?Zk(e):Z.page===`settings`?eA(e):cA(e)}}function fk(e){let t=hA(new Date),n=Z.schedules.filter(e=>e.date===t),r=Z.checklist.filter(e=>e.active!==!1),i=Z.profile?.name?.split(` `)[0]||`User`,a=kT(Z.profile),o=a?NE(Z.stockItems,Z.stockOpnames,Z.stockMovements):[],s=a?PE(o):[],c=s.filter(e=>e.status===`Kritis`),l=a?uD(Z.wasteItems,Z.wasteDays,t.slice(0,7),t):{alerts:[],analytics:null};e.innerHTML=`
+  `,document.querySelectorAll(`[data-page]`).forEach(e=>{e.onclick=()=>{Z.page=e.dataset.page,sk()}}),document.querySelector(`#logout-btn`).onclick=ET,ck(),dk()}function ck(){let e=document.querySelector(`#network-status`);if(!e)return;let t=navigator.onLine;e.className=`network-pill ${t?`online`:`offline`}`,e.innerHTML=`<span></span>${t?`Online`:`Offline cache`}`}window.addEventListener(`online`,ck),window.addEventListener(`offline`,ck);function lk(e){return{dashboard:`Dashboard`,schedule:`Jadwal Kerja`,checklist:`Daily Checklist`,stock:`Stock`,opname:`Stock Opname`,order:`Order Planner`,waste:`Waste`,calculator:`Kalkulator Kerja`,reports:`Laporan Pribadi`,data:`Data & Sheet`,settings:`Settings`}[e]||`SoWork`}function uk(e){return{dashboard:`Ringkasan operasional hari ini`,schedule:`Shift, role, fairness & lembur`,checklist:`Task harian berdasarkan shift dan role`,stock:`Master barang, alert & pergerakan stok`,opname:`Input stok aktual & histori SO`,order:`Prediksi kebutuhan dan waktu order`,waste:`Input harian, trend & waste intelligence`,calculator:`Tool hitung operasional`,reports:`Catatan kerja pribadi`,data:`Export, import & template spreadsheet`,settings:`Workspace, profil & default sistem`}[e]||`Operations workspace`}function dk(){let e=document.querySelector(`#page-content`);if(e){if(!kT(Z.profile)&&![`dashboard`,`schedule`,`checklist`].includes(Z.page)){Z.page=`dashboard`,sk();return}return Z.page===`dashboard`?fk(e):Z.page===`schedule`?pk(e):Z.page===`checklist`?Ek(e):Z.page===`stock`?Mk(e):Z.page===`opname`?Nk(e):Z.page===`order`?Pk(e):Z.page===`waste`?Kk(e):Z.page===`calculator`?Xk(e):Z.page===`reports`?Jk(e):Z.page===`data`?Zk(e):Z.page===`settings`?eA(e):cA(e)}}function fk(e){let t=hA(new Date),n=Z.schedules.filter(e=>e.date===t),r=n.filter(e=>e.shift!==`Libur`),i=n.filter(e=>e.shift===`Libur`),a=n.filter(e=>String(e.notes||``).trim()),o=Z.checklist.filter(e=>e.active!==!1),s=Z.profile?.name?.split(` `)[0]||`User`,c=kT(Z.profile),l=c?NE(Z.stockItems,Z.stockOpnames,Z.stockMovements):[],u=c?PE(l):[],d=u.filter(e=>e.status===`Kritis`),f=c?uD(Z.wasteItems,Z.wasteDays,t.slice(0,7),t):{alerts:[],analytics:null};e.innerHTML=`
     <section class="welcome-card">
       <div>
         <span class="overline">${mA()}</span>
-        <h1>Halo, ${Q(i)}.</h1>
-        <p>${a?`Pantau operasional hari ini dari satu dashboard.`:`Cek jadwal dan daily checklist hari ini dengan cepat.`}</p>
+        <h1>Halo, ${Q(s)}.</h1>
+        <p>${c?`Pantau operasional hari ini dari satu dashboard.`:`Cek jadwal dan daily checklist hari ini dengan cepat.`}</p>
       </div>
       <div class="date-card">
         <strong>${new Intl.DateTimeFormat(`id-ID`,{day:`2-digit`}).format(new Date)}</strong>
         <span>${new Intl.DateTimeFormat(`id-ID`,{month:`short`,year:`numeric`}).format(new Date)}</span>
         <small>${new Intl.DateTimeFormat(`id-ID`,{weekday:`long`}).format(new Date)}</small>
-        ${a?`<button id="export-dashboard" class="secondary compact dashboard-export-btn">Export</button>`:``}
+        ${c?`<button id="export-dashboard" class="secondary compact dashboard-export-btn">Export</button>`:``}
       </div>
     </section>
 
     <div class="metric-grid">
       <article class="metric-card metric-schedule">
-        <span class="metric-label">Jadwal hari ini</span>
-        <strong>${n.length}</strong>
-        <small>penempatan crew</small>
+        <span class="metric-label">Crew bekerja</span>
+        <strong>${r.length}</strong>
+        <small>${i.length?`${i.map(e=>Q(e.crewName)).join(`, `)} libur`:`Semua crew masuk`}</small>
       </article>
       <article class="metric-card metric-check">
         <span class="metric-label">Daily checklist</span>
-        <strong>${r.length}</strong>
+        <strong>${o.length}</strong>
         <small>item aktif</small>
       </article>
       <article class="metric-card metric-access">
         <span class="metric-label">Mode akses</span>
-        <strong class="text-value">${a?`Full`:`Read`}</strong>
-        <small>${a?`Admin operations`:`Viewer only`}</small>
+        <strong class="text-value">${c?`Full`:`Read`}</strong>
+        <small>${c?`Admin operations`:`Viewer only`}</small>
       </article>
-      ${a?`<article class="metric-card metric-stock ${c.length?`metric-alert`:``}">
+      ${c?`<article class="metric-card metric-stock ${d.length?`metric-alert`:``}">
         <span class="metric-label">Alert stok</span>
-        <strong>${s.length}</strong>
-        <small>${c.length?`${c.length} item kritis`:`Tidak ada stok kritis`}</small>
+        <strong>${u.length}</strong>
+        <small>${d.length?`${d.length} item kritis`:`Tidak ada stok kritis`}</small>
       </article>`:``}
-      ${a?`<article class="metric-card metric-waste ${l.alerts.length?`metric-alert`:``}">
+      ${c?`<article class="metric-card metric-waste ${f.alerts.length?`metric-alert`:``}">
         <span class="metric-label">Waste warning</span>
-        <strong>${l.alerts.length}</strong>
-        <small>${l.alerts.length?`perlu kontrol prep`:`pola waste stabil`}</small>
+        <strong>${f.alerts.length}</strong>
+        <small>${f.alerts.length?`perlu kontrol prep`:`pola waste stabil`}</small>
       </article>`:``}
     </div>
 
-    ${a&&s.length?`
+    ${c&&u.length?`
       <article class="panel stock-home-alert">
         <div class="panel-head">
           <div><span class="overline">STOCK ALERT</span><h3>Perlu perhatian</h3></div>
           <button class="text-button" data-jump="stock">Buka Stock</button>
         </div>
         <div class="home-alert-list">
-          ${s.slice(0,6).map(e=>`
+          ${u.slice(0,6).map(e=>`
             <div class="home-alert-row">
               <span class="stock-status-dot ${Uk(e.status)}"></span>
               <div class="grow"><strong>${Q(e.name)}</strong><small>${Q(e.status)} · ${Gk(e.currentQty)} ${Q(e.unit)}${Number.isFinite(e.daysCover)?` · ~${e.daysCover.toFixed(1)} hari`:``}</small></div>
@@ -328,14 +328,14 @@ Total Duration: ${c-l}ms`),K.resolve({didRun:!0,sequenceNumbersCollected:r,targe
       </article>
     `:``}
 
-    ${a&&l.alerts.length?`
+    ${c&&f.alerts.length?`
       <article class="panel waste-home-alert">
         <div class="panel-head">
           <div><span class="overline">WASTE CONTROL</span><h3>Peringatan produksi</h3></div>
           <button class="text-button" data-jump="waste">Buka Waste</button>
         </div>
         <div class="home-alert-list">
-          ${l.alerts.slice(0,4).map(e=>`
+          ${f.alerts.slice(0,4).map(e=>`
             <div class="home-alert-row">
               <span class="waste-alert-dot ${e.severity}"></span>
               <div class="grow"><strong>${Q(e.title)}</strong><small>${Q(e.message)}</small></div>
@@ -350,11 +350,34 @@ Total Duration: ${c-l}ms`),K.resolve({didRun:!0,sequenceNumbersCollected:r,targe
           <div><span class="overline">TODAY</span><h3>Shift Hari Ini</h3></div>
           <button class="text-button" data-jump="schedule">Lihat jadwal</button>
         </div>
+        ${n.length?`
+          <div class="today-work-summary">
+            <strong>${i.length?`${i.map(e=>Q(e.crewName)).join(`, `)} libur`:`Tidak ada crew libur`}</strong>
+            <span>· ${r.length} crew bekerja</span>
+          </div>
+        `:``}
+        ${a.length?`
+          <div class="today-notes-box">
+            <span class="overline">CATATAN HARI INI</span>
+            <div class="today-note-list">
+              ${a.map(e=>`
+                <div class="today-note-item">
+                  <strong>${Q(e.crewName)}</strong>
+                  <span>${Q(e.notes)}</span>
+                </div>
+              `).join(``)}
+            </div>
+          </div>
+        `:``}
         <div class="compact-list">
           ${n.length?n.map(e=>`
             <div class="compact-row">
               <span class="shift-badge ${_A(e.shift)}">${Q(e.shift)}</span>
-              <div class="grow"><strong>${Q(e.crewName)}</strong><small>${Q(e.role||`Belum ada role`)}</small></div>
+              <div class="grow">
+                <strong>${Q(e.crewName)}</strong>
+                <small>${Q(e.shift===`Libur`?`Libur`:e.role||`Belum ada role`)}</small>
+                ${String(e.notes||``).trim()?`<span class="schedule-note-inline">Catatan: ${Q(e.notes)}</span>`:``}
+              </div>
             </div>
           `).join(``):vA(`Belum ada jadwal untuk hari ini.`)}
         </div>
@@ -366,7 +389,7 @@ Total Duration: ${c-l}ms`),K.resolve({didRun:!0,sequenceNumbersCollected:r,targe
           <button class="text-button" data-jump="checklist">Lihat semua</button>
         </div>
         <div class="compact-list">
-          ${r.length?r.slice(0,8).map(e=>`
+          ${o.length?o.slice(0,8).map(e=>`
             <div class="compact-row checklist-row">
               <span class="check-box"></span>
               <div class="grow"><strong>${Q(e.title)}</strong><small>${Q(Dk(e).shift)}</small></div>
@@ -375,7 +398,7 @@ Total Duration: ${c-l}ms`),K.resolve({didRun:!0,sequenceNumbersCollected:r,targe
         </div>
       </article>
     </div>
-  `,document.querySelector(`#export-dashboard`)?.addEventListener(`click`,()=>$D({stockAnalytics:o,wasteAlerts:l.alerts,todaySchedule:n,filename:`SoWork-Dashboard-${t}.xlsx`})),document.querySelectorAll(`[data-jump]`).forEach(e=>{e.onclick=()=>{Z.page=e.dataset.jump,sk()}})}function pk(e){let t=kT(Z.profile),n=VT(Z.scheduleRules||LT),r=Z.scheduleMonth||xk();Z.scheduleMonth=r;let[i,a]=r.split(`-`).map(Number),o=Z.scheduleIncludeCarryover??new Date().getDate()>25;Z.scheduleIncludeCarryover=o;let s=o?new Date(i,a-2,26):new Date(i,a-1,1),c=new Date(i,a-1,25),l=Z.schedules.filter(e=>{let t=Sk(e.date);return t&&t>=s&&t<=c}),u=Z.schedulePreview,d=u?.entries?.length?u.entries:l,f=d.filter(e=>e.overtime),p=d.length?u?.summary||JT(d,[...n.maleNames,...n.femaleNames]):null;e.innerHTML=`
+  `,document.querySelector(`#export-dashboard`)?.addEventListener(`click`,()=>$D({stockAnalytics:l,wasteAlerts:f.alerts,todaySchedule:n,filename:`SoWork-Dashboard-${t}.xlsx`})),document.querySelectorAll(`[data-jump]`).forEach(e=>{e.onclick=()=>{Z.page=e.dataset.jump,sk()}})}function pk(e){let t=kT(Z.profile),n=VT(Z.scheduleRules||LT),r=Z.scheduleMonth||xk();Z.scheduleMonth=r;let[i,a]=r.split(`-`).map(Number),o=Z.scheduleIncludeCarryover??new Date().getDate()>25;Z.scheduleIncludeCarryover=o;let s=o?new Date(i,a-2,26):new Date(i,a-1,1),c=new Date(i,a-1,25),l=Z.schedules.filter(e=>{let t=Sk(e.date);return t&&t>=s&&t<=c}),u=Z.schedulePreview,d=u?.entries?.length?u.entries:l,f=d.filter(e=>e.overtime),p=d.length?u?.summary||JT(d,[...n.maleNames,...n.femaleNames]):null;e.innerHTML=`
     <section class="page-intro">
       <div><span class="overline">SMART SCHEDULER</span><h1>Jadwal Kerja</h1><p>Status shift pakai indikator warna, sementara role kerja tetap terbaca jelas seperti format sheet operasional.</p></div>
       ${t?`<span class="access-tag">CRUD + Export</span>`:`<span class="access-tag read">Read only</span>`}
