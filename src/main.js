@@ -51,12 +51,20 @@ let state = {
   cloudflareSyncTimer: null,
   cloudflareSyncBusy: false,
   cloudflareSyncQueued: false,
+  cloudflareLastSnapshotFingerprint: "",
+  cloudflareSyncWatchdog: null,
   unsubs: []
 };
 
 function clearSubscriptions() {
   state.unsubs.forEach(fn => fn?.());
   state.unsubs = [];
+  clearTimeout(state.cloudflareSyncTimer);
+  state.cloudflareSyncTimer = null;
+  if (state.cloudflareSyncWatchdog) {
+    clearInterval(state.cloudflareSyncWatchdog);
+    state.cloudflareSyncWatchdog = null;
+  }
 }
 
 function navItems() {
@@ -2747,12 +2755,27 @@ function buildCloudflareSnapshot() {
   };
 }
 
+function cloudflareSnapshotFingerprint(snapshot = buildCloudflareSnapshot()) {
+  try {
+    return JSON.stringify(snapshot);
+  } catch {
+    return String(Date.now());
+  }
+}
+
 function scheduleCloudflareSync(delay = 1200) {
   if (!isAdmin(state.profile)) return;
   const url = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
   if (!url) return;
-  clearTimeout(state.cloudflareSyncTimer);
-  state.cloudflareSyncTimer = setTimeout(() => runCloudflareSync().catch(err => console.warn("Cloudflare sync:", err)), delay);
+
+  // Jangan reset timer yang sudah menunggu. Model debounce lama bisa terus
+  // tertunda bila beberapa listener Firestore datang berdekatan. Timer pertama
+  // sekarang dijamin tetap jalan dan snapshot terbaru dibaca saat eksekusi.
+  if (state.cloudflareSyncTimer) return;
+  state.cloudflareSyncTimer = setTimeout(() => {
+    state.cloudflareSyncTimer = null;
+    runCloudflareSync().catch(err => console.warn("Cloudflare sync:", err));
+  }, Math.max(0, Number(delay) || 0));
 }
 
 async function runCloudflareSync() {
@@ -2763,8 +2786,11 @@ async function runCloudflareSync() {
     return null;
   }
   state.cloudflareSyncBusy = true;
+  const snapshot = buildCloudflareSnapshot();
+  const fingerprint = cloudflareSnapshotFingerprint(snapshot);
   try {
-    const result = await syncTelegramSnapshot(url, buildCloudflareSnapshot());
+    const result = await syncTelegramSnapshot(url, snapshot);
+    state.cloudflareLastSnapshotFingerprint = fingerprint;
     state.telegramWorkerStatus = { ...(state.telegramWorkerStatus || {}), hasSnapshot: true, snapshotUpdatedAt: result.syncedAt };
     return result;
   } finally {
@@ -2774,6 +2800,21 @@ async function runCloudflareSync() {
       setTimeout(() => runCloudflareSync().catch(err => console.warn("Cloudflare queued sync:", err)), 500);
     }
   }
+}
+
+function startCloudflareSyncWatchdog() {
+  if (!isAdmin(state.profile)) return;
+  if (state.cloudflareSyncWatchdog) clearInterval(state.cloudflareSyncWatchdog);
+
+  // Safety net: tidak menulis apa pun bila data tidak berubah. Jika listener
+  // realtime gagal menjadwalkan sync atau request sempat gagal, perubahan
+  // akan dicoba lagi otomatis maksimal ~15 detik selama SoWork terbuka.
+  state.cloudflareSyncWatchdog = setInterval(() => {
+    const url = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
+    if (!url || state.cloudflareSyncBusy || state.cloudflareSyncTimer) return;
+    const current = cloudflareSnapshotFingerprint();
+    if (current !== state.cloudflareLastSnapshotFingerprint) scheduleCloudflareSync(0);
+  }, 15000);
 }
 
 async function refreshTelegramWorkerStatus({ persistConnection = false } = {}) {
@@ -2827,6 +2868,7 @@ function startRealtime() {
   );
 
   if (isAdmin(state.profile)) {
+    startCloudflareSyncWatchdog();
     state.unsubs.push(
       watchStockItems(
         rows => { state.stockItems = rows; scheduleCloudflareSync(); renderShell(); },
