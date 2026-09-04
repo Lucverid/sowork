@@ -33,8 +33,8 @@ export default {
           return cors(await apiTest(env));
         }
         if (url.pathname === "/api/unpair" && request.method === "POST") {
-          await env.DB.prepare("DELETE FROM telegram_connection WHERE id = 1").run();
-          return cors(json({ ok: true }));
+          const removed = await clearTelegramConnections(env);
+          return cors(json({ ok: true, removed }));
         }
         return cors(json({ ok: false, error: "Endpoint tidak ditemukan." }, 404));
       }
@@ -74,15 +74,24 @@ async function apiSync(request, env, ctx) {
 }
 
 async function apiStatus(env) {
-  const connection = await getConnection(env);
+  const connections = await getConnections(env);
+  const primary = connections[0] || null;
   const snapshot = await getSnapshot(env);
   return json({
     ok: true,
-    paired: Boolean(connection?.chat_id),
-    chatId: connection?.chat_id || "",
-    username: connection?.username || "",
-    firstName: connection?.first_name || "",
-    connectedAt: connection?.connected_at || "",
+    paired: connections.length > 0,
+    recipientCount: connections.length,
+    recipients: connections.map(connection => ({
+      chatId: connection.chat_id || "",
+      username: connection.username || "",
+      firstName: connection.first_name || "",
+      connectedAt: connection.connected_at || ""
+    })),
+    // Field lama dipertahankan agar frontend / Firestore versi sebelumnya tetap kompatibel.
+    chatId: primary?.chat_id || "",
+    username: primary?.username || "",
+    firstName: primary?.first_name || "",
+    connectedAt: primary?.connected_at || "",
     hasSnapshot: Boolean(snapshot),
     snapshotUpdatedAt: snapshot?.syncedAt || ""
   });
@@ -101,14 +110,15 @@ async function apiSetupWebhook(request, env) {
 }
 
 async function apiTest(env) {
-  const connection = await getConnection(env);
-  if (!connection?.chat_id) return json({ ok: false, error: "Telegram belum dipair." }, 409);
+  const connections = await getConnections(env);
+  if (!connections.length) return json({ ok: false, error: "Telegram belum dipair." }, 409);
   const snapshot = await getSnapshot(env);
-  await sendTelegram(env, connection.chat_id,
+  const delivery = await sendTelegramToAll(env,
     `✅ TEST SOWORK BERHASIL\n\nCloudflare Worker aktif dan Telegram sudah terhubung.${snapshot ? "\nSnapshot operasional juga sudah tersinkron." : "\nBelum ada snapshot operasional."}`,
     snapshot?.settings || {}
   );
-  return json({ ok: true });
+  if (!delivery.sent) return json({ ok: false, error: "Pesan test gagal dikirim ke semua penerima Telegram.", delivery }, 502);
+  return json({ ok: true, ...delivery });
 }
 
 async function telegramWebhook(request, env) {
@@ -140,26 +150,34 @@ async function telegramWebhook(request, env) {
       return new Response("OK");
     }
 
+    await ensureTelegramConnectionsTable(env);
     await env.DB.prepare(`
-      INSERT INTO telegram_connection(id, chat_id, user_id, username, first_name, connected_at)
-      VALUES(1, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        chat_id=excluded.chat_id,
+      INSERT INTO telegram_connections(chat_id, user_id, username, first_name, connected_at)
+      VALUES(?, ?, ?, ?, ?)
+      ON CONFLICT(chat_id) DO UPDATE SET
         user_id=excluded.user_id,
         username=excluded.username,
         first_name=excluded.first_name,
         connected_at=excluded.connected_at
     `).bind(chatId, userId, username, firstName, new Date().toISOString()).run();
 
+    const recipientCount = (await getConnections(env)).length;
     await sendTelegram(env, chatId,
-      "✅ SoWork terhubung ke Telegram GRATIS via Cloudflare.\n\nPerintah:\n/stock — stok menipis/kritis\n/order — prediksi order + jumlah beli\n/waste — kondisi waste terbaru\n/help — bantuan",
+      `✅ SoWork terhubung ke Telegram GRATIS via Cloudflare.
+
+Akun ini ditambahkan sebagai penerima notifikasi. Total penerima aktif: ${recipientCount}.
+
+Perintah:
+/stock — stok menipis/kritis
+/order — prediksi order + jumlah beli
+/waste — kondisi waste terbaru
+/help — bantuan`,
       settings
     );
     return new Response("OK");
   }
 
-  const connection = await getConnection(env);
-  if (!isPaired(connection, chatId, userId)) {
+  if (!(await isPaired(env, chatId, userId))) {
     await sendTelegram(env, chatId, "Telegram ini belum dipair ke SoWork. Gunakan /start KODE dari Settings SoWork.", settings);
     return new Response("OK");
   }
@@ -187,8 +205,8 @@ async function telegramWebhook(request, env) {
 async function handleScheduled(cron, env) {
   try {
     const snapshot = await getSnapshot(env);
-    const connection = await getConnection(env);
-    if (!snapshot || !connection?.chat_id || snapshot.settings?.telegramEnabled !== true) return;
+    const connections = await getConnections(env);
+    if (!snapshot || !connections.length || snapshot.settings?.telegramEnabled !== true) return;
 
     const today = jakartaDateKey(new Date());
     if (cron === "30 23 * * *") {
@@ -211,8 +229,8 @@ async function handleScheduled(cron, env) {
 async function runImmediateAlerts(previous, current, env) {
   try {
     if (current.settings?.telegramEnabled !== true) return;
-    const connection = await getConnection(env);
-    if (!connection?.chat_id) return;
+    const connections = await getConnections(env);
+    if (!connections.length) return;
 
     const currentRows = buildAllStockAnalytics(current);
     const previousRows = previous ? buildAllStockAnalytics(previous) : [];
@@ -327,24 +345,88 @@ async function putState(env, key, value) {
   `).bind(key, JSON.stringify(value), new Date().toISOString()).run();
 }
 
-async function getConnection(env) {
-  return env.DB.prepare("SELECT * FROM telegram_connection WHERE id = 1").first();
+async function ensureTelegramConnectionsTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS telegram_connections (
+      chat_id TEXT PRIMARY KEY,
+      user_id TEXT,
+      username TEXT,
+      first_name TEXT,
+      connected_at TEXT NOT NULL
+    )
+  `).run();
+
+  // Migrasi otomatis dari format lama (single recipient) tanpa menghapus data lama.
+  try {
+    const legacy = await env.DB.prepare("SELECT chat_id, user_id, username, first_name, connected_at FROM telegram_connection WHERE id = 1").first();
+    if (legacy?.chat_id) {
+      await env.DB.prepare(`
+        INSERT OR IGNORE INTO telegram_connections(chat_id, user_id, username, first_name, connected_at)
+        VALUES(?, ?, ?, ?, ?)
+      `).bind(
+        String(legacy.chat_id),
+        String(legacy.user_id || ""),
+        String(legacy.username || ""),
+        String(legacy.first_name || ""),
+        String(legacy.connected_at || new Date().toISOString())
+      ).run();
+    }
+  } catch (error) {
+    // Database baru mungkin tidak memiliki tabel legacy. Itu aman.
+    console.warn("legacy telegram migration skipped", error?.message || error);
+  }
 }
 
-function isPaired(connection, chatId, userId) {
-  return connection && String(connection.chat_id) === String(chatId) && (!connection.user_id || String(connection.user_id) === String(userId));
+async function getConnections(env) {
+  await ensureTelegramConnectionsTable(env);
+  const result = await env.DB.prepare("SELECT * FROM telegram_connections ORDER BY connected_at ASC, chat_id ASC").all();
+  return Array.isArray(result?.results) ? result.results : [];
+}
+
+async function isPaired(env, chatId, userId) {
+  await ensureTelegramConnectionsTable(env);
+  const connection = await env.DB.prepare("SELECT chat_id, user_id FROM telegram_connections WHERE chat_id = ? LIMIT 1")
+    .bind(String(chatId)).first();
+  return Boolean(connection && (!connection.user_id || String(connection.user_id) === String(userId)));
+}
+
+async function clearTelegramConnections(env) {
+  await ensureTelegramConnectionsTable(env);
+  const countRow = await env.DB.prepare("SELECT COUNT(*) AS total FROM telegram_connections").first();
+  const removed = Number(countRow?.total || 0);
+  await env.DB.prepare("DELETE FROM telegram_connections").run();
+  try { await env.DB.prepare("DELETE FROM telegram_connection WHERE id = 1").run(); } catch {}
+  return removed;
+}
+
+async function sendTelegramToAll(env, text, settings = {}) {
+  const connections = await getConnections(env);
+  const failures = [];
+  let sent = 0;
+
+  for (const connection of connections) {
+    try {
+      await sendTelegram(env, connection.chat_id, text, settings);
+      sent += 1;
+    } catch (error) {
+      failures.push({ chatId: String(connection.chat_id || ""), error: String(error?.message || error) });
+      console.error("Telegram delivery failed", connection.chat_id, error);
+    }
+  }
+
+  return { total: connections.length, sent, failed: failures.length, failures };
 }
 
 async function sendAlertOnce(env, key, kind, text, settings) {
   const eventKey = safeKey(key);
   const exists = await env.DB.prepare("SELECT event_key FROM notification_events WHERE event_key = ?").bind(eventKey).first();
   if (exists) return false;
-  const connection = await getConnection(env);
-  if (!connection?.chat_id) return false;
 
-  await sendTelegram(env, connection.chat_id, text, settings);
+  const delivery = await sendTelegramToAll(env, text, settings);
+  if (!delivery.sent) return false;
+
   await env.DB.prepare("INSERT INTO notification_events(event_key, kind, payload, created_at) VALUES(?, ?, ?, ?)")
-    .bind(eventKey, kind, JSON.stringify({ text: String(text).slice(0, 1000) }), new Date().toISOString()).run();
+    .bind(eventKey, kind, JSON.stringify({ text: String(text).slice(0, 1000), delivery }), new Date().toISOString()).run();
   return true;
 }
 

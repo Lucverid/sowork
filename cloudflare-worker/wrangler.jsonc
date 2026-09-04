@@ -8,6 +8,13 @@
     "ADMIN_UID": "uTBNtKIL3iTHx1JGg1AHwM5HLYi2",
     "APP_NAME": "SoWork"
   },
+   "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sowork-telegram",
+      "database_id": "d2fd4110-65ad-41ab-86f7-1d55133ac1db"
+    }
+  ],
   "triggers": {
     "crons": [
       "30 23 * * *",

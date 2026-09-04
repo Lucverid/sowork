@@ -1828,6 +1828,10 @@ function openStockSettingsEditor() {
   const workerUrl = normalizeWorkerUrl(s.cloudflareWorkerUrl || "");
   const workerStatus = state.telegramWorkerStatus;
   const paired = Boolean(workerStatus?.paired || s.telegramChatId);
+  const recipientCount = Number(workerStatus?.recipientCount || (paired ? 1 : 0));
+  const recipientNames = Array.isArray(workerStatus?.recipients)
+    ? workerStatus.recipients.map(x => x.firstName || (x.username ? `@${x.username}` : "")).filter(Boolean)
+    : [];
   document.querySelector("#stock-settings-modal")?.remove();
   const modal = document.createElement("div");
   modal.id = "stock-settings-modal";
@@ -1839,8 +1843,8 @@ function openStockSettingsEditor() {
         <div class="telegram-status-card ${paired ? "connected" : ""}">
           <div>
             <span class="overline">CLOUDFLARE WORKER</span>
-            <strong>${paired ? "Telegram Terhubung" : workerUrl ? "Worker siap — belum dipair" : "Worker URL belum diisi"}</strong>
-            <small>${paired ? `Chat ID ${escapeHtml(workerStatus?.chatId || s.telegramChatId || "-")}` : workerStatus?.hasSnapshot ? "Data SoWork sudah tersinkron ke D1." : "Gratis: Firebase Spark tetap dipakai, bot berjalan di Cloudflare Worker."}</small>
+            <strong>${paired ? `Telegram Terhubung · ${recipientCount} penerima` : workerUrl ? "Worker siap — belum dipair" : "Worker URL belum diisi"}</strong>
+            <small>${paired ? escapeHtml(recipientNames.length ? recipientNames.join(", ") : `Chat ID ${workerStatus?.chatId || s.telegramChatId || "-"}`) : workerStatus?.hasSnapshot ? "Data SoWork sudah tersinkron ke D1." : "Gratis: Firebase Spark tetap dipakai, bot berjalan di Cloudflare Worker."}</small>
           </div>
           <label class="check-line simple"><input name="telegramEnabled" type="checkbox" ${s.telegramEnabled ? "checked" : ""}/><span>Aktifkan alert Telegram</span></label>
         </div>
@@ -1871,11 +1875,11 @@ function openStockSettingsEditor() {
           <button type="button" id="check-cloudflare-worker" class="secondary">Cek Worker</button>
           <button type="button" id="setup-telegram-webhook" class="secondary">Pasang Webhook</button>
           <button type="button" id="test-telegram-bot" class="secondary" ${paired ? "" : "disabled"}>Kirim Test</button>
-          ${paired ? '<button type="button" id="unpair-telegram" class="danger">Unpair</button>' : ''}
+          ${paired ? '<button type="button" id="unpair-telegram" class="danger">Unpair Semua</button>' : ''}
         </div>
 
         <div class="inline-rule telegram-rule"><strong>Alur gratis:</strong> SoWork menyimpan data utama di Firestore Spark. Saat Admin mengubah Stock/Waste, browser mengirim snapshot terproteksi Firebase ID Token ke Cloudflare D1. Cron Cloudflare kemudian bisa mengingatkan Telegram walaupun SoWork sudah ditutup.</div>
-        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Setelah itu command <code>/stock</code>, <code>/order</code>, dan <code>/waste</code> aktif.</div>
+        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Kode yang sama bisa dipakai beberapa akun Telegram; pairing baru menambah penerima dan tidak mengganti akun yang sudah terhubung. Setelah itu command <code>/stock</code>, <code>/order</code>, dan <code>/waste</code> aktif.</div>
         <div class="inline-rule telegram-rule"><strong>WhatsApp:</strong> alert Telegram punya tombol “Teruskan ke WhatsApp”. Auto-send WA tanpa klik tetap membutuhkan WhatsApp Business API resmi.</div>
 
         <input type="hidden" name="telegramChatId" value="${escapeHtml(workerStatus?.chatId || s.telegramChatId || "")}"/>
@@ -1900,7 +1904,7 @@ function openStockSettingsEditor() {
     try {
       const status = await getTelegramWorkerStatus(currentUrl());
       state.telegramWorkerStatus = status;
-      alert(status.paired ? `Worker ONLINE. Telegram sudah dipair${status.firstName ? ` ke ${status.firstName}` : ""}.` : `Worker ONLINE. ${status.hasSnapshot ? "Data operasional sudah tersinkron." : "Belum ada snapshot data."}`);
+      alert(status.paired ? `Worker ONLINE. Telegram sudah dipair ke ${Number(status.recipientCount || 1)} penerima.` : `Worker ONLINE. ${status.hasSnapshot ? "Data operasional sudah tersinkron." : "Belum ada snapshot data."}`);
       close(); openStockSettingsEditor();
     } catch (err) { alert(err?.message || friendlyError(err)); }
   });
@@ -1913,17 +1917,19 @@ function openStockSettingsEditor() {
   });
 
   modal.querySelector("#test-telegram-bot")?.addEventListener("click", async () => {
-    try { await sendTelegramTest(currentUrl()); alert("Pesan test dikirim ke Telegram."); }
-    catch (err) { alert(err?.message || friendlyError(err)); }
+    try {
+      const result = await sendTelegramTest(currentUrl());
+      alert(`Pesan test dikirim ke ${Number(result?.sent || 0)} penerima Telegram.`);
+    } catch (err) { alert(err?.message || friendlyError(err)); }
   });
 
   modal.querySelector("#unpair-telegram")?.addEventListener("click", async () => {
-    if (!confirm("Putuskan pairing Telegram dari SoWork?")) return;
+    if (!confirm("Putuskan SEMUA akun Telegram yang sudah dipair dari SoWork?")) return;
     try {
-      await unpairTelegram(currentUrl());
+      const result = await unpairTelegram(currentUrl());
       state.telegramWorkerStatus = null;
       await saveStockSettings({ ...(state.stockSettings || {}), telegramChatId: "", telegramAllowedUserId: "" });
-      alert("Telegram sudah di-unpair."); close();
+      alert(`${Number(result?.removed || 0)} penerima Telegram sudah di-unpair.`); close();
     } catch (err) { alert(err?.message || friendlyError(err)); }
   });
 
@@ -2642,7 +2648,7 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">BOT & ALERT</span><h3>Telegram Notification Center</h3></div></div>
-        <div class="settings-readonly-row"><span>Telegram</span><strong>${state.telegramWorkerStatus?.paired || state.stockSettings?.telegramChatId ? "Terhubung" : "Belum dipair"}</strong></div>
+        <div class="settings-readonly-row"><span>Telegram</span><strong>${state.telegramWorkerStatus?.paired || state.stockSettings?.telegramChatId ? `Terhubung${state.telegramWorkerStatus?.recipientCount ? ` (${state.telegramWorkerStatus.recipientCount} penerima)` : ""}` : "Belum dipair"}</strong></div>
         <div class="settings-readonly-row"><span>Alert otomatis</span><strong>${state.stockSettings?.telegramEnabled ? "Aktif (Cloudflare Free)" : "Nonaktif"}</strong></div>
         <div class="settings-readonly-row"><span>WA Relay</span><strong>${escapeHtml(state.stockSettings?.telegramWhatsappNumber || "Belum diatur")}</strong></div>
         <div class="settings-readonly-row"><span>Prediksi order</span><strong>${Number(state.stockSettings?.defaultLeadTimeDays || 2)} hari lead time · ${Number(state.stockSettings?.defaultTargetCoverageDays || 7)} hari coverage</strong></div>
@@ -2657,7 +2663,7 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.2.1 Free Telegram</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.3.4 Free Multi Telegram</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>
