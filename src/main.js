@@ -39,6 +39,7 @@ let state = {
   stockStatusFilter: "Semua",
   opnameDate: null,
   stockUsageDate: null,
+  stockUsageMonth: null,
   wasteItems: [],
   wasteDays: [],
   wasteMonth: null,
@@ -353,12 +354,19 @@ function renderShell() {
         <main id="page-content"></main>
 
         <nav class="mobile-nav" aria-label="Navigasi mobile">
-          ${navItems().slice(0, admin ? 4 : 3).map(([id, label, icon]) => `
+          ${admin ? (() => {
+            const primary = navItems().filter(([id]) => ["dashboard", "schedule", "checklist", "stock"].includes(id));
+            const byId = Object.fromEntries(primary.map(item => [item[0], item]));
+            const mobileOrder = [byId.dashboard, byId.schedule, ["__menu", "Menu", "settings"], byId.checklist, byId.stock].filter(Boolean);
+            return mobileOrder.map(([id, label, icon]) => id === "__menu"
+              ? `<button class="mobile-nav-btn mobile-more-btn ${!["dashboard","schedule","checklist","stock"].includes(state.page) ? "active" : ""}" id="mobile-more-btn"><span>${iconSvg(icon, 18)}</span><small>${label}</small></button>`
+              : `<button class="mobile-nav-btn ${state.page === id ? "active" : ""}" data-page="${id}"><span>${iconSvg(icon, 18)}</span><small>${label}</small></button>`
+            ).join("");
+          })() : navItems().slice(0, 3).map(([id, label, icon]) => `
             <button class="mobile-nav-btn ${state.page === id ? "active" : ""}" data-page="${id}">
               <span>${iconSvg(icon, 18)}</span><small>${label}</small>
             </button>
           `).join("")}
-          ${admin ? `<button class="mobile-nav-btn mobile-more-btn" id="mobile-more-btn"><span>${iconSvg("settings", 18)}</span><small>Menu</small></button>` : ""}
         </nav>
       </section>
     </div>
@@ -380,7 +388,7 @@ function renderShell() {
 
 function openMobileMenu() {
   document.querySelector("#mobile-menu-sheet")?.remove();
-  const items = navItems().slice(4);
+  const items = navItems().filter(([id]) => !["dashboard", "schedule", "checklist", "stock"].includes(id));
   const sheet = document.createElement("div");
   sheet.id = "mobile-menu-sheet";
   sheet.className = "mobile-menu-backdrop";
@@ -1386,6 +1394,51 @@ function applyOpnameFilter() {
   if (empty) empty.hidden = visible !== 0;
 }
 
+function buildStockUsageCalendar(usageRows, monthKey) {
+  const today = localDateKey(new Date());
+  const safeMonth = /^\d{4}-\d{2}$/.test(String(monthKey || "")) ? monthKey : today.slice(0, 7);
+  const [year, month] = safeMonth.split("-").map(Number);
+  const totalDays = new Date(year, month, 0).getDate();
+  const firstDay = new Date(year, month - 1, 1).getDay();
+  const mondayOffset = (firstDay + 6) % 7;
+  const byDate = new Map();
+
+  usageRows.forEach(row => {
+    if (!row?.date || !String(row.date).startsWith(safeMonth)) return;
+    const current = byDate.get(row.date) || { rows: 0, used: 0 };
+    current.rows += 1;
+    if (Number(row.qty || 0) > 0) current.used += 1;
+    byDate.set(row.date, current);
+  });
+
+  const cells = [];
+  for (let i = 0; i < mondayOffset; i += 1) cells.push('<span class="usage-calendar-day is-empty" aria-hidden="true"></span>');
+  for (let day = 1; day <= totalDays; day += 1) {
+    const dateKey = `${safeMonth}-${String(day).padStart(2, "0")}`;
+    const stats = byDate.get(dateKey);
+    const isToday = dateKey === today;
+    cells.push(`
+      <button type="button" class="usage-calendar-day ${stats ? "has-usage" : ""} ${isToday ? "is-today" : ""}" data-open-usage-date="${escapeHtml(dateKey)}" aria-label="${escapeHtml(formatDate(dateKey))}${stats ? `, ${stats.used} barang digunakan` : ", belum ada penggunaan"}">
+        <span class="usage-calendar-number">${day}</span>
+        ${stats ? `<span class="usage-calendar-badge">${stats.used}</span><small>${stats.used ? "terisi" : "0"}</small>` : `<small>${isToday ? "hari ini" : ""}</small>`}
+      </button>`);
+  }
+
+  return `
+    <div class="usage-calendar-weekdays" aria-hidden="true">
+      ${["Sen","Sel","Rab","Kam","Jum","Sab","Min"].map(x => `<span>${x}</span>`).join("")}
+    </div>
+    <div class="usage-calendar-grid">${cells.join("")}</div>`;
+}
+
+function shiftMonthKey(monthKey, offset) {
+  const today = localDateKey(new Date());
+  const safeMonth = /^\d{4}-\d{2}$/.test(String(monthKey || "")) ? monthKey : today.slice(0, 7);
+  const [year, month] = safeMonth.split("-").map(Number);
+  const value = new Date(year, month - 1 + offset, 1);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function renderStock(target) {
   const admin = isAdmin(state.profile);
   if (!admin) return renderPlaceholder(target);
@@ -1398,7 +1451,11 @@ function renderStock(target) {
   const status = state.stockStatusFilter || "Semua";
   const deliveries = state.stockMovements.filter(x => x.type === "IN").slice(0, 18);
   const usageRows = state.stockMovements.filter(x => x.type === "OUT");
-  const usageDates = [...new Set(usageRows.map(x=>x.date).filter(Boolean))].sort().reverse();
+  const todayKey = localDateKey(new Date());
+  const usageMonth = state.stockUsageMonth || todayKey.slice(0, 7);
+  state.stockUsageMonth = usageMonth;
+  const monthUsageRows = usageRows.filter(x => String(x.date || "").startsWith(usageMonth));
+  const usageDaysRecorded = new Set(monthUsageRows.filter(x => Number(x.qty || 0) > 0).map(x => x.date)).size;
 
   target.innerHTML = `
     <section class="page-intro">
@@ -1436,6 +1493,26 @@ function renderStock(target) {
       </article>
     ` : ""}
 
+    <article class="panel stock-usage-history-panel usage-calendar-panel">
+      <div class="panel-head usage-calendar-head">
+        <div>
+          <span class="overline">DAILY CONSUMPTION</span>
+          <h3>Penggunaan Barang Harian</h3>
+          <p class="muted small-copy">Tap tanggal untuk input atau edit penggunaan. Tanggal yang sudah terisi ditandai langsung di kalender.</p>
+        </div>
+        <button id="open-usage-today" class="primary compact">Input Hari Ini</button>
+      </div>
+      <div class="usage-calendar-toolbar">
+        <button id="usage-prev-month" class="secondary usage-month-button" type="button" aria-label="Bulan sebelumnya">‹</button>
+        <div class="usage-calendar-month">
+          <strong>${escapeHtml(formatMonthKey(usageMonth))}</strong>
+          <span>${usageDaysRecorded} hari tercatat · ${monthUsageRows.filter(x => Number(x.qty || 0) > 0).length} entri penggunaan</span>
+        </div>
+        <button id="usage-next-month" class="secondary usage-month-button" type="button" aria-label="Bulan berikutnya">›</button>
+      </div>
+      ${buildStockUsageCalendar(usageRows, usageMonth)}
+    </article>
+
     <article class="panel stock-master-panel">
       <div class="panel-head stock-panel-head">
         <div><span class="overline">MASTER & MONITORING</span><h3>Daftar Stock <span id="stock-visible-count" class="inline-count">${analytics.length} / ${analytics.length}</span></h3></div>
@@ -1444,7 +1521,6 @@ function renderStock(target) {
           <button id="import-stock" class="secondary compact">Import Excel</button>
           <button id="export-stock" class="secondary compact">Export Excel</button>
           <button id="add-stock-receipt" class="secondary compact">+ Barang Masuk</button>
-          <button id="add-stock-usage" class="secondary compact">− Penggunaan Harian</button>
           <button id="add-stock-item" class="primary compact">+ Barang</button>
         </div>
       </div>
@@ -1515,17 +1591,6 @@ function renderStock(target) {
       `).join("")}</div>` : emptyState("Belum ada histori barang masuk.")}
     </article>
 
-    <article class="panel stock-usage-history-panel">
-      <div class="panel-head">
-        <div><span class="overline">DAILY CONSUMPTION</span><h3>Penggunaan Barang Harian</h3><p class="muted small-copy">Input setiap tanggal mengurangi stok sistem dan langsung dipakai untuk prediksi reorder.</p></div>
-        <button id="open-usage-today" class="primary compact">Input Hari Ini</button>
-      </div>
-      ${usageDates.length ? `<div class="usage-date-list">${usageDates.slice(0,10).map(dateKey => {
-        const rows=usageRows.filter(x=>x.date===dateKey);
-        const used=rows.filter(x=>Number(x.qty||0)>0);
-        return `<button class="usage-date-row" data-open-usage-date="${escapeHtml(dateKey)}"><span><strong>${escapeHtml(formatDate(dateKey))}</strong><small>${used.length} item digunakan · ${rows.length} item tercatat</small></span><b>Edit</b></button>`;
-      }).join("")}</div>` : emptyState("Belum ada penggunaan harian. Mulai input hari ini agar stok sistem dan prediksi jadi akurat.")}
-    </article>
   `;
 
   document.querySelector("#seed-stock-reference")?.addEventListener("click", async () => {
@@ -1548,8 +1613,15 @@ function renderStock(target) {
   document.querySelector("#export-stock")?.addEventListener("click", () => exportStockWorkbook({ items: state.stockItems, movements: state.stockMovements, opnames: state.stockOpnames, analytics, filename: `SoWork-Stock-${localDateKey(new Date())}.xlsx` }));
   document.querySelector("#add-stock-item")?.addEventListener("click", () => openStockItemEditor(null));
   document.querySelector("#add-stock-receipt")?.addEventListener("click", () => openStockReceiptEditor());
-  document.querySelector("#add-stock-usage")?.addEventListener("click", () => openDailyStockUsageEditor(localDateKey(new Date())));
   document.querySelector("#open-usage-today")?.addEventListener("click", () => openDailyStockUsageEditor(localDateKey(new Date())));
+  document.querySelector("#usage-prev-month")?.addEventListener("click", () => {
+    state.stockUsageMonth = shiftMonthKey(usageMonth, -1);
+    renderStock(target);
+  });
+  document.querySelector("#usage-next-month")?.addEventListener("click", () => {
+    state.stockUsageMonth = shiftMonthKey(usageMonth, 1);
+    renderStock(target);
+  });
   document.querySelectorAll("[data-open-usage-date]").forEach(btn => btn.onclick = () => openDailyStockUsageEditor(btn.dataset.openUsageDate));
   document.querySelector("#stock-settings")?.addEventListener("click", () => openStockSettingsEditor());
   document.querySelector("#send-stock-wa")?.addEventListener("click", () => sendStockWhatsapp(alerts));
@@ -2234,123 +2306,231 @@ function formatQty(value) {
   return new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(Number(value || 0));
 }
 
+
+function buildWasteCalendar(wasteDays, monthKey, analytics, selectedDate) {
+  const today = localDateKey(new Date());
+  const safeMonth = /^\d{4}-\d{2}$/.test(String(monthKey || "")) ? monthKey : today.slice(0, 7);
+  const [year, month] = safeMonth.split("-").map(Number);
+  const totalDays = new Date(year, month, 0).getDate();
+  const firstDay = new Date(year, month - 1, 1).getDay();
+  const mondayOffset = (firstDay + 6) % 7;
+  const scoreByDate = new Map((analytics?.dailyScores || []).map(row => [row.date, row]));
+  const byDate = new Map();
+
+  wasteDays.forEach(day => {
+    if (!day?.date || !String(day.date).startsWith(safeMonth)) return;
+    const filled = Object.values(day.values || {}).filter(value => Number(value || 0) > 0).length;
+    byDate.set(day.date, { filled });
+  });
+
+  const cells = [];
+  for (let i = 0; i < mondayOffset; i += 1) cells.push('<span class="waste-calendar-day is-empty" aria-hidden="true"></span>');
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    const dateKey = `${safeMonth}-${String(day).padStart(2, "0")}`;
+    const row = byDate.get(dateKey);
+    const score = scoreByDate.get(dateKey);
+    const isToday = dateKey === today;
+    const isSelected = dateKey === selectedDate;
+    const level = score?.level || "normal";
+    const statusText = level === "high" ? "tinggi" : level === "watch" ? "pantau" : row ? "terisi" : isToday ? "hari ini" : "";
+    cells.push(`
+      <button type="button" class="waste-calendar-day ${row ? "has-waste" : ""} ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""} ${level === "high" ? "is-high" : level === "watch" ? "is-watch" : ""}" data-waste-calendar-date="${escapeHtml(dateKey)}" aria-label="${escapeHtml(formatDate(dateKey))}${row ? `, ${row.filled} item waste terisi` : ", belum ada input"}">
+        <span class="waste-calendar-number">${day}</span>
+        ${row ? `<span class="waste-calendar-badge">${row.filled}</span>` : ""}
+        <small>${statusText}</small>
+      </button>`);
+  }
+
+  return `
+    <div class="waste-calendar-weekdays" aria-hidden="true">
+      ${["Sen","Sel","Rab","Kam","Jum","Sab","Min"].map(label => `<span>${label}</span>`).join("")}
+    </div>
+    <div class="waste-calendar-grid">${cells.join("")}</div>`;
+}
+
 function renderWaste(target) {
   if (!isAdmin(state.profile)) return renderPlaceholder(target);
-  const today=localDateKey(new Date());
-  state.wasteMonth ||= today.slice(0,7);
-  const monthKey=state.wasteMonth;
-  const monthDays=state.wasteDays.filter(x=>String(x.date||"").startsWith(monthKey));
-  const defaultDate=monthKey===today.slice(0,7) ? today : `${monthKey}-01`;
-  if(!state.wasteDate || !String(state.wasteDate).startsWith(monthKey)) state.wasteDate=defaultDate;
-  const date=state.wasteDate;
-  const dayDoc=state.wasteDays.find(x=>x.date===date)||{values:{}};
-  const activeItems=state.wasteItems.filter(x=>x.active!==false);
-  const analytics=buildWasteAnalytics(state.wasteItems,state.wasteDays,monthKey,date);
-  const maxScore=Math.max(1,...analytics.dailyScores.map(x=>x.score));
-  const topDays=analytics.dailyScores.slice().sort((a,b)=>b.score-a.score).slice(0,5);
-  const weekdayRisk=analytics.weekdayStats.slice(0,4);
+  const today = localDateKey(new Date());
+  state.wasteMonth ||= today.slice(0, 7);
+  const monthKey = state.wasteMonth;
+  const monthDays = state.wasteDays.filter(x => String(x.date || "").startsWith(monthKey));
+  const defaultDate = monthKey === today.slice(0, 7) ? today : `${monthKey}-01`;
+  if (!state.wasteDate || !String(state.wasteDate).startsWith(monthKey)) state.wasteDate = defaultDate;
+  const date = state.wasteDate;
+  const dayDoc = state.wasteDays.find(x => x.date === date) || { values: {} };
+  const activeItems = state.wasteItems.filter(x => x.active !== false);
+  const analytics = buildWasteAnalytics(state.wasteItems, state.wasteDays, monthKey, date);
+  const maxScore = Math.max(1, ...analytics.dailyScores.map(x => x.score));
+  const topDays = analytics.dailyScores.slice().sort((a, b) => b.score - a.score).slice(0, 5);
+  const weekdayRisk = analytics.weekdayStats.slice(0, 4);
+  const selectedFilled = Object.values(dayDoc.values || {}).filter(value => Number(value || 0) > 0).length;
+  const activeCount = state.wasteItems.filter(x => x.active !== false).length;
+  const archivedCount = state.wasteItems.filter(x => x.active === false).length;
 
-  target.innerHTML=`
-    <section class="page-intro">
-      <div><span class="overline">WASTE INTELLIGENCE</span><h1>Input harian, kontrol sebelum waste jadi kebiasaan.</h1><p>Setiap hari dicatat, total bulanan dihitung otomatis. SoWork menandai lonjakan, pola weekday yang sering boros, dan memberi saran supaya batch bahan baku serta pengeluaran tetap terkendali.</p></div>
-      <div class="action-row">${!state.wasteItems.length?`<button id="seed-waste" class="secondary">Muat Histori Juli</button>`:""}<button id="add-waste-item" class="secondary">+ Item Waste</button><button id="import-waste" class="secondary">Import Excel</button><button id="export-waste" class="primary" ${!activeItems.length?'disabled':''}>Export Excel</button></div>
+  target.innerHTML = `
+    <section class="page-intro easy-page-intro">
+      <div><span class="overline">WASTE</span><h1>Waste harian</h1><p>Catat per tanggal, pantau lonjakan, dan lihat pola bulanan tanpa pindah-pindah form.</p></div>
+      <div class="action-row compact-action-rail">
+        ${!state.wasteItems.length ? `<button id="seed-waste" class="secondary compact">Muat Histori Juli</button>` : ""}
+        <button id="add-waste-item" class="primary compact">+ Item</button>
+        <button id="import-waste" class="secondary compact">Import</button>
+        <button id="export-waste" class="secondary compact" ${!activeItems.length ? 'disabled' : ''}>Export</button>
+      </div>
     </section>
 
-    <div class="metric-grid waste-kpis">
+    <div class="metric-grid waste-kpis compact-metrics">
       <article class="metric-card"><span class="metric-label">Hari tercatat</span><strong>${analytics.recordedDays}</strong><small>${escapeHtml(formatMonthKey(monthKey))}</small></article>
-      <article class="metric-card ${analytics.highDays.length?'metric-alert':''}"><span class="metric-label">Hari waste tinggi</span><strong>${analytics.highDays.length}</strong><small>${analytics.highDays.length?'review prep diperlukan':'belum ada lonjakan besar'}</small></article>
-      <article class="metric-card"><span class="metric-label">Trend 7 hari</span><strong class="text-value ${analytics.trend.changePct>=20?'critical-label':''}">${analytics.trend.previous>0?(analytics.trend.changePct>=0?'+':'')+analytics.trend.changePct.toFixed(0)+'%':'—'}</strong><small>vs 7 hari sebelumnya</small></article>
-      <article class="metric-card"><span class="metric-label">Estimasi biaya waste</span><strong class="text-value">${analytics.monthlyCost>0?'Rp '+formatMoney(analytics.monthlyCost):'Belum diisi'}</strong><small>isi biaya/unit di Master Waste</small></article>
+      <article class="metric-card ${analytics.highDays.length ? 'metric-alert' : ''}"><span class="metric-label">Waste tinggi</span><strong>${analytics.highDays.length}</strong><small>${analytics.highDays.length ? 'perlu review' : 'terkendali'}</small></article>
+      <article class="metric-card"><span class="metric-label">Trend 7 hari</span><strong class="text-value ${analytics.trend.changePct >= 20 ? 'critical-label' : ''}">${analytics.trend.previous > 0 ? (analytics.trend.changePct >= 0 ? '+' : '') + analytics.trend.changePct.toFixed(0) + '%' : '—'}</strong><small>vs 7 hari lalu</small></article>
+      <article class="metric-card"><span class="metric-label">Estimasi biaya</span><strong class="text-value">${analytics.monthlyCost > 0 ? 'Rp ' + formatMoney(analytics.monthlyCost) : '—'}</strong><small>${analytics.monthlyCost > 0 ? 'bulan ini' : 'isi biaya/unit'}</small></article>
     </div>
 
-    ${analytics.selectedWarnings.length?`<article class="panel waste-warning-panel"><div class="panel-head"><div><span class="overline">PERINGATAN</span><h3>${escapeHtml(formatDate(date))}</h3></div><span class="count-pill">${analytics.selectedWarnings.length} alert</span></div><div class="waste-warning-list">${analytics.selectedWarnings.map(w=>`<div class="waste-warning-row ${w.severity}"><span>!</span><p>${escapeHtml(w.message)}</p></div>`).join('')}</div></article>`:''}
-
-    <article class="panel waste-control-panel daily-mode">
-      <div class="waste-control-grid"><label><span>Bulan</span><input id="waste-month" type="month" value="${escapeHtml(monthKey)}"/></label><label><span>Tanggal input</span><input id="waste-date" type="date" value="${escapeHtml(date)}" min="${monthKey}-01" max="${monthKey}-${String(daysInMonth(monthKey)).padStart(2,'0')}"/></label></div>
-      <div class="waste-control-note"><strong>${escapeHtml(formatDate(date))}</strong><span>${state.wasteDays.some(x=>x.date===date)?'Sudah tersimpan — simpan ulang untuk update.':'Belum ada input pada tanggal ini.'}</span></div>
-    </article>
-
-    ${activeItems.length?`<form id="waste-day-form"><div class="waste-entry-grid">${activeItems.map(item=>{const st=analytics.itemStats.find(x=>x.id===item.id);return `<article class="waste-entry-card"><div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.unit||'QTY')}${st?.warning>0?` · warning ≥ ${formatQty(st.warning)}`:''}</span></div><label class="waste-qty-control"><input name="w_${escapeHtml(item.id)}" type="number" min="0" step="${item.unit==='PCS'?'1':'0.01'}" value="${Number(dayDoc.values?.[item.id]||0)}"/><span>${escapeHtml(item.unit||'QTY')}</span></label><button type="button" class="text-button" data-edit-waste="${escapeHtml(item.id)}">Edit master</button></article>`}).join('')}</div><div class="sticky-save-bar waste-save-bar"><div><strong>Waste ${escapeHtml(formatDate(date))}</strong><span>Input harian → total bulan otomatis</span></div><button class="primary">Simpan Waste Hari Ini</button></div></form>`:`<article class="panel">${emptyState('Belum ada master item waste.')}</article>`}
-
-    <article class="panel waste-master-panel">
-      <div class="panel-head">
+    <article class="panel waste-calendar-panel">
+      <div class="panel-head waste-calendar-head">
         <div>
-          <span class="overline">MASTER ITEM WASTE</span>
-          <h3>Kelola bahan / barang Waste</h3>
+          <span class="overline">KALENDER INPUT</span>
+          <h3>${escapeHtml(formatMonthKey(monthKey))}</h3>
+          <p class="muted small-copy">Tap tanggal untuk input atau edit. Badge menunjukkan jumlah item yang terisi.</p>
         </div>
-        <span class="count-pill">${state.wasteItems.filter(x=>x.active!==false).length} aktif · ${state.wasteItems.filter(x=>x.active===false).length} arsip</span>
+        <button id="waste-today" class="primary compact" type="button">Hari Ini</button>
       </div>
-
-      <div class="waste-master-list">
-        ${state.wasteItems.length ? state.wasteItems.map(item => {
-          const hasHistory = state.wasteDays.some(day => Number(day.values?.[item.id]||0) > 0);
-          return `<div class="waste-master-row ${item.active===false?'is-archived':''}">
-            <div class="waste-master-info">
-              <strong>${escapeHtml(item.name)}</strong>
-              <span>${escapeHtml(item.unit||'QTY')} · ${item.active===false?'Arsip':'Aktif'}${hasHistory?' · punya histori':''}</span>
-            </div>
-            <div class="waste-master-actions">
-              ${item.active===false
-                ? `<button class="secondary small" data-restore-waste="${escapeHtml(item.id)}">Aktifkan Lagi</button>`
-                : `<button class="secondary small" data-edit-master-waste="${escapeHtml(item.id)}">Edit</button>`}
-              <button class="${hasHistory?'secondary':'danger'} small" data-remove-master-waste="${escapeHtml(item.id)}">${hasHistory?'Arsipkan':'Hapus Permanen'}</button>
-            </div>
-          </div>`;
-        }).join('') : `<p class="muted">Belum ada master item.</p>`}
+      <div class="waste-calendar-toolbar">
+        <button id="waste-prev-month" class="secondary waste-month-button" type="button" aria-label="Bulan sebelumnya">‹</button>
+        <div class="waste-calendar-month">
+          <strong>${escapeHtml(formatMonthKey(monthKey))}</strong>
+          <span>${monthDays.length} hari tercatat · ${analytics.highDays.length} hari tinggi</span>
+        </div>
+        <button id="waste-next-month" class="secondary waste-month-button" type="button" aria-label="Bulan berikutnya">›</button>
       </div>
-      <p class="master-help">Item yang sudah punya histori tidak dihapus permanen. SoWork mengarsipkannya supaya laporan bulan lama tetap punya nama dan satuan.</p>
+      ${buildWasteCalendar(state.wasteDays, monthKey, analytics, date)}
     </article>
 
-    <div class="grid two waste-analytics-grid">
-      <article class="panel"><div class="panel-head"><div><span class="overline">POLA HARIAN</span><h3>Hari waste tertinggi</h3></div></div>${topDays.length?`<div class="waste-day-bars">${topDays.map(d=>`<button class="waste-day-bar-row" data-waste-history="${escapeHtml(d.date)}"><div><strong>${escapeHtml(formatDate(d.date))}</strong><span>${escapeHtml(d.weekday)} · ${d.spikeItems} item spike</span></div><div class="waste-bar-track"><i style="width:${Math.min(100,(d.score/maxScore)*100)}%"></i></div><b>${d.score.toFixed(2)}×</b></button>`).join('')}</div>`:`<p class="muted">Belum cukup data harian.</p>`}</article>
-      <article class="panel"><div class="panel-head"><div><span class="overline">RECURRING RISK</span><h3>Pola berdasarkan hari</h3></div></div>${weekdayRisk.length?`<div class="weekday-risk-list">${weekdayRisk.map(w=>`<div class="weekday-risk-row"><div><strong>${escapeHtml(w.label)}</strong><span>${w.count} hari tercatat</span></div><b class="${w.risk>=1.2?'critical-label':''}">${w.risk.toFixed(2)}×</b></div>`).join('')}</div>`:`<p class="muted">Butuh beberapa hari data.</p>`}</article>
+    <section class="waste-selected-day">
+      <div class="selected-day-head">
+        <div>
+          <span class="overline">INPUT TERPILIH</span>
+          <h2>${escapeHtml(formatDate(date))}</h2>
+          <p>${selectedFilled ? `${selectedFilled} item sudah terisi. Ubah angka lalu simpan untuk update.` : 'Belum ada input. Isi hanya item yang terbuang.'}</p>
+        </div>
+        <span class="selected-day-status ${selectedFilled ? 'has-data' : ''}">${selectedFilled ? `${selectedFilled} terisi` : 'Kosong'}</span>
+      </div>
+
+      ${analytics.selectedWarnings.length ? `<div class="waste-inline-alerts">${analytics.selectedWarnings.slice(0, 3).map(w => `<div class="waste-inline-alert ${w.severity}"><span>!</span><p>${escapeHtml(w.message)}</p></div>`).join('')}</div>` : ''}
+
+      ${activeItems.length ? `<form id="waste-day-form" class="waste-day-form"><div class="waste-entry-grid easy-entry-grid">${activeItems.map(item => {
+        const st = analytics.itemStats.find(x => x.id === item.id);
+        return `<label class="waste-entry-card easy-entry-card"><div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.unit || 'QTY')}${st?.warning > 0 ? ` · alert ≥ ${formatQty(st.warning)}` : ''}</span></div><span class="waste-qty-control"><input name="w_${escapeHtml(item.id)}" type="number" inputmode="decimal" min="0" step="${item.unit === 'PCS' ? '1' : '0.01'}" value="${Number(dayDoc.values?.[item.id] || 0)}"/><span>${escapeHtml(item.unit || 'QTY')}</span></span></label>`;
+      }).join('')}</div><div class="sticky-save-bar waste-save-bar"><div><strong>${escapeHtml(formatDate(date))}</strong><span>Perubahan tersimpan ke Waste harian</span></div><button class="primary">Simpan Waste</button></div></form>` : `<article class="panel">${emptyState('Belum ada master item waste.')}</article>`}
+    </section>
+
+    <div class="grid two waste-analytics-grid easy-analytics-grid">
+      <article class="panel"><div class="panel-head"><div><span class="overline">PUNCAK WASTE</span><h3>Hari tertinggi</h3></div></div>${topDays.length ? `<div class="waste-day-bars">${topDays.map(d => `<button class="waste-day-bar-row" data-waste-history="${escapeHtml(d.date)}"><div><strong>${escapeHtml(formatDate(d.date))}</strong><span>${escapeHtml(d.weekday)} · ${d.spikeItems} spike</span></div><div class="waste-bar-track"><i style="width:${Math.min(100, (d.score / maxScore) * 100)}%"></i></div><b>${d.score.toFixed(2)}×</b></button>`).join('')}</div>` : `<p class="muted">Belum cukup data harian.</p>`}</article>
+      <article class="panel"><div class="panel-head"><div><span class="overline">POLA HARI</span><h3>Risiko berulang</h3></div></div>${weekdayRisk.length ? `<div class="weekday-risk-list">${weekdayRisk.map(w => `<div class="weekday-risk-row"><div><strong>${escapeHtml(w.label)}</strong><span>${w.count} hari</span></div><b class="${w.risk >= 1.2 ? 'critical-label' : ''}">${w.risk.toFixed(2)}×</b></div>`).join('')}</div>` : `<p class="muted">Butuh beberapa hari data.</p>`}</article>
     </div>
 
-    <article class="panel waste-advice-panel"><div class="panel-head"><div><span class="overline">CONTROL PLAN</span><h3>Saran kontrol bahan baku & pengeluaran</h3></div></div><div class="advice-grid">${analytics.suggestions.map((s,i)=>`<div class="advice-card"><span>${String(i+1).padStart(2,'0')}</span><div><strong>${escapeHtml(s.title)}</strong><p>${escapeHtml(s.text)}</p></div></div>`).join('')}</div></article>
+    <article class="panel waste-advice-panel easy-advice-panel"><div class="panel-head"><div><span class="overline">SMART CONTROL</span><h3>Saran singkat</h3></div></div><div class="advice-grid">${analytics.suggestions.map((s, i) => `<div class="advice-card"><span>${String(i + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(s.title)}</strong><p>${escapeHtml(s.text)}</p></div></div>`).join('')}</div></article>
 
-    <article class="panel"><div class="panel-head"><div><span class="overline">MONTH SUMMARY</span><h3>Total per item</h3></div></div><div class="waste-summary-list">${analytics.itemStats.length?analytics.itemStats.map(x=>`<div class="waste-summary-row"><div><strong>${escapeHtml(x.name)}</strong><span>${x.maxDate?`Tertinggi ${formatDate(x.maxDate)} · ${formatQty(x.maxQty)} ${escapeHtml(x.unit)}`:'Belum ada waste'}</span></div><div class="waste-summary-numbers"><strong>${formatQty(x.total)} ${escapeHtml(x.unit)}</strong>${x.cost>0?`<small>Rp ${formatMoney(x.cost)}</small>`:''}</div></div>`).join(''):`<p class="muted">Belum ada item.</p>`}</div></article>
+    <article class="panel"><div class="panel-head"><div><span class="overline">RINGKASAN BULAN</span><h3>Total per item</h3></div></div><div class="waste-summary-list">${analytics.itemStats.length ? analytics.itemStats.map(x => `<div class="waste-summary-row"><div><strong>${escapeHtml(x.name)}</strong><span>${x.maxDate ? `Tertinggi ${formatDate(x.maxDate)} · ${formatQty(x.maxQty)} ${escapeHtml(x.unit)}` : 'Belum ada waste'}</span></div><div class="waste-summary-numbers"><strong>${formatQty(x.total)} ${escapeHtml(x.unit)}</strong>${x.cost > 0 ? `<small>Rp ${formatMoney(x.cost)}</small>` : ''}</div></div>`).join('') : `<p class="muted">Belum ada item.</p>`}</div></article>
+
+    <details class="panel collapsible-panel waste-master-panel">
+      <summary>
+        <div><span class="overline">MASTER WASTE</span><strong>Kelola item & pengaturan</strong><small>${activeCount} aktif · ${archivedCount} arsip</small></div>
+        <span class="details-chevron">⌄</span>
+      </summary>
+      <div class="collapsible-content">
+        <div class="waste-master-list">
+          ${state.wasteItems.length ? state.wasteItems.map(item => {
+            const hasHistory = state.wasteDays.some(day => Number(day.values?.[item.id] || 0) > 0);
+            return `<div class="waste-master-row ${item.active === false ? 'is-archived' : ''}"><div class="waste-master-info"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.unit || 'QTY')} · ${item.active === false ? 'Arsip' : 'Aktif'}${hasHistory ? ' · punya histori' : ''}</span></div><div class="waste-master-actions">${item.active === false ? `<button class="secondary small" data-restore-waste="${escapeHtml(item.id)}">Aktifkan</button>` : `<button class="secondary small" data-edit-master-waste="${escapeHtml(item.id)}">Edit</button>`}<button class="${hasHistory ? 'secondary' : 'danger'} small" data-remove-master-waste="${escapeHtml(item.id)}">${hasHistory ? 'Arsipkan' : 'Hapus'}</button></div></div>`;
+          }).join('') : `<p class="muted">Belum ada master item.</p>`}
+        </div>
+        <p class="master-help">Item yang punya histori akan diarsipkan, bukan dihapus, supaya laporan lama tetap utuh.</p>
+      </div>
+    </details>
   `;
 
-  document.querySelector('#waste-month')?.addEventListener('change',e=>{state.wasteMonth=e.target.value;state.wasteDate=null;renderShell()});
-  document.querySelector('#waste-date')?.addEventListener('change',e=>{state.wasteDate=e.target.value;renderShell()});
-  document.querySelector('#seed-waste')?.addEventListener('click',async()=>{if(!confirm('Muat master + histori harian Waste Juli tanggal 1–31? Data yang sudah ada tidak ditimpa.'))return;try{await seedWasteReference();state.wasteMonth='2026-07';state.wasteDate='2026-07-31';alert('Histori Waste Juli berhasil dimuat.')}catch(err){alert(`${err?.code||'error'}: ${err?.message||friendlyError(err)}`)}});
-  document.querySelector('#add-waste-item')?.addEventListener('click',()=>openWasteItemEditor(null));
-  document.querySelectorAll('[data-edit-waste]').forEach(btn=>btn.onclick=()=>openWasteItemEditor(state.wasteItems.find(x=>x.id===btn.dataset.editWaste)));
-  document.querySelectorAll('[data-edit-master-waste]').forEach(btn=>btn.onclick=()=>openWasteItemEditor(state.wasteItems.find(x=>x.id===btn.dataset.editMasterWaste)));
-
-  document.querySelectorAll('[data-restore-waste]').forEach(btn=>btn.onclick=async()=>{
+  document.querySelector('#waste-prev-month')?.addEventListener('click', () => {
+    state.wasteMonth = shiftMonthKey(monthKey, -1);
+    state.wasteDate = null;
+    renderShell();
+  });
+  document.querySelector('#waste-next-month')?.addEventListener('click', () => {
+    state.wasteMonth = shiftMonthKey(monthKey, 1);
+    state.wasteDate = null;
+    renderShell();
+  });
+  document.querySelector('#waste-today')?.addEventListener('click', () => {
+    state.wasteMonth = today.slice(0, 7);
+    state.wasteDate = today;
+    renderShell();
+  });
+  document.querySelectorAll('[data-waste-calendar-date]').forEach(btn => btn.addEventListener('click', () => {
+    state.wasteDate = btn.dataset.wasteCalendarDate;
+    renderShell();
+    requestAnimationFrame(() => document.querySelector('.waste-selected-day')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }));
+  document.querySelector('#seed-waste')?.addEventListener('click', async () => {
+    if (!confirm('Muat master + histori harian Waste Juli tanggal 1–31? Data yang sudah ada tidak ditimpa.')) return;
     try {
-      await restoreWasteItem(btn.dataset.restoreWaste);
-    } catch(err) {
-      alert(`${err?.code||'error'}: ${err?.message||friendlyError(err)}`);
-    }
+      await seedWasteReference();
+      state.wasteMonth = '2026-07';
+      state.wasteDate = '2026-07-31';
+      alert('Histori Waste Juli berhasil dimuat.');
+    } catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
+  });
+  document.querySelector('#add-waste-item')?.addEventListener('click', () => openWasteItemEditor(null));
+  document.querySelectorAll('[data-edit-master-waste]').forEach(btn => btn.onclick = () => openWasteItemEditor(state.wasteItems.find(x => x.id === btn.dataset.editMasterWaste)));
+
+  document.querySelectorAll('[data-restore-waste]').forEach(btn => btn.onclick = async () => {
+    try { await restoreWasteItem(btn.dataset.restoreWaste); }
+    catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
   });
 
-  document.querySelectorAll('[data-remove-master-waste]').forEach(btn=>btn.onclick=async()=>{
-    const id=btn.dataset.removeMasterWaste;
-    const item=state.wasteItems.find(x=>x.id===id);
-    const hasHistory=state.wasteDays.some(day=>Number(day.values?.[id]||0)>0);
-
-    if(hasHistory) {
-      if(!confirm(`Arsipkan "${item?.name||id}"? Item tidak muncul pada input Waste baru, tapi histori lama tetap aman.`)) return;
+  document.querySelectorAll('[data-remove-master-waste]').forEach(btn => btn.onclick = async () => {
+    const id = btn.dataset.removeMasterWaste;
+    const item = state.wasteItems.find(x => x.id === id);
+    const hasHistory = state.wasteDays.some(day => Number(day.values?.[id] || 0) > 0);
+    if (hasHistory) {
+      if (!confirm(`Arsipkan "${item?.name || id}"? Histori lama tetap aman.`)) return;
       try { await archiveWasteItem(id); }
-      catch(err){ alert(`${err?.code||'error'}: ${err?.message||friendlyError(err)}`); }
+      catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
     } else {
-      if(!confirm(`Hapus permanen "${item?.name||id}"? Item ini belum punya histori Waste.`)) return;
+      if (!confirm(`Hapus permanen "${item?.name || id}"? Item ini belum punya histori Waste.`)) return;
       try { await permanentDeleteWasteItem(id); }
-      catch(err){ alert(`${err?.code||'error'}: ${err?.message||friendlyError(err)}`); }
+      catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
     }
   });
 
-  document.querySelectorAll('[data-waste-history]').forEach(btn=>btn.onclick=()=>{state.wasteDate=btn.dataset.wasteHistory;renderShell();window.scrollTo({top:0,behavior:'smooth'})});
-  document.querySelector('#waste-day-form')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const values=Object.fromEntries(activeItems.map(item=>[item.id,Number(fd.get(`w_${item.id}`)||0)]));try{await saveWasteDay(
-    date,
-    values,
-    {uid:state.user?.uid,name:state.profile?.name||state.user?.email},
-    Object.fromEntries(activeItems.map(item=>[item.id,{name:item.name,unit:item.unit,category:item.category}]))
-  );alert('Waste harian tersimpan. Analisis bulan diperbarui otomatis.')}catch(err){alert(`${err?.code||'error'}: ${err?.message||friendlyError(err)}`)}});
-  document.querySelector('#import-waste')?.addEventListener('click',()=>runExcelImport('waste'));
-  document.querySelector('#export-waste')?.addEventListener('click',()=>{try{exportWasteWorkbook({monthKey,items:activeItems,days:state.wasteDays,analytics,filename:`SoWork-Waste-${monthKey}.xlsx`})}catch(err){alert(err?.message||'Export gagal.')}});
+  document.querySelectorAll('[data-waste-history]').forEach(btn => btn.onclick = () => {
+    state.wasteDate = btn.dataset.wasteHistory;
+    state.wasteMonth = String(btn.dataset.wasteHistory).slice(0, 7);
+    renderShell();
+    requestAnimationFrame(() => document.querySelector('.waste-selected-day')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  });
+
+  document.querySelector('#waste-day-form')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const fd = new FormData(form);
+    const values = Object.fromEntries(activeItems.map(item => [item.id, Number(fd.get(`w_${item.id}`) || 0)]));
+    const submit = form.querySelector('button[type="submit"], .waste-save-bar .primary');
+    const oldLabel = submit?.textContent || 'Simpan Waste';
+    if (submit) { submit.disabled = true; submit.textContent = 'Menyimpan...'; }
+    try {
+      await saveWasteDay(date, values, { uid: state.user?.uid, name: state.profile?.name || state.user?.email }, Object.fromEntries(activeItems.map(item => [item.id, { name: item.name, unit: item.unit, category: item.category }])));
+      if (submit) submit.textContent = 'Tersimpan ✓';
+      setTimeout(() => { if (submit && document.body.contains(submit)) { submit.disabled = false; submit.textContent = oldLabel; } }, 900);
+    } catch (err) {
+      if (submit) { submit.disabled = false; submit.textContent = oldLabel; }
+      alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`);
+    }
+  });
+  document.querySelector('#import-waste')?.addEventListener('click', () => runExcelImport('waste'));
+  document.querySelector('#export-waste')?.addEventListener('click', () => {
+    try { exportWasteWorkbook({ monthKey, items: activeItems, days: state.wasteDays, analytics, filename: `SoWork-Waste-${monthKey}.xlsx` }); }
+    catch (err) { alert(err?.message || 'Export gagal.'); }
+  });
 }
 
 
