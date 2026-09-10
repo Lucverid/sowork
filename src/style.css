@@ -2591,3 +2591,269 @@ input, select { min-height: 40px; padding: 8px 11px; border-radius: 10px; }
   .waste-calendar-day { min-height: 43px; }
   .easy-entry-card { grid-template-columns: 1fr 108px; }
 }
+
+/* ==========================================================================
+   SoWork v1.5.1 — compact stock flow + balanced mobile navigation
+   ========================================================================== */
+.stock-workspace-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.stock-workspace-switch button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 30px minmax(0,1fr);
+  grid-template-rows: auto auto;
+  column-gap: 9px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+.stock-workspace-switch button > span {
+  grid-row: 1 / 3;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: #2d695c;
+}
+.stock-workspace-switch strong { font-size: 11px; line-height: 1.1; }
+.stock-workspace-switch small { color: var(--muted); font-size: 8px; }
+
+.stock-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stock-section-title h3 { margin: 2px 0 0; }
+.stock-calendar-toolbar { margin: 10px 0 8px; }
+.stock-calendar-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 8px;
+  text-align: center;
+}
+.stock-primary-actions { display: flex; align-items: center; gap: 7px; }
+.stock-more-actions { position: relative; }
+.stock-more-actions > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.stock-more-actions > summary::-webkit-details-marker { display: none; }
+.stock-more-actions > summary::after { content: " ···"; letter-spacing: 1px; }
+.stock-more-menu {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  top: calc(100% + 7px);
+  width: 168px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(23,38,50,.12);
+}
+.stock-more-menu button { width: 100%; justify-content: flex-start; text-align: left; }
+#stock-usage-section, #stock-master-section { scroll-margin-top: calc(var(--shell-topbar) + 12px); }
+
+.mobile-menu-handle {
+  width: 38px;
+  height: 4px;
+  display: block;
+  margin: 0 auto 10px;
+  border-radius: 99px;
+  background: #d8dee2;
+}
+
+@media (max-width: 860px) {
+  body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+  #page-content { padding-bottom: calc(86px + env(safe-area-inset-bottom)); }
+
+  .mobile-nav {
+    left: 10px;
+    right: 10px;
+    bottom: calc(7px + env(safe-area-inset-bottom));
+    width: auto;
+    max-width: 520px;
+    height: 58px;
+    margin-inline: auto;
+    padding: 4px;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0,1fr));
+    gap: 2px;
+    border: 1px solid rgba(218,225,229,.92);
+    border-radius: 18px;
+    background: rgba(255,255,255,.96);
+    box-shadow: 0 8px 28px rgba(23,38,50,.11);
+    backdrop-filter: blur(15px);
+  }
+  .mobile-nav-btn,
+  .mobile-more-btn {
+    width: 100%;
+    height: 48px;
+    min-width: 0;
+    margin: 0;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 3px;
+    border-radius: 13px;
+    background: transparent;
+    color: #82909b;
+    box-shadow: none;
+    transform: none;
+  }
+  .mobile-nav-btn .ui-icon { width: 19px; height: 19px; }
+  .mobile-nav-btn small,
+  .mobile-more-btn small {
+    max-width: 100%;
+    color: inherit;
+    font-size: 7px;
+    line-height: 1;
+    font-weight: 700;
+  }
+  .mobile-nav-btn.active,
+  .mobile-more-btn.active,
+  .mobile-nav-btn.active:not(.mobile-more-btn) {
+    background: #edf5f2;
+    color: #2e7162;
+    box-shadow: none;
+  }
+  .mobile-more-btn.active small { color: inherit; }
+
+  .mobile-menu-backdrop { align-items: end; padding: 10px; }
+  .mobile-menu-sheet {
+    width: min(100%, 520px);
+    margin: 0 auto;
+    padding: 10px 12px 14px;
+    border-radius: 22px;
+  }
+  .mobile-menu-head { margin-bottom: 9px; }
+  .mobile-menu-head h3 { margin: 0; font-size: 16px; }
+  .mobile-menu-head p { margin: 2px 0 0; }
+  .mobile-menu-grid { grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; }
+  .mobile-menu-item {
+    min-height: 58px;
+    padding: 7px 5px;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 5px;
+    border-radius: 12px;
+    text-align: center;
+  }
+  .mobile-menu-item strong { font-size: 8px; }
+
+  .stock-workspace-switch { margin-bottom: 8px; gap: 6px; }
+  .stock-workspace-switch button { padding: 8px 9px; border-radius: 12px; }
+  .stock-workspace-switch button > span { width: 28px; height: 28px; }
+  .stock-workspace-switch strong { font-size: 10px; }
+  .stock-workspace-switch small { font-size: 7px; }
+
+  .stock-daily-panel { padding: 11px; }
+  .stock-section-title { align-items: center; }
+  .stock-section-title .overline { font-size: 7px; }
+  .stock-section-title h3 { font-size: 15px; }
+  .stock-today-btn { width: auto !important; min-height: 34px; padding: 7px 10px; }
+  .stock-calendar-toolbar {
+    grid-template-columns: 34px minmax(0,1fr) 34px;
+    padding: 5px;
+    margin: 8px 0 6px;
+    border-radius: 11px;
+  }
+  .stock-calendar-toolbar .usage-month-button { width: 34px; height: 34px; border-radius: 9px; font-size: 20px; }
+  .stock-calendar-toolbar .usage-calendar-month strong { font-size: 12px; }
+  .stock-calendar-toolbar .usage-calendar-month span { font-size: 7px; }
+  .usage-calendar-weekdays { margin-bottom: 4px; }
+  .usage-calendar-weekdays span { font-size: 7px; }
+  .usage-calendar-weekdays,
+  .usage-calendar-grid { gap: 3px; }
+  .usage-calendar-day {
+    min-height: 42px;
+    padding: 5px;
+    border-radius: 9px;
+    align-content: start;
+  }
+  .usage-calendar-number { font-size: 10px; }
+  .usage-calendar-day small { display: none; }
+  .usage-calendar-badge {
+    top: 4px;
+    right: 4px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    font-size: 5.5px;
+  }
+  .usage-calendar-day.is-today { box-shadow: inset 0 0 0 1.25px #334b5b; }
+  .stock-calendar-hint { font-size: 7px; margin-top: 6px; }
+
+  .stock-panel-head { align-items: center; }
+  .stock-primary-actions { gap: 5px; }
+  .stock-primary-actions > .primary,
+  .stock-more-actions > summary { min-height: 34px; padding: 7px 9px; font-size: 8px; }
+  .stock-more-menu { position: fixed; left: 12px; right: 12px; bottom: 76px; top: auto; width: auto; grid-template-columns: repeat(2,minmax(0,1fr)); padding: 8px; border-radius: 14px; }
+  .stock-more-menu button { min-height: 38px; justify-content: center; text-align: center; }
+  .stock-filters-modern { grid-template-columns: minmax(0,1.4fr) minmax(120px,.6fr); gap: 6px; }
+  .stock-filters-modern label { min-width: 0; }
+  .stock-filters-modern input,
+  .stock-filters-modern select { min-height: 40px; }
+}
+
+@media (max-width: 460px) {
+  .stock-filters-modern { grid-template-columns: 1fr; }
+  .stock-primary-actions > .primary { max-width: 130px; }
+  .usage-calendar-day { min-height: 39px; padding: 4px; }
+  .stock-workspace-switch small { display: none; }
+  .stock-workspace-switch button { grid-template-rows: 1fr; }
+  .stock-workspace-switch button > span { grid-row: 1; }
+}
+
+/* v1.5.1 final polish: active nav only highlights the icon, not a large tile. */
+@media (max-width: 860px) {
+  .mobile-nav-btn.active,
+  .mobile-more-btn.active,
+  .mobile-nav-btn.active:not(.mobile-more-btn) {
+    background: transparent;
+    color: #2e7162;
+  }
+  .mobile-nav-btn > span,
+  .mobile-more-btn > span {
+    width: 34px;
+    height: 27px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+  }
+  .mobile-nav-btn.active > span,
+  .mobile-more-btn.active > span { background: #e9f4f0; }
+
+  .stock-metrics {
+    grid-template-columns: repeat(4, minmax(0,1fr));
+    gap: 5px;
+  }
+  .stock-metrics .metric-card {
+    min-height: 62px;
+    padding: 8px 7px;
+    border-radius: 11px;
+  }
+  .stock-metrics .metric-card strong { font-size: 18px; }
+  .stock-metrics .metric-label { font-size: 6px; letter-spacing: .06em; }
+  .stock-metrics .metric-card small { display: none; }
+}
+
+@media (max-width: 360px) {
+  .stock-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}

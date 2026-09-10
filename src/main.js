@@ -103,6 +103,7 @@ function iconSvg(name, size = 18) {
     trash: '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
     calculator: '<rect x="5" y="3" width="14" height="18" rx="3"/><path d="M8 7h8M8 12h.01M12 12h.01M16 12h.01M8 16h.01M12 16h.01M16 16h.01"/>',
     file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+    grid: '<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21h-4v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1v4H21a1.7 1.7 0 0 0-1.6 1Z"/>'
   };
   return `<svg class="ui-icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.home}</svg>`;
@@ -357,7 +358,7 @@ function renderShell() {
           ${admin ? (() => {
             const primary = navItems().filter(([id]) => ["dashboard", "schedule", "checklist", "stock"].includes(id));
             const byId = Object.fromEntries(primary.map(item => [item[0], item]));
-            const mobileOrder = [byId.dashboard, byId.schedule, ["__menu", "Menu", "settings"], byId.checklist, byId.stock].filter(Boolean);
+            const mobileOrder = [byId.dashboard, byId.schedule, ["__menu", "Menu", "grid"], byId.checklist, byId.stock].filter(Boolean);
             return mobileOrder.map(([id, label, icon]) => id === "__menu"
               ? `<button class="mobile-nav-btn mobile-more-btn ${!["dashboard","schedule","checklist","stock"].includes(state.page) ? "active" : ""}" id="mobile-more-btn"><span>${iconSvg(icon, 18)}</span><small>${label}</small></button>`
               : `<button class="mobile-nav-btn ${state.page === id ? "active" : ""}" data-page="${id}"><span>${iconSvg(icon, 18)}</span><small>${label}</small></button>`
@@ -394,7 +395,8 @@ function openMobileMenu() {
   sheet.className = "mobile-menu-backdrop";
   sheet.innerHTML = `
     <section class="mobile-menu-sheet" role="dialog" aria-modal="true" aria-label="Menu SoWork">
-      <div class="mobile-menu-head"><div><span class="overline">SEMUA MODUL</span><h3>Pilih menu</h3></div><button class="modal-close mobile-menu-close" type="button">×</button></div>
+      <span class="mobile-menu-handle" aria-hidden="true"></span>
+      <div class="mobile-menu-head"><div><h3>Menu lainnya</h3><p class="muted small-copy">Akses modul operasional</p></div><button class="modal-close mobile-menu-close" type="button" aria-label="Tutup">×</button></div>
       <div class="mobile-menu-grid">
         ${items.map(([id,label,icon]) => `<button class="mobile-menu-item ${state.page === id ? "active" : ""}" data-mobile-page="${id}"><span>${iconSvg(icon,20)}</span><strong>${escapeHtml(label)}</strong></button>`).join("")}
       </div>
@@ -705,7 +707,7 @@ function renderSchedule(target) {
           <div class="legend-inline">
             <span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span>
           </div>
-          ${admin ? `<div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="export-schedule" class="secondary compact">Export Excel</button></div>` : ""}
+          ${admin ? `<div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="copy-schedule" class="secondary compact">Copy Jadwal</button><button id="export-schedule" class="secondary compact">Export Excel</button></div>` : ""}
         </div>
       </div>
       ${renderScheduleMatrix(scheduleForGrid, rules, admin && !preview?.entries?.length)}
@@ -790,6 +792,21 @@ function renderSchedule(target) {
 
   document.querySelector("#add-schedule")?.addEventListener("click", () => openScheduleEditor(null, rules, selected));
   document.querySelector("#import-schedule")?.addEventListener("click", () => runExcelImport("schedule"));
+  document.querySelector("#copy-schedule")?.addEventListener("click", async e => {
+    const btn = e.currentTarget;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Menyalin...";
+    try {
+      await copyScheduleToClipboard({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected) });
+      btn.textContent = "Tersalin ✓";
+    } catch (err) {
+      alert(err?.message || "Gagal menyalin jadwal.");
+      btn.textContent = original;
+    } finally {
+      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
+    }
+  });
   document.querySelector("#export-schedule")?.addEventListener("click", () => {
     try {
       exportScheduleWorkbook({
@@ -809,6 +826,81 @@ function renderSchedule(target) {
       if (item) openScheduleEditor(item, rules, selected);
     };
   });
+}
+
+async function copyScheduleToClipboard({ entries = [], rules, periodLabel = "Jadwal" }) {
+  if (!entries.length) throw new Error("Tidak ada jadwal untuk disalin.");
+
+  const preferred = [...(rules?.maleNames || []), ...(rules?.femaleNames || [])];
+  const preferredIndex = name => {
+    const index = preferred.indexOf(name);
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  const crew = [...new Set(entries.map(e => e.crewName).filter(Boolean))]
+    .sort((a, b) => preferredIndex(a) - preferredIndex(b) || String(a).localeCompare(String(b), "id"));
+  const dates = [...new Set(entries.map(e => e.date).filter(Boolean))].sort();
+  const byKey = new Map(entries.map(e => [`${e.date}__${e.crewName}`, e]));
+
+  const plainRows = [
+    ["No", "Nama Crew", "Gender", "Periode", ...dates.map(shortDate)],
+    ["", "", "", "", ...dates.map(dayNameFromDate)]
+  ];
+
+  const border = "border:1px solid #d9d9d9;";
+  const center = "text-align:center;vertical-align:middle;white-space:pre-wrap;";
+  const header = `background:#ffff00;color:#000;font-weight:700;${border}${center}`;
+  const fillByShift = { S1: "#00e72d", S2: "#4285e8", Middle: "#ff9800", Libur: "#ff1616" };
+
+  let html = `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:10pt"><thead><tr>`;
+  ["No", "Nama Crew", "Gender", "Periode"].forEach(label => {
+    html += `<th rowspan="2" style="${header}padding:7px 10px">${escapeHtml(label)}</th>`;
+  });
+  dates.forEach(date => { html += `<th style="${header}padding:7px 10px">${escapeHtml(shortDate(date))}</th>`; });
+  html += `</tr><tr>`;
+  dates.forEach(date => { html += `<th style="${header}padding:6px 10px">${escapeHtml(dayNameFromDate(date))}</th>`; });
+  html += `</tr></thead><tbody>`;
+
+  crew.forEach((name, index) => {
+    const gender = (rules?.maleNames || []).includes(name) ? "Pria" : "Wanita";
+    const identityFill = gender === "Pria" ? "#c6e0b4" : "#d5a6bd";
+    const row = [index + 1, name, gender, periodLabel];
+    html += `<tr>`;
+    html += `<td style="background:${identityFill};${border}${center}padding:7px">${index + 1}</td>`;
+    html += `<td style="background:${identityFill};${border}${center}padding:7px">${escapeHtml(name)}</td>`;
+    html += `<td style="background:${identityFill};${border}${center}padding:7px">${escapeHtml(gender)}</td>`;
+    html += `<td style="background:#fff;${border}${center}padding:7px">${escapeHtml(periodLabel)}</td>`;
+
+    dates.forEach(date => {
+      const item = byKey.get(`${date}__${name}`);
+      if (!item) {
+        row.push("");
+        html += `<td style="background:#fff;${border}${center}padding:7px"></td>`;
+        return;
+      }
+      const value = item.shift === "Libur" ? "LIBUR" : `${item.role || "-"}${item.overtime ? `\nLEMBUR: ${item.overtimeType || "Buka"}` : ""}`;
+      row.push(value);
+      const fill = item.overtime ? "#ffe500" : (fillByShift[item.shift] || "#fff");
+      const dark = item.shift === "S1" || item.shift === "Middle" || item.overtime;
+      html += `<td style="background:${fill};color:${dark ? "#000" : "#fff"};${border}${center}padding:7px">${escapeHtml(value).replaceAll("\n", "<br>")}</td>`;
+    });
+    plainRows.push(row);
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+
+  const text = plainRows.map(row => row.map(value => String(value ?? "").replaceAll("\t", " ")).join("\t")).join("\n");
+  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/html": new Blob([html], { type: "text/html" }),
+      "text/plain": new Blob([text], { type: "text/plain" })
+    })]);
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  throw new Error("Browser ini tidak mendukung clipboard tabel.");
 }
 
 function ruleSummaryCards(rules) {
@@ -1493,40 +1585,50 @@ function renderStock(target) {
       </article>
     ` : ""}
 
-    <article class="panel stock-usage-history-panel usage-calendar-panel">
-      <div class="panel-head usage-calendar-head">
+    <nav class="stock-workspace-switch" aria-label="Akses cepat Stock">
+      <button type="button" data-stock-jump="stock-usage-section"><span>${iconSvg("calendar", 17)}</span><strong>Penggunaan</strong><small>Input harian</small></button>
+      <button type="button" data-stock-jump="stock-master-section"><span>${iconSvg("box", 17)}</span><strong>Data Stock</strong><small>Cari & pantau</small></button>
+    </nav>
+
+    <article id="stock-usage-section" class="panel stock-usage-history-panel usage-calendar-panel stock-daily-panel">
+      <div class="stock-section-title">
         <div>
-          <span class="overline">DAILY CONSUMPTION</span>
-          <h3>Penggunaan Barang Harian</h3>
-          <p class="muted small-copy">Tap tanggal untuk input atau edit penggunaan. Tanggal yang sudah terisi ditandai langsung di kalender.</p>
+          <span class="overline">PENGGUNAAN HARIAN</span>
+          <h3>Kalender penggunaan</h3>
         </div>
-        <button id="open-usage-today" class="primary compact">Input Hari Ini</button>
+        <button id="open-usage-today" class="secondary compact stock-today-btn">Hari ini</button>
       </div>
-      <div class="usage-calendar-toolbar">
+      <div class="usage-calendar-toolbar stock-calendar-toolbar">
         <button id="usage-prev-month" class="secondary usage-month-button" type="button" aria-label="Bulan sebelumnya">‹</button>
         <div class="usage-calendar-month">
           <strong>${escapeHtml(formatMonthKey(usageMonth))}</strong>
-          <span>${usageDaysRecorded} hari tercatat · ${monthUsageRows.filter(x => Number(x.qty || 0) > 0).length} entri penggunaan</span>
+          <span>${usageDaysRecorded} hari · ${monthUsageRows.filter(x => Number(x.qty || 0) > 0).length} entri</span>
         </div>
         <button id="usage-next-month" class="secondary usage-month-button" type="button" aria-label="Bulan berikutnya">›</button>
       </div>
       ${buildStockUsageCalendar(usageRows, usageMonth)}
+      <p class="stock-calendar-hint">Tap tanggal untuk input atau edit. Angka kecil menunjukkan jumlah barang yang terisi.</p>
     </article>
 
-    <article class="panel stock-master-panel">
+    <article id="stock-master-section" class="panel stock-master-panel">
       <div class="panel-head stock-panel-head">
-        <div><span class="overline">MASTER & MONITORING</span><h3>Daftar Stock <span id="stock-visible-count" class="inline-count">${analytics.length} / ${analytics.length}</span></h3></div>
-        <div class="table-actions">
-          <button id="stock-settings" class="secondary compact">Alert Bot</button>
-          <button id="import-stock" class="secondary compact">Import Excel</button>
-          <button id="export-stock" class="secondary compact">Export Excel</button>
-          <button id="add-stock-receipt" class="secondary compact">+ Barang Masuk</button>
-          <button id="add-stock-item" class="primary compact">+ Barang</button>
+        <div><span class="overline">DATA STOCK</span><h3>Daftar Stock <span id="stock-visible-count" class="inline-count">${analytics.length} / ${analytics.length}</span></h3></div>
+        <div class="stock-primary-actions">
+          <button id="add-stock-receipt" class="primary compact">+ Barang Masuk</button>
+          <details class="stock-more-actions">
+            <summary class="secondary compact">Lainnya</summary>
+            <div class="stock-more-menu">
+              <button id="add-stock-item" class="secondary compact" type="button">+ Barang baru</button>
+              <button id="stock-settings" class="secondary compact" type="button">Alert Bot</button>
+              <button id="import-stock" class="secondary compact" type="button">Import Excel</button>
+              <button id="export-stock" class="secondary compact" type="button">Export Excel</button>
+            </div>
+          </details>
         </div>
       </div>
 
-      <div class="stock-filters">
-        <label class="search-control">Cari barang<input id="stock-search" value="${escapeHtml(state.stockSearch || "")}" placeholder="Nama / kategori..." /></label>
+      <div class="stock-filters stock-filters-modern">
+        <label class="search-control">Cari barang<input id="stock-search" type="search" autocomplete="off" value="${escapeHtml(state.stockSearch || "")}" placeholder="Nama / kategori..." /></label>
         <label>Status<select id="stock-status-filter">
           ${["Semua","Kritis","Menipis","Aman","Fast","Medium","Slow"].map(x => `<option ${x === status ? "selected" : ""}>${x}</option>`).join("")}
         </select></label>
@@ -1623,6 +1725,9 @@ function renderStock(target) {
     renderStock(target);
   });
   document.querySelectorAll("[data-open-usage-date]").forEach(btn => btn.onclick = () => openDailyStockUsageEditor(btn.dataset.openUsageDate));
+  document.querySelectorAll("[data-stock-jump]").forEach(btn => btn.addEventListener("click", () => {
+    document.getElementById(btn.dataset.stockJump)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
   document.querySelector("#stock-settings")?.addEventListener("click", () => openStockSettingsEditor());
   document.querySelector("#send-stock-wa")?.addEventListener("click", () => sendStockWhatsapp(alerts));
   document.querySelectorAll("[data-edit-stock]").forEach(btn => {

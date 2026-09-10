@@ -49,6 +49,9 @@ export function exportScheduleWorkbook({ entries = [], rules, periodLabel = "Jad
     ...dates.map(() => ({ wch: 16 }))
   ];
   ws["!rows"] = [{ hpt: 25 }, { hpt: 24 }, ...crew.map(() => ({ hpt: 34 }))];
+  // Header identitas benar-benar digabung 2 baris, bukan hanya dibuat kosong pada baris kedua.
+  // Excel/LibreOffice akan membawa struktur merge ini saat range dicopy-paste.
+  ws["!merges"] = [0, 1, 2, 3].map(c => ({ s: { r: 0, c }, e: { r: 1, c } }));
   ws["!freeze"] = { xSplit: 4, ySplit: 2 };
 
   for (let c = 0; c < row1.length; c++) {
@@ -102,6 +105,7 @@ export function exportScheduleWorkbook({ entries = [], rules, periodLabel = "Jad
   ];
   const wsRules = XLSX.utils.aoa_to_sheet(ruleRows);
   wsRules["!cols"] = [{ wch: 20 }, { wch: 60 }];
+  wsRules["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }];
 
   const rawRows = [["Tanggal", "Crew", "Gender", "Shift", "Role", "Catatan", "Lembur", "Jenis Lembur", "Catatan Lembur"]];
   entries.slice().sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.crewName || "").localeCompare(String(b.crewName || ""), "id")).forEach(item => rawRows.push([
