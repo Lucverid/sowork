@@ -53,12 +53,17 @@ let state = {
   cloudflareSyncQueued: false,
   cloudflareLastSnapshotFingerprint: "",
   cloudflareSyncWatchdog: null,
+  renderFrame: null,
   unsubs: []
 };
 
 function clearSubscriptions() {
   state.unsubs.forEach(fn => fn?.());
   state.unsubs = [];
+  if (state.renderFrame) {
+    cancelAnimationFrame(state.renderFrame);
+    state.renderFrame = null;
+  }
   clearTimeout(state.cloudflareSyncTimer);
   state.cloudflareSyncTimer = null;
   if (state.cloudflareSyncWatchdog) {
@@ -197,7 +202,104 @@ function friendlyError(err) {
   return err?.message || "Terjadi kesalahan.";
 }
 
+function scheduleRender(allowedPages = null) {
+  if (Array.isArray(allowedPages) && !allowedPages.includes(state.page)) return;
+  if (state.renderFrame) return;
+  state.renderFrame = requestAnimationFrame(() => {
+    state.renderFrame = null;
+    renderShell();
+  });
+}
+
+function refreshShellChrome() {
+  const shell = document.querySelector(".app-shell");
+  if (!shell) return false;
+  const admin = isAdmin(state.profile);
+  const displayName = state.profile?.name || state.user?.email || "User";
+  const initials = displayName.trim().slice(0, 1).toUpperCase();
+  const outletName = state.appSettings?.outletName || "SoWork";
+  const branchName = state.appSettings?.branchName || "Operations Hub";
+
+  const desktopBrand = shell.querySelector(".sidebar .brand-lockup");
+  if (desktopBrand) {
+    const strong = desktopBrand.querySelector("strong");
+    const small = desktopBrand.querySelector("small");
+    if (strong) strong.textContent = outletName;
+    if (small) small.textContent = branchName;
+  }
+  const mobileBrand = shell.querySelector(".mobile-brand strong");
+  if (mobileBrand) mobileBrand.textContent = outletName;
+  const rolePill = shell.querySelector(".role-pill");
+  if (rolePill) rolePill.textContent = admin ? "ADMIN ACCESS" : "VIEWER ACCESS";
+  const avatar = shell.querySelector(".avatar");
+  const topAvatar = shell.querySelector(".top-avatar");
+  if (avatar) avatar.textContent = initials;
+  if (topAvatar) topAvatar.textContent = initials;
+  const accountName = shell.querySelector(".account-copy strong");
+  const accountEmail = shell.querySelector(".account-copy small");
+  if (accountName) accountName.textContent = displayName;
+  if (accountEmail) accountEmail.textContent = state.user?.email || "";
+
+  shell.querySelectorAll("[data-page]").forEach(btn => btn.classList.toggle("active", btn.dataset.page === state.page));
+  const mobileMore = shell.querySelector("#mobile-more-btn");
+  if (mobileMore) mobileMore.classList.toggle("active", !["dashboard","schedule","checklist","stock"].includes(state.page));
+  const overline = shell.querySelector(".page-heading .overline");
+  const heading = shell.querySelector(".page-heading h2");
+  const context = shell.querySelector(".page-context");
+  if (overline) overline.textContent = admin ? "ADMIN WORKSPACE" : "VIEWER WORKSPACE";
+  if (heading) heading.textContent = pageTitle(state.page);
+  if (context) context.textContent = pageContext(state.page);
+  updateNetworkStatus();
+  return true;
+}
+
+function renderPagePreservingFocus() {
+  const active = document.activeElement;
+  const insidePage = active && active.closest?.("#page-content");
+  let selector = "";
+  let selection = null;
+  const draftValues = new Map();
+
+  // Bila user sedang mengetik, pertahankan seluruh draft form halaman aktif.
+  // Snapshot realtime tidak boleh menghapus angka/nama yang belum sempat disimpan.
+  if (insidePage && active.matches?.("input,select,textarea")) {
+    document.querySelectorAll("#page-content input, #page-content select, #page-content textarea").forEach(control => {
+      const key = control.id ? `#${CSS.escape(control.id)}` : control.name ? `[name="${CSS.escape(control.name)}"]` : "";
+      if (!key || draftValues.has(key)) return;
+      draftValues.set(key, { value: control.value, checked: control.checked, type: control.type });
+    });
+    if (active.id || active.name) {
+      selector = active.id ? `#${CSS.escape(active.id)}` : `[name="${CSS.escape(active.name)}"]`;
+      if (typeof active.selectionStart === "number") selection = [active.selectionStart, active.selectionEnd];
+    }
+  }
+
+  renderPage();
+
+  draftValues.forEach((draft, key) => {
+    const control = document.querySelector(`#page-content ${key}`);
+    if (!control) return;
+    if (draft.type === "checkbox" || draft.type === "radio") control.checked = draft.checked;
+    else control.value = draft.value;
+  });
+
+  if (!selector) return;
+  const next = document.querySelector(`#page-content ${selector}`);
+  if (!next) return;
+  next.focus({ preventScroll: true });
+  if (selection && typeof next.setSelectionRange === "function") {
+    try { next.setSelectionRange(selection[0], selection[1]); } catch {}
+  }
+}
+
 function renderShell() {
+  // v1.4: shell dibuat sekali. Update realtime cukup menggambar ulang halaman aktif,
+  // bukan sidebar + topbar + mobile nav dari nol setiap snapshot Firestore.
+  if (refreshShellChrome()) {
+    renderPagePreservingFocus();
+    return;
+  }
+
   const admin = isAdmin(state.profile);
   const displayName = state.profile?.name || state.user?.email || "User";
   const initials = displayName.trim().slice(0, 1).toUpperCase();
@@ -251,11 +353,12 @@ function renderShell() {
         <main id="page-content"></main>
 
         <nav class="mobile-nav" aria-label="Navigasi mobile">
-          ${navItems().map(([id, label, icon]) => `
+          ${navItems().slice(0, admin ? 4 : 3).map(([id, label, icon]) => `
             <button class="mobile-nav-btn ${state.page === id ? "active" : ""}" data-page="${id}">
               <span>${iconSvg(icon, 18)}</span><small>${label}</small>
             </button>
           `).join("")}
+          ${admin ? `<button class="mobile-nav-btn mobile-more-btn" id="mobile-more-btn"><span>${iconSvg("settings", 18)}</span><small>Menu</small></button>` : ""}
         </nav>
       </section>
     </div>
@@ -264,13 +367,41 @@ function renderShell() {
   document.querySelectorAll("[data-page]").forEach(btn => {
     btn.onclick = () => {
       state.page = btn.dataset.page;
+      document.querySelector("#mobile-menu-sheet")?.remove();
       renderShell();
     };
   });
 
+  document.querySelector("#mobile-more-btn")?.addEventListener("click", openMobileMenu);
   document.querySelector("#logout-btn").onclick = logout;
   updateNetworkStatus();
   renderPage();
+}
+
+function openMobileMenu() {
+  document.querySelector("#mobile-menu-sheet")?.remove();
+  const items = navItems().slice(4);
+  const sheet = document.createElement("div");
+  sheet.id = "mobile-menu-sheet";
+  sheet.className = "mobile-menu-backdrop";
+  sheet.innerHTML = `
+    <section class="mobile-menu-sheet" role="dialog" aria-modal="true" aria-label="Menu SoWork">
+      <div class="mobile-menu-head"><div><span class="overline">SEMUA MODUL</span><h3>Pilih menu</h3></div><button class="modal-close mobile-menu-close" type="button">×</button></div>
+      <div class="mobile-menu-grid">
+        ${items.map(([id,label,icon]) => `<button class="mobile-menu-item ${state.page === id ? "active" : ""}" data-mobile-page="${id}"><span>${iconSvg(icon,20)}</span><strong>${escapeHtml(label)}</strong></button>`).join("")}
+      </div>
+    </section>`;
+  document.body.appendChild(sheet);
+  const close = () => sheet.remove();
+  sheet.querySelector(".mobile-menu-close")?.addEventListener("click", close);
+  sheet.addEventListener("click", e => { if (e.target === sheet) close(); });
+  sheet.querySelectorAll("[data-mobile-page]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.page = btn.dataset.mobilePage;
+      close();
+      renderShell();
+    });
+  });
 }
 
 function updateNetworkStatus() {
@@ -1212,6 +1343,49 @@ function openChecklistEditor(rawItem, rules) {
 }
 
 
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("id-ID")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function applyStockFilters() {
+  const query = normalizeSearchText(state.stockSearch);
+  const status = state.stockStatusFilter || "Semua";
+  let visible = 0;
+  document.querySelectorAll("#stock-table-body [data-stock-row]").forEach(row => {
+    const matchQuery = !query || normalizeSearchText(row.dataset.searchText).includes(query);
+    const matchStatus = status === "Semua" || row.dataset.status === status || row.dataset.velocity === status;
+    row.hidden = !(matchQuery && matchStatus);
+    if (!row.hidden) visible += 1;
+  });
+  const empty = document.querySelector("#stock-empty-row");
+  if (empty) empty.hidden = visible !== 0;
+  const count = document.querySelector("#stock-visible-count");
+  if (count) count.textContent = `${visible} / ${state.stockItems.filter(x => x.active !== false).length}`;
+}
+
+function applyOpnameFilter() {
+  const query = normalizeSearchText(state.opnameSearch);
+  let visible = 0;
+  document.querySelectorAll("#opname-form [data-opname-row]").forEach(card => {
+    const match = !query || normalizeSearchText(card.dataset.searchText).includes(query);
+    card.hidden = !match;
+    if (match) visible += 1;
+  });
+  const summary = document.querySelector("#opname-visible-count");
+  if (summary) summary.textContent = String(visible);
+  const saveCount = document.querySelector("#opname-save-count");
+  if (saveCount) saveCount.textContent = `${visible} barang akan disimpan`;
+  const saveBar = document.querySelector("#opname-save-bar");
+  if (saveBar) saveBar.hidden = visible === 0;
+  const empty = document.querySelector("#opname-filter-empty");
+  if (empty) empty.hidden = visible !== 0;
+}
+
 function renderStock(target) {
   const admin = isAdmin(state.profile);
   if (!admin) return renderPlaceholder(target);
@@ -1221,13 +1395,7 @@ function renderStock(target) {
   const criticalCount = analytics.filter(x => x.status === "Kritis").length;
   const lowCount = analytics.filter(x => x.status === "Menipis").length;
   const fastCount = analytics.filter(x => x.velocity === "Fast").length;
-  const query = String(state.stockSearch || "").trim().toLowerCase();
   const status = state.stockStatusFilter || "Semua";
-  const filtered = analytics.filter(item => {
-    const matchQuery = !query || item.name.toLowerCase().includes(query) || String(item.category || "").toLowerCase().includes(query);
-    const matchStatus = status === "Semua" || item.status === status || item.velocity === status;
-    return matchQuery && matchStatus;
-  });
   const deliveries = state.stockMovements.filter(x => x.type === "IN").slice(0, 18);
   const usageRows = state.stockMovements.filter(x => x.type === "OUT");
   const usageDates = [...new Set(usageRows.map(x=>x.date).filter(Boolean))].sort().reverse();
@@ -1270,7 +1438,7 @@ function renderStock(target) {
 
     <article class="panel stock-master-panel">
       <div class="panel-head stock-panel-head">
-        <div><span class="overline">MASTER & MONITORING</span><h3>Daftar Stock</h3></div>
+        <div><span class="overline">MASTER & MONITORING</span><h3>Daftar Stock <span id="stock-visible-count" class="inline-count">${analytics.length} / ${analytics.length}</span></h3></div>
         <div class="table-actions">
           <button id="stock-settings" class="secondary compact">Alert Bot</button>
           <button id="import-stock" class="secondary compact">Import Excel</button>
@@ -1291,29 +1459,29 @@ function renderStock(target) {
       <div class="stock-table-wrap">
         <table class="stock-table">
           <thead><tr><th>Barang</th><th>Stok</th><th>Status</th><th>Pemakaian</th><th>Prediksi</th><th>Saran Order</th><th></th></tr></thead>
-          <tbody>
-            ${filtered.length ? filtered.map(item => `
-              <tr>
-                <td>
+          <tbody id="stock-table-body">
+            ${analytics.map(item => `
+              <tr data-stock-row="${escapeHtml(item.id)}" data-search-text="${escapeHtml(`${item.name || ""} ${item.category || ""}`)}" data-status="${escapeHtml(item.status)}" data-velocity="${escapeHtml(item.velocity)}">
+                <td data-label="Barang">
                   <div class="stock-name-cell">
                     <strong>${escapeHtml(item.name)}</strong>
                     <span>${escapeHtml(item.category || "Bahan")}${item.cartonSize ? ` · 1 karton = ${formatQty(item.cartonSize)} ${escapeHtml(item.unit)}` : ""}</span>
                     ${item.criticalItem ? `<span class="critical-label">● Item krusial</span>` : ""}
                   </div>
                 </td>
-                <td>
+                <td data-label="Stok">
                   <strong class="stock-main-qty">${escapeHtml(formatQtyWithCarton(item.currentQty, item))}</strong>
                   <small class="block">${formatQty(item.currentQty)} ${escapeHtml(item.unit)}</small>
                 </td>
-                <td>
+                <td data-label="Status">
                   <span class="stock-status ${stockStatusClass(item.status)}">${escapeHtml(item.status)}</span>
                   <small class="block threshold-copy">Kritis ≤ ${formatQty(item.criticalThreshold || 0)} · Menipis ≤ ${formatQty(item.lowThreshold || 0)}</small>
                 </td>
-                <td>
+                <td data-label="Pemakaian">
                   <span class="velocity-badge ${velocityClass(item.velocity)}">${escapeHtml(item.velocity)}</span>
                   <small class="block">${item.avgDailyUsage > 0 ? `${formatQty(item.avgDailyUsage)} ${escapeHtml(item.unit)}/hari` : "Belum cukup data"}${item.usageSource === "daily-usage" ? `<br><em>${item.usageDays} hari input nyata</em>` : item.historyCount ? `<br><em>estimasi dari SO</em>` : ""}</small>
                 </td>
-                <td>
+                <td data-label="Prediksi">
                   ${item.predictedOutDate ? `
                     <div class="prediction-cell">
                       <strong>Habis ~ ${escapeHtml(formatDate(item.predictedOutDate))}</strong>
@@ -1323,14 +1491,15 @@ function renderStock(target) {
                     </div>
                   ` : `<div class="prediction-cell muted"><strong>Belum ada prediksi</strong><span>${item.historyCount || 0} snapshot SO</span><small>Minimal 2 snapshot berbeda tanggal</small></div>`}
                 </td>
-                <td>
+                <td data-label="Saran Order">
                   ${item.recommendedQty > 0
                     ? `<strong>${escapeHtml(formatQtyWithCarton(item.recommendedQty, item))}</strong><small class="block">${formatQty(item.recommendedQty)} ${escapeHtml(item.unit)}</small>`
                     : `<span class="muted">Belum perlu</span>`}
                 </td>
-                <td><button class="secondary small stock-edit-btn" data-edit-stock="${escapeHtml(item.id)}">Edit Barang</button></td>
+                <td data-label="Aksi"><button class="secondary small stock-edit-btn" data-edit-stock="${escapeHtml(item.id)}">Edit Barang</button></td>
               </tr>
-            `).join("") : `<tr><td colspan="7">${emptyState("Tidak ada barang sesuai filter.")}</td></tr>`}
+            `).join("")}
+            <tr id="stock-empty-row" hidden><td colspan="7">${emptyState("Tidak ada barang sesuai filter.")}</td></tr>
           </tbody>
         </table>
       </div>
@@ -1369,11 +1538,11 @@ function renderStock(target) {
 
   document.querySelector("#stock-search")?.addEventListener("input", e => {
     state.stockSearch = e.target.value;
-    renderStock(target);
+    applyStockFilters();
   });
   document.querySelector("#stock-status-filter")?.addEventListener("change", e => {
     state.stockStatusFilter = e.target.value;
-    renderStock(target);
+    applyStockFilters();
   });
   document.querySelector("#import-stock")?.addEventListener("click", () => openStockImportChoice());
   document.querySelector("#export-stock")?.addEventListener("click", () => exportStockWorkbook({ items: state.stockItems, movements: state.stockMovements, opnames: state.stockOpnames, analytics, filename: `SoWork-Stock-${localDateKey(new Date())}.xlsx` }));
@@ -1390,6 +1559,7 @@ function renderStock(target) {
       if (item) openStockItemEditor(item);
     };
   });
+  applyStockFilters();
 }
 
 function renderStockOpname(target) {
@@ -1398,15 +1568,13 @@ function renderStockOpname(target) {
 
   const date = state.opnameDate || localDateKey(new Date());
   state.opnameDate = date;
-  const search = String(state.opnameSearch || "").toLowerCase().trim();
+  const search = normalizeSearchText(state.opnameSearch);
   const allItems = state.stockItems
     .filter(x => x.active !== false)
     .slice()
     .sort((a,b) => String(a.name).localeCompare(String(b.name), "id"));
-  const items = allItems.filter(item =>
-    !search ||
-    String(item.name || "").toLowerCase().includes(search) ||
-    String(item.category || "").toLowerCase().includes(search)
+  const visibleItems = allItems.filter(item =>
+    !search || normalizeSearchText(`${item.name || ""} ${item.category || ""}`).includes(search)
   );
   const existing = Object.fromEntries(
     state.stockOpnames.filter(x => x.date === date).map(x => [x.itemId, x])
@@ -1440,7 +1608,7 @@ function renderStockOpname(target) {
         </label>
       </div>
       <div class="opname-summary">
-        <strong>${items.length}</strong>
+        <strong id="opname-visible-count">${visibleItems.length}</strong>
         <span>dari ${allItems.length} barang</span>
       </div>
     </article>
@@ -1454,7 +1622,7 @@ function renderStockOpname(target) {
 
     <form id="opname-form">
       <div class="opname-list">
-        ${items.length ? items.map(item => {
+        ${allItems.map(item => {
           const row = existing[item.id] || {};
           const q1 = row.primaryQty ?? item.lastPrimaryQty ?? item.currentQty ?? 0;
           const q2 = row.secondaryQty ?? item.lastSecondaryQty ?? 0;
@@ -1464,7 +1632,7 @@ function renderStockOpname(target) {
           const diff = total - Number(systemQty || 0);
           const diffClass = Math.abs(diff) <= Math.max(0.01, Number(systemQty||0)*0.0025) ? "safe" : diff < 0 ? "critical" : "low";
           return `
-            <article class="opname-item-card" data-opname-row="${escapeHtml(item.id)}">
+            <article class="opname-item-card" data-opname-row="${escapeHtml(item.id)}" data-search-text="${escapeHtml(`${item.name || ""} ${item.category || ""}`)}">
               <div class="opname-item-head">
                 <div class="opname-item-title">
                   <strong>${escapeHtml(item.name)}</strong>
@@ -1511,14 +1679,15 @@ function renderStockOpname(target) {
                 </div>
               </div>
             </article>`;
-        }).join("") : emptyState("Barang tidak ditemukan.")}
+        }).join("")}
+        <div id="opname-filter-empty" hidden>${emptyState("Barang tidak ditemukan.")}</div>
       </div>
 
-      ${items.length ? `
-        <div class="sticky-save-bar">
+      ${allItems.length ? `
+        <div id="opname-save-bar" class="sticky-save-bar">
           <div>
             <strong>SO ${escapeHtml(formatDate(date))}</strong>
-            <span>${items.length} barang akan disimpan</span>
+            <span id="opname-save-count">${visibleItems.length} barang akan disimpan</span>
           </div>
           <button class="primary">Simpan Stock Opname</button>
         </div>
@@ -1533,7 +1702,7 @@ function renderStockOpname(target) {
 
   document.querySelector("#opname-search")?.addEventListener("input", e => {
     state.opnameSearch = e.target.value;
-    renderStockOpname(target);
+    applyOpnameFilter();
   });
 
   document.querySelector("#import-opname")?.addEventListener("click", () => runExcelImport("opname"));
@@ -1570,9 +1739,11 @@ function renderStockOpname(target) {
 
   document.querySelector("#opname-form")?.addEventListener("submit", async e => {
     e.preventDefault();
-    if (!items.length) return;
+    const visibleIds = new Set([...e.currentTarget.querySelectorAll("[data-opname-row]:not([hidden])")].map(row => row.dataset.opnameRow));
+    const submitItems = allItems.filter(item => visibleIds.has(item.id));
+    if (!submitItems.length) return;
     const fd = new FormData(e.currentTarget);
-    const rows = items.map(item => ({
+    const rows = submitItems.map(item => ({
       itemId: item.id,
       itemName: item.name,
       primaryLocation: fd.get(`loc1_${item.id}`),
@@ -1605,6 +1776,7 @@ function renderStockOpname(target) {
       alert(err?.message || friendlyError(err));
     }
   });
+  applyOpnameFilter();
 }
 
 function renderOrderPlanner(target) {
@@ -1633,13 +1805,13 @@ function renderOrderPlanner(target) {
         <tbody>
           ${recommended.map(item => `
             <tr>
-              <td><strong>${escapeHtml(item.name)}</strong>${item.criticalItem ? `<small class="block critical-label">Item krusial</small>` : ""}</td>
-              <td><strong>${escapeHtml(formatQtyWithCarton(item.currentQty, item))}</strong><small class="block">${formatQty(item.currentQty)} ${escapeHtml(item.unit)}</small></td>
-              <td>${item.avgDailyUsage > 0 ? `<strong>${formatQty(item.avgDailyUsage)}</strong><small class="block">${escapeHtml(item.unit)}/hari · ${escapeHtml(item.velocity)}</small>` : "Belum cukup data"}</td>
-              <td>${item.predictedOutDate ? `<strong>${escapeHtml(formatDate(item.predictedOutDate))}</strong><small class="block">~${item.daysCover.toFixed(1)} hari lagi</small>` : "—"}</td>
-              <td>${item.recommendedOrderDate ? `<strong class="${item.orderDueNow ? "critical-label" : ""}">${item.orderDueNow ? "Hari ini" : escapeHtml(formatDate(item.recommendedOrderDate))}</strong><small class="block">Lead time ${Number(item.leadTimeDays || 2)} hari</small>` : "—"}</td>
-              <td><strong>${item.recommendedQty > 0 ? escapeHtml(formatQtyWithCarton(item.recommendedQty, item)) : "Pantau"}</strong>${item.recommendedQty > 0 ? `<small class="block">${formatQty(item.recommendedQty)} ${escapeHtml(item.unit)}</small>` : ""}</td>
-              <td><span class="stock-status ${stockStatusClass(item.status)}">${escapeHtml(item.status)}</span><small class="block">${escapeHtml(item.predictionConfidence)} · ${item.historyCount} snapshot</small></td>
+              <td data-label="Barang"><strong>${escapeHtml(item.name)}</strong>${item.criticalItem ? `<small class="block critical-label">Item krusial</small>` : ""}</td>
+              <td data-label="Stok"><strong>${escapeHtml(formatQtyWithCarton(item.currentQty, item))}</strong><small class="block">${formatQty(item.currentQty)} ${escapeHtml(item.unit)}</small></td>
+              <td data-label="Pemakaian">${item.avgDailyUsage > 0 ? `<strong>${formatQty(item.avgDailyUsage)}</strong><small class="block">${escapeHtml(item.unit)}/hari · ${escapeHtml(item.velocity)}</small>` : "Belum cukup data"}</td>
+              <td data-label="Prediksi Habis">${item.predictedOutDate ? `<strong>${escapeHtml(formatDate(item.predictedOutDate))}</strong><small class="block">~${item.daysCover.toFixed(1)} hari lagi</small>` : "—"}</td>
+              <td data-label="Order Paling Lambat">${item.recommendedOrderDate ? `<strong class="${item.orderDueNow ? "critical-label" : ""}">${item.orderDueNow ? "Hari ini" : escapeHtml(formatDate(item.recommendedOrderDate))}</strong><small class="block">Lead time ${Number(item.leadTimeDays || 2)} hari</small>` : "—"}</td>
+              <td data-label="Saran Order"><strong>${item.recommendedQty > 0 ? escapeHtml(formatQtyWithCarton(item.recommendedQty, item)) : "Pantau"}</strong>${item.recommendedQty > 0 ? `<small class="block">${formatQty(item.recommendedQty)} ${escapeHtml(item.unit)}</small>` : ""}</td>
+              <td data-label="Data"><span class="stock-status ${stockStatusClass(item.status)}">${escapeHtml(item.status)}</span><small class="block">${escapeHtml(item.predictionConfidence)} · ${item.historyCount} snapshot</small></td>
             </tr>
           `).join("")}
         </tbody>
@@ -2838,21 +3010,21 @@ function startRealtime() {
 
   state.unsubs.push(
     watchSchedules(
-      rows => { state.schedules = rows; renderShell(); },
+      rows => { state.schedules = rows; scheduleRender(["dashboard","schedule","checklist"]); },
       err => console.error("Schedule listener:", err)
     )
   );
 
   state.unsubs.push(
     watchChecklist(
-      rows => { state.checklist = rows; renderShell(); },
+      rows => { state.checklist = rows; scheduleRender(["dashboard","checklist"]); },
       err => console.error("Checklist listener:", err)
     )
   );
 
   state.unsubs.push(
     watchChecklistCompletions(
-      rows => { state.checklistCompletions = rows; if (state.page === "checklist") renderShell(); },
+      rows => { state.checklistCompletions = rows; scheduleRender(["checklist"]); },
       err => console.error("Checklist completion listener:", err)
     )
   );
@@ -2861,7 +3033,7 @@ function startRealtime() {
     watchScheduleRules(
       rules => {
         if (rules) state.scheduleRules = normalizeRules(rules);
-        renderShell();
+        scheduleRender(["schedule","checklist"]);
       },
       err => console.error("Schedule rules listener:", err)
     )
@@ -2871,19 +3043,19 @@ function startRealtime() {
     startCloudflareSyncWatchdog();
     state.unsubs.push(
       watchStockItems(
-        rows => { state.stockItems = rows; scheduleCloudflareSync(); renderShell(); },
+        rows => { state.stockItems = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","stock","opname","order"]); },
         err => console.error("Stock items listener:", err)
       )
     );
     state.unsubs.push(
       watchStockMovements(
-        rows => { state.stockMovements = rows; scheduleCloudflareSync(); if (["dashboard","stock","order"].includes(state.page)) renderShell(); },
+        rows => { state.stockMovements = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","stock","opname","order"]); },
         err => console.error("Stock movements listener:", err)
       )
     );
     state.unsubs.push(
       watchStockOpnames(
-        rows => { state.stockOpnames = rows; scheduleCloudflareSync(); if (["dashboard","stock","opname","order"].includes(state.page)) renderShell(); },
+        rows => { state.stockOpnames = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","stock","opname","order"]); },
         err => console.error("Stock opname listener:", err)
       )
     );
@@ -2893,34 +3065,34 @@ function startRealtime() {
           state.stockSettings = settings || state.stockSettings;
           scheduleCloudflareSync(500);
           if (normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "") && !state.telegramWorkerStatus) {
-            refreshTelegramWorkerStatus().then(() => { if (state.page === "settings") renderShell(); }).catch(() => {});
+            refreshTelegramWorkerStatus().then(() => scheduleRender(["settings"])).catch(() => {});
           }
-          if (["stock","settings"].includes(state.page)) renderShell();
+          scheduleRender(["stock","settings"]);
         },
         err => console.error("Stock settings listener:", err)
       )
     );
     state.unsubs.push(
       watchWasteItems(
-        rows => { state.wasteItems = rows; scheduleCloudflareSync(); if (state.page === "waste") renderShell(); },
+        rows => { state.wasteItems = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","waste"]); },
         err => console.error("Waste items listener:", err)
       )
     );
     state.unsubs.push(
       watchWasteDays(
-        rows => { state.wasteDays = rows; scheduleCloudflareSync(); if (["dashboard","waste"].includes(state.page)) renderShell(); },
+        rows => { state.wasteDays = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","waste"]); },
         err => console.error("Waste days listener:", err)
       )
     );
     state.unsubs.push(
       watchPersonalReports(
-        rows => { state.personalReports = rows; if (state.page === "reports") renderShell(); },
+        rows => { state.personalReports = rows; scheduleRender(["reports"]); },
         err => console.error("Personal reports listener:", err)
       )
     );
     state.unsubs.push(
       watchAppSettings(
-        settings => { state.appSettings = settings || state.appSettings; if (state.page === "settings") renderShell(); },
+        settings => { state.appSettings = settings || state.appSettings; scheduleRender(); },
         err => console.error("App settings listener:", err)
       )
     );

@@ -1900,3 +1900,274 @@ body {
 /* v1.3.0 — Daily stock usage + month-end reconciliation */
 .usage-date-list{display:grid;gap:6px}.usage-date-row{border:1px solid #e7edf2;background:#fff;border-radius:12px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;text-align:left;cursor:pointer}.usage-date-row span{display:grid;gap:3px}.usage-date-row small{color:#98a2b3}.usage-date-row b{font-size:9px;color:#176b52}.usage-modal{max-width:920px}.usage-toolbar{display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:10px}.usage-input-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;max-height:52vh;overflow:auto;padding-right:4px}.usage-input-row{border:1px solid #e7edf2;border-radius:12px;padding:9px 10px;display:grid;grid-template-columns:minmax(0,1fr) 150px;align-items:center;gap:10px}.usage-input-row>div{display:grid;gap:3px;min-width:0}.usage-input-row>div span{font-size:8px;color:#98a2b3}.usage-input-row label{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px}.usage-input-row label span{font-size:8px;font-weight:800;color:#667085}.opname-system-compare{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.opname-system-compare>span{font-size:8px;color:#667085}.reconciliation-metrics{margin-bottom:12px}
 @media(max-width:760px){.usage-toolbar{grid-template-columns:1fr}.usage-input-list{grid-template-columns:1fr}.usage-input-row{grid-template-columns:minmax(0,1fr) 130px}.opname-system-compare{display:grid;gap:5px}}
+
+/* ==========================================================================
+   SoWork v1.4.0 — Performance + Adaptive UI
+   ========================================================================== */
+:root {
+  --shell-sidebar: 226px;
+  --shell-topbar: 70px;
+  --page-gap: 14px;
+}
+
+/* Lebih padat dan fleksibel di desktop tanpa terasa sempit */
+.app-shell { grid-template-columns: var(--shell-sidebar) minmax(0, 1fr); }
+.sidebar { padding: 18px 13px 14px; }
+.desktop-nav { margin-top: 16px; }
+.nav-btn { min-height: 39px; }
+.topbar { min-height: var(--shell-topbar); padding: 12px 22px; }
+#page-content { width: min(1460px, 100%); padding: 20px 22px 38px; }
+.page-intro { margin-bottom: 14px; }
+.page-intro h1 { font-size: 29px; }
+.panel { padding: 17px; border-radius: 17px; }
+.panel-head { margin-bottom: 11px; }
+.metric-grid { gap: 10px; margin-top: 12px; }
+.metric-card { min-height: 112px; padding: 16px; }
+.metric-card strong { font-size: 30px; }
+.content-grid { gap: 12px; margin-top: 12px; }
+
+.inline-count {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 7px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #eef3f4;
+  color: #5e7180;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+/* Stock: pencarian/filter tidak perlu rerender. Row yang tidak cocok cukup disembunyikan. */
+#stock-table-body [hidden],
+#opname-form [data-opname-row][hidden],
+#stock-empty-row[hidden],
+#opname-filter-empty[hidden],
+#opname-save-bar[hidden] { display: none !important; }
+
+.stock-filters {
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 190px);
+  gap: 9px;
+  margin: 11px 0;
+}
+.stock-table-wrap { max-height: min(64vh, 760px); }
+.stock-table tbody tr { transition: background .12s ease; }
+.stock-table tbody tr:not(#stock-empty-row):hover { background: #fafcfc; }
+.stock-table td { line-height: 1.35; }
+.stock-panel-head .table-actions { gap: 6px; }
+.stock-panel-head .compact { min-height: 36px; }
+
+/* Bottom-sheet menu mobile */
+.mobile-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  align-items: end;
+  padding: 12px;
+  background: rgba(8, 23, 34, .48);
+  backdrop-filter: blur(8px);
+}
+.mobile-menu-sheet {
+  width: min(560px, 100%);
+  max-height: min(78dvh, 680px);
+  margin: 0 auto;
+  overflow: auto;
+  padding: 17px;
+  border: 1px solid rgba(255,255,255,.7);
+  border-radius: 22px;
+  background: rgba(255,255,255,.98);
+  box-shadow: 0 24px 70px rgba(8,23,34,.24);
+}
+.mobile-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.mobile-menu-head h3 { margin: 3px 0 0; }
+.mobile-menu-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.mobile-menu-item {
+  min-height: 74px;
+  display: grid;
+  grid-template-columns: 34px minmax(0,1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid #e6ebee;
+  border-radius: 14px;
+  background: #f8fafb;
+  color: #526171;
+  text-align: left;
+  cursor: pointer;
+}
+.mobile-menu-item > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #fff;
+  color: #6d817d;
+}
+.mobile-menu-item strong { font-size: 11px; color: #263849; }
+.mobile-menu-item.active { border-color: #bcd8d0; background: #eef7f4; }
+
+@media (max-width: 1180px) and (min-width: 861px) {
+  :root { --shell-sidebar: 205px; }
+  #page-content { padding-left: 16px; padding-right: 16px; }
+  .topbar { padding-left: 18px; padding-right: 18px; }
+  .stock-panel-head { align-items: flex-start; }
+}
+
+@media (max-width: 860px) {
+  body { padding-bottom: calc(68px + env(safe-area-inset-bottom)); }
+  .topbar {
+    min-height: 58px;
+    padding: 9px 12px;
+  }
+  #page-content {
+    padding: 12px 12px calc(82px + env(safe-area-inset-bottom));
+  }
+  .panel { padding: 14px; border-radius: 15px; }
+  .page-intro { gap: 10px; margin-bottom: 12px; }
+  .page-intro h1 { font-size: 25px; }
+  .page-intro p { font-size: 11px; line-height: 1.5; }
+
+  /* 4 menu utama + Menu, tidak lagi horizontal scroll 11 item */
+  .mobile-nav {
+    height: calc(64px + env(safe-area-inset-bottom));
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0,1fr));
+    gap: 3px;
+    padding: 5px 6px calc(5px + env(safe-area-inset-bottom));
+    overflow: hidden;
+  }
+  .mobile-nav-btn {
+    min-width: 0;
+    width: 100%;
+    height: 52px;
+    padding: 4px 2px;
+    border-radius: 10px;
+  }
+  .mobile-nav-btn small { max-width: 100%; font-size: 7.5px; }
+  .mobile-more-btn { color: #6f7c88; }
+
+  .metric-grid,
+  .stock-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+  .metric-card {
+    min-height: 92px;
+    padding: 12px;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+  .metric-card strong,
+  .metric-card strong.text-value { grid-column: auto; grid-row: auto; font-size: 25px; }
+
+  .stock-panel-head { display: grid; gap: 10px; }
+  .stock-panel-head .table-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    width: 100%;
+  }
+  .stock-panel-head .table-actions > * { width: 100%; min-width: 0; }
+  .stock-filters { grid-template-columns: 1fr; }
+
+  /* Stock dan Order Planner menjadi card list di HP/tablet portrait */
+  .stock-table-wrap {
+    max-height: none;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .stock-table,
+  .order-table,
+  .stock-table tbody,
+  .order-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .stock-table thead,
+  .order-table thead { display: none; }
+  .stock-table tr,
+  .order-table tr {
+    display: grid;
+    gap: 0;
+    margin-bottom: 9px;
+    padding: 11px 12px;
+    border: 1px solid #e4eaee;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(20,35,52,.025);
+  }
+  .stock-table td,
+  .order-table td {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 112px minmax(0,1fr);
+    gap: 9px;
+    align-items: start;
+    padding: 7px 0;
+    border-bottom: 1px solid #f0f3f5;
+  }
+  .stock-table td:last-child,
+  .order-table td:last-child { border-bottom: 0; }
+  .stock-table td::before,
+  .order-table td::before {
+    content: attr(data-label);
+    padding-top: 2px;
+    color: #95a0aa;
+    font-size: 8px;
+    font-weight: 850;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+  .stock-table td[colspan],
+  .order-table td[colspan] { display: block; }
+  .stock-table td[colspan]::before,
+  .order-table td[colspan]::before { display: none; }
+  .stock-name-cell { min-width: 0; }
+  .prediction-cell { min-width: 0; }
+  .stock-edit-btn { width: fit-content; }
+
+  .opname-toolbar { padding: 12px; }
+  .opname-list { gap: 8px; }
+  .opname-item-card { padding: 12px; }
+  .opname-entry-grid { gap: 7px; }
+  .sticky-save-bar { width: calc(100% - 6px); bottom: 68px; }
+}
+
+@media (max-width: 520px) {
+  #page-content { padding-left: 9px; padding-right: 9px; }
+  .welcome-card { min-height: 136px; padding: 17px; border-radius: 17px; }
+  .welcome-card h1 { font-size: 28px; }
+  .welcome-card p { font-size: 11px; }
+  .metric-grid,
+  .stock-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .metric-card { min-height: 84px; padding: 11px; }
+  .metric-card strong,
+  .metric-card strong.text-value { font-size: 23px; }
+  .metric-card small { font-size: 8px; }
+  .stock-table td,
+  .order-table td { grid-template-columns: 88px minmax(0,1fr); }
+  .stock-panel-head .table-actions { grid-template-columns: 1fr 1fr; }
+  .stock-panel-head .table-actions .primary { grid-column: 1 / -1; }
+  .mobile-menu-grid { grid-template-columns: 1fr 1fr; }
+  .mobile-menu-item { min-height: 66px; padding: 8px 10px; }
+  .usage-input-row { grid-template-columns: minmax(0,1fr) 112px; }
+  .usage-input-list { max-height: 58dvh; }
+}
+
+/* v1.4 rendering hint: daftar panjang tidak perlu dilayout penuh sebelum masuk viewport. */
+@supports (content-visibility: auto) {
+  .opname-item-card,
+  .delivery-row,
+  .usage-date-row {
+    content-visibility: auto;
+    contain-intrinsic-size: 92px;
+  }
+}

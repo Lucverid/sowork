@@ -4,8 +4,10 @@ import {
   doc,
   getDocs,
   onSnapshot,
+  query,
   serverTimestamp,
-  setDoc
+  setDoc,
+  where
 } from "firebase/firestore";
 import { db } from "../../firebase/config.js";
 import { WASTE_REFERENCE_ITEMS, WASTE_REFERENCE_DAYS, WASTE_REFERENCE_SOURCE } from "./seed.js";
@@ -15,7 +17,8 @@ const itemDocId = id => `item__${id}`;
 const dayDocId = date => `day__${date}`;
 
 export function watchWasteItems(callback, onError) {
-  return onSnapshot(collection(db, WASTE_COLLECTION), snap => {
+  const q = query(collection(db, WASTE_COLLECTION), where("type", "==", "item"));
+  return onSnapshot(q, snap => {
     const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .filter(x => x.type === "item")
       .map(x => ({ ...x, id: x.itemId || String(x.id).replace(/^item__/, "") }));
@@ -25,7 +28,8 @@ export function watchWasteItems(callback, onError) {
 }
 
 export function watchWasteDays(callback, onError) {
-  return onSnapshot(collection(db, WASTE_COLLECTION), snap => {
+  const q = query(collection(db, WASTE_COLLECTION), where("type", "==", "day"));
+  return onSnapshot(q, snap => {
     const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .filter(x => x.type === "day")
       .map(x => ({ ...x, id: x.date || String(x.id).replace(/^day__/, "") }));

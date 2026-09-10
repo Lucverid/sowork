@@ -150,27 +150,38 @@ export async function saveStockReceipt(entry) {
 export async function saveDailyStockUsage(date, rows, actor = {}) {
   if (!date || !Array.isArray(rows) || !rows.length) throw new Error("Tanggal dan penggunaan stok wajib diisi.");
 
+  // v1.4: baca dokumen secara paralel per gelombang. Versi lama menunggu
+  // 2 read Firestore untuk SETIAP barang secara berurutan sehingga waktu
+  // simpan tumbuh hampir linear terhadap jumlah master barang.
+  const validRows = rows.filter(row => row?.itemId);
   const prepared = [];
-  for (const row of rows) {
-    if (!row?.itemId) continue;
-    const qty = Math.max(0, Number(row.qty || 0));
-    const movementId = `USE_${date}_${row.itemId}`;
-    const movementRef = doc(db, "stockMovements", movementId);
-    const itemRef = doc(db, "items", row.itemId);
-    const [movementSnap, itemSnap] = await Promise.all([getDoc(movementRef), getDoc(itemRef)]);
-    if (!itemSnap.exists()) continue;
 
-    const oldQty = movementSnap.exists() && movementSnap.data()?.type === "OUT"
-      ? Math.max(0, Number(movementSnap.data()?.qty || 0))
-      : 0;
-    const delta = qty - oldQty;
-    const currentQty = Math.max(0, Number(itemSnap.data()?.currentQty || 0));
-    const lastOpnameDate = String(itemSnap.data()?.lastOpnameDate || "");
-    const affectsCurrentStock = !lastOpnameDate || String(date) > lastOpnameDate;
-    if (affectsCurrentStock && delta > currentQty + 1e-9) {
-      throw new Error(`${row.itemName || itemSnap.data()?.name || row.itemId}: penggunaan tambahan ${delta} melebihi stok sistem ${currentQty}.`);
+  for (const rowPart of chunk(validRows, 40)) {
+    const snapshots = await Promise.all(rowPart.map(async row => {
+      const qty = Math.max(0, Number(row.qty || 0));
+      const movementId = `USE_${date}_${row.itemId}`;
+      const movementRef = doc(db, "stockMovements", movementId);
+      const itemRef = doc(db, "items", row.itemId);
+      const [movementSnap, itemSnap] = await Promise.all([getDoc(movementRef), getDoc(itemRef)]);
+      return { row, qty, movementId, movementRef, itemRef, movementSnap, itemSnap };
+    }));
+
+    for (const rec of snapshots) {
+      const { row, qty, movementId, movementRef, itemRef, movementSnap, itemSnap } = rec;
+      if (!itemSnap.exists()) continue;
+
+      const oldQty = movementSnap.exists() && movementSnap.data()?.type === "OUT"
+        ? Math.max(0, Number(movementSnap.data()?.qty || 0))
+        : 0;
+      const delta = qty - oldQty;
+      const currentQty = Math.max(0, Number(itemSnap.data()?.currentQty || 0));
+      const lastOpnameDate = String(itemSnap.data()?.lastOpnameDate || "");
+      const affectsCurrentStock = !lastOpnameDate || String(date) > lastOpnameDate;
+      if (affectsCurrentStock && delta > currentQty + 1e-9) {
+        throw new Error(`${row.itemName || itemSnap.data()?.name || row.itemId}: penggunaan tambahan ${delta} melebihi stok sistem ${currentQty}.`);
+      }
+      prepared.push({ row, qty, oldQty, delta, movementId, movementRef, itemRef, affectsCurrentStock });
     }
-    prepared.push({ row, qty, oldQty, delta, movementId, movementRef, itemRef, affectsCurrentStock });
   }
 
   for (const part of chunk(prepared, 170)) {
