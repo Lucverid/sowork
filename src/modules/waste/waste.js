@@ -85,6 +85,11 @@ export function removeWasteItem(id) {
   return archiveWasteItem(id);
 }
 
+export async function removeWasteDay(date) {
+  if (!date) throw new Error("Tanggal waste wajib dipilih.");
+  return deleteDoc(doc(db, WASTE_COLLECTION, dayDocId(date)));
+}
+
 export async function saveWasteDay(date, values, actor={}, itemMeta={}) {
   if (!date) throw new Error("Tanggal waste wajib dipilih.");
   const cleaned={};

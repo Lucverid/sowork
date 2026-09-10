@@ -4,9 +4,9 @@ import { watchSchedules, saveSchedule, removeSchedule, watchScheduleRules, saveS
 import { DEFAULT_SCHEDULE_RULES, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries } from "./modules/schedule/generator.js";
 import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
-import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
+import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
-import { watchWasteItems, watchWasteDays, saveWasteItem, archiveWasteItem, restoreWasteItem, permanentDeleteWasteItem, saveWasteDay, seedWasteReference } from "./modules/waste/waste.js";
+import { watchWasteItems, watchWasteDays, saveWasteItem, archiveWasteItem, restoreWasteItem, permanentDeleteWasteItem, saveWasteDay, removeWasteDay, seedWasteReference } from "./modules/waste/waste.js";
 import { buildWasteAnalytics, wasteDashboardAlerts } from "./modules/waste/analytics.js";
 import { exportWasteWorkbook } from "./modules/waste/export.js";
 import { watchPersonalReports, savePersonalReport, removePersonalReport } from "./modules/reports/reports.js";
@@ -38,6 +38,7 @@ let state = {
   stockSearch: "",
   stockStatusFilter: "Semua",
   opnameDate: null,
+  opnameMonth: null,
   opnameSearch: "",
   opnameFilter: "Semua",
   stockUsageDate: null,
@@ -204,6 +205,50 @@ function friendlyError(err) {
   if (code.includes("weak-password")) return "Password terlalu lemah.";
   if (code.includes("permission-denied")) return "Akses ditolak oleh Firestore Rules.";
   return err?.message || "Terjadi kesalahan.";
+}
+
+function showToast(message, type = "success", title = "") {
+  let host = document.querySelector("#sowork-toast-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "sowork-toast-host";
+    host.className = "sowork-toast-host";
+    document.body.appendChild(host);
+  }
+  const toast = document.createElement("div");
+  const labels = { success: "Tersimpan", error: "Gagal", warning: "Perhatian", info: "Info" };
+  const icons = { success: "✓", error: "!", warning: "!", info: "i" };
+  toast.className = `sowork-toast ${type}`;
+  toast.setAttribute("role", type === "error" ? "alert" : "status");
+  toast.innerHTML = `<span class="sowork-toast-icon">${icons[type] || icons.info}</span><div><strong>${escapeHtml(title || labels[type] || "Info")}</strong><p>${escapeHtml(message || "")}</p></div><button type="button" aria-label="Tutup">×</button>`;
+  host.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  const remove = () => { toast.classList.remove("show"); setTimeout(() => toast.remove(), 180); };
+  toast.querySelector("button")?.addEventListener("click", remove);
+  setTimeout(remove, type === "error" ? 5200 : 3200);
+}
+
+function saveStateMarkup(id, stateName = "idle", label = "Siap disimpan", detail = "") {
+  return `<span id="${id}" class="save-state ${stateName}" data-save-state="${stateName}"><i></i><span><b>${escapeHtml(label)}</b>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}</span></span>`;
+}
+
+function setSaveState(target, stateName, label, detail = "") {
+  const el = typeof target === "string" ? document.querySelector(target) : target;
+  if (!el) return;
+  el.className = `save-state ${stateName}`;
+  el.dataset.saveState = stateName;
+  el.innerHTML = `<i></i><span><b>${escapeHtml(label)}</b>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}</span>`;
+}
+
+function bindDirtyState(form, target, label = "Ada perubahan belum disimpan") {
+  if (!form) return;
+  const mark = () => setSaveState(target, "dirty", label, "Tekan Simpan untuk menerapkan perubahan");
+  form.addEventListener("input", mark);
+  form.addEventListener("change", mark);
+}
+
+function savedTimeLabel() {
+  return new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit" }).format(new Date());
 }
 
 function scheduleRender(allowedPages = null) {
@@ -752,10 +797,14 @@ function renderSchedule(target) {
       },
       version: Number(rules.version || 1)
     });
-    await saveScheduleRules(nextRules);
-    state.scheduleRules = nextRules;
-    state.schedulePreview = null;
-    alert("Rules jadwal disimpan.");
+    try {
+      await saveScheduleRules(nextRules);
+      state.scheduleRules = nextRules;
+      state.schedulePreview = null;
+      showToast("Rules jadwal berhasil disimpan.", "success", "Jadwal tersimpan");
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Rules jadwal gagal disimpan");
+    }
   };
 
   document.querySelector("#suggest-rotation").onclick = () => {
@@ -784,9 +833,9 @@ function renderSchedule(target) {
     try {
       await replaceScheduleRange(p.range.start, p.range.end, p.entries);
       state.schedulePreview = null;
-      alert("Jadwal otomatis berhasil disimpan. Setelah tersimpan, klik sel untuk edit role/shift/lembur.");
+      showToast("Jadwal otomatis berhasil disimpan. Klik sel untuk edit bila perlu.", "success", "Jadwal tersimpan");
     } catch (err) {
-      alert(friendlyError(err));
+      showToast(friendlyError(err), "error", "Jadwal gagal disimpan");
       saveBtn.disabled = false;
       saveBtn.textContent = "Simpan Jadwal";
     }
@@ -1122,16 +1171,22 @@ function openScheduleEditor(item, rules, selectedMonth) {
         source: item?.source || "manual",
         generated: item?.generated === true
       });
+      showToast(`Jadwal ${crewName} ${formatDate(fd.get("date"))} berhasil disimpan.`, "success", "Jadwal tersimpan");
       close();
     } catch (err) {
-      alert(err?.message || friendlyError(err));
+      showToast(err?.message || friendlyError(err), "error", "Jadwal gagal disimpan");
     }
   };
 
   modal.querySelector("#delete-schedule")?.addEventListener("click", async () => {
     if (!confirm(`Hapus jadwal ${current.crewName} tanggal ${current.date}?`)) return;
-    await removeSchedule(current.id);
-    close();
+    try {
+      await removeSchedule(current.id);
+      showToast(`Jadwal ${current.crewName} berhasil dihapus.`, "success", "Jadwal dihapus");
+      close();
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Gagal menghapus jadwal");
+    }
   });
 }
 
@@ -1284,7 +1339,10 @@ function renderChecklist(target) {
       btn.onclick = async () => {
         const item = state.checklist.find(x => x.id === btn.dataset.deleteCheck);
         if (!item || !confirm(`Hapus template “${item.title}”?`)) return;
-        await removeChecklistItem(item.id);
+        try {
+          await removeChecklistItem(item.id);
+          showToast(`Task “${item.title}” dihapus.`, "success", "Checklist diperbarui");
+        } catch (err) { showToast(err?.message || friendlyError(err), "error", "Gagal menghapus task"); }
       };
     });
     document.querySelectorAll("[data-toggle-check]").forEach(btn => {
@@ -1292,7 +1350,8 @@ function renderChecklist(target) {
         const assignment = assignments.find(x => x.id === btn.dataset.toggleCheck);
         if (!assignment) return;
         const current = completionMap[assignment.id];
-        await saveChecklistCompletion({
+        try {
+          await saveChecklistCompletion({
           date: selectedDate,
           templateId: assignment.id,
           title: assignment.title,
@@ -1302,7 +1361,9 @@ function renderChecklist(target) {
           completed: !Boolean(current?.completed),
           updatedByUid: state.user?.uid || "",
           updatedByName: state.profile?.name || state.user?.email || "Admin"
-        });
+          });
+          showToast(!Boolean(current?.completed) ? `“${assignment.title}” ditandai selesai.` : `Status “${assignment.title}” dibuka kembali.`, "success", "Daily Check tersimpan");
+        } catch (err) { showToast(err?.message || friendlyError(err), "error", "Daily Check gagal diperbarui"); }
       };
     });
   }
@@ -1455,9 +1516,10 @@ function openChecklistEditor(rawItem, rules) {
         order: fd.get("order"),
         active: form.elements.active.checked
       });
+      showToast(`Task “${fd.get("title")}” berhasil ${rawItem ? "diperbarui" : "ditambahkan"}.`, "success", "Checklist tersimpan");
       close();
     } catch (err) {
-      alert(err?.message || friendlyError(err));
+      showToast(err?.message || friendlyError(err), "error", "Checklist gagal disimpan");
     }
   };
 }
@@ -1727,8 +1789,8 @@ function renderStock(target) {
     if (!confirm("Import referensi SO Agustus ke Firestore? Lakukan hanya saat master stock masih kosong.")) return;
     const btn = document.querySelector("#seed-stock-reference");
     btn.disabled = true; btn.textContent = "Mengimport...";
-    try { await seedStockReference(); }
-    catch (err) { alert(err?.message || friendlyError(err)); btn.disabled = false; btn.textContent = "Muat Referensi SO Agustus"; }
+    try { await seedStockReference(); showToast("Referensi Stock berhasil dimuat.", "success", "Data Stock tersimpan"); }
+    catch (err) { showToast(err?.message || friendlyError(err), "error", "Referensi Stock gagal dimuat"); btn.disabled = false; btn.textContent = "Muat Referensi SO Agustus"; }
   });
 
   document.querySelector("#stock-search")?.addEventListener("input", e => {
@@ -1767,12 +1829,94 @@ function renderStock(target) {
   applyStockFilters();
 }
 
+
+function buildOpnameCalendar(opnames, monthKey, selectedDate, totalItems = 0) {
+  const today = localDateKey(new Date());
+  const safeMonth = /^\d{4}-\d{2}$/.test(String(monthKey || "")) ? monthKey : today.slice(0, 7);
+  const [year, month] = safeMonth.split("-").map(Number);
+  const totalDays = new Date(year, month, 0).getDate();
+  const firstDay = new Date(year, month - 1, 1).getDay();
+  const mondayOffset = (firstDay + 6) % 7;
+  const byDate = new Map();
+
+  for (const row of opnames || []) {
+    if (!row?.date || !String(row.date).startsWith(safeMonth)) continue;
+    const stats = byDate.get(row.date) || { count: 0, variance: 0, critical: 0 };
+    stats.count += 1;
+    if (row.reconciliationStatus && row.reconciliationStatus !== "Sesuai") stats.variance += 1;
+    if (row.reconciliationStatus === "Selisih Kurang") stats.critical += 1;
+    byDate.set(row.date, stats);
+  }
+
+  const cells = [];
+  for (let i = 0; i < mondayOffset; i += 1) {
+    cells.push('<span class="opname-calendar-day is-empty" aria-hidden="true"></span>');
+  }
+  for (let day = 1; day <= totalDays; day += 1) {
+    const dateKey = `${safeMonth}-${String(day).padStart(2, "0")}`;
+    const stats = byDate.get(dateKey);
+    const isToday = dateKey === today;
+    const isSelected = dateKey === selectedDate;
+    const complete = stats && totalItems > 0 && stats.count >= totalItems;
+    const status = stats?.critical ? "is-critical" : stats?.variance ? "has-variance" : stats ? "has-data" : "";
+    const hint = stats ? `${stats.count}${totalItems ? `/${totalItems}` : ""} item` : (isToday ? "hari ini" : "");
+    cells.push(`
+      <button type="button" class="opname-calendar-day ${status} ${complete ? "is-complete" : ""} ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""}" data-opname-calendar-date="${escapeHtml(dateKey)}" aria-label="${escapeHtml(formatDate(dateKey))}${stats ? `, ${stats.count} item tersimpan${stats.variance ? `, ${stats.variance} selisih` : ""}` : ", belum ada Stock Opname"}">
+        <span class="opname-calendar-number">${day}</span>
+        ${stats ? `<span class="opname-calendar-badge">${stats.count}</span>` : ""}
+        <small>${hint}</small>
+        ${stats?.variance ? `<i class="opname-calendar-dot" title="${stats.variance} item selisih"></i>` : ""}
+      </button>`);
+  }
+
+  return `
+    <div class="opname-calendar-weekdays" aria-hidden="true">
+      ${["Sen","Sel","Rab","Kam","Jum","Sab","Min"].map(x => `<span>${x}</span>`).join("")}
+    </div>
+    <div class="opname-calendar-grid">${cells.join("")}</div>`;
+}
+
+function buildOpnameRestoreRows(date) {
+  const dayRows = state.stockOpnames.filter(x => x.date === date);
+  return dayRows.map(row => {
+    const item = state.stockItems.find(x => x.id === row.itemId);
+    if (!item) return null;
+    const hasLater = state.stockOpnames.some(x => x.itemId === row.itemId && String(x.date || "") > String(date));
+    if (hasLater) return null;
+    const previous = state.stockOpnames
+      .filter(x => x.itemId === row.itemId && String(x.date || "") < String(date))
+      .slice()
+      .sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")))
+      .at(-1) || null;
+    const after = state.stockMovements.filter(m => m.itemId === row.itemId && String(m.date || "") > String(date));
+    const incoming = after.filter(x => x.type === "IN").reduce((sum,x) => sum + Math.max(0, Number(x.qty || 0)), 0);
+    const usage = after.filter(x => x.type === "OUT").reduce((sum,x) => sum + Math.max(0, Number(x.qty || 0)), 0);
+    const base = Number.isFinite(Number(row.systemQtyBeforeOpname))
+      ? Number(row.systemQtyBeforeOpname)
+      : Number(previous?.totalQty ?? item.currentQty ?? 0);
+    const currentQty = Math.max(0, base + incoming - usage);
+    return {
+      itemId: row.itemId,
+      currentQty,
+      lastOpnameDate: previous?.date || "",
+      lastPrimaryQty: previous ? Number(previous.primaryQty || 0) : currentQty,
+      lastSecondaryQty: previous ? Number(previous.secondaryQty || 0) : 0
+    };
+  }).filter(Boolean);
+}
+
 function renderStockOpname(target) {
   const admin = isAdmin(state.profile);
   if (!admin) return renderPlaceholder(target);
 
-  const date = state.opnameDate || localDateKey(new Date());
+  const today = localDateKey(new Date());
+  const date = state.opnameDate || today;
   state.opnameDate = date;
+  state.opnameMonth ||= String(date).slice(0, 7);
+  if (!String(date).startsWith(state.opnameMonth)) state.opnameMonth = String(date).slice(0, 7);
+  const opnameMonth = state.opnameMonth;
+  const monthOpnames = state.stockOpnames.filter(x => String(x.date || "").startsWith(opnameMonth));
+  const monthRecordedDays = new Set(monthOpnames.map(x => x.date)).size;
   const search = normalizeSearchText(state.opnameSearch);
   const filter = state.opnameFilter || "Semua";
   const allItems = state.stockItems
@@ -1809,12 +1953,39 @@ function renderStockOpname(target) {
       </div>
     </section>
 
-    <article class="panel opname-control-panel-modern">
+    <article class="panel opname-calendar-panel-pro">
+      <div class="panel-head opname-calendar-head-pro">
+        <div>
+          <span class="overline">KALENDER STOCK OPNAME</span>
+          <h3>${escapeHtml(formatMonthKey(opnameMonth))}</h3>
+          <p class="muted small-copy">Tap tanggal untuk melihat, mengisi, atau mengedit SO. Badge = jumlah item tersimpan; titik merah = ada selisih.</p>
+        </div>
+        <button id="opname-today" class="primary compact" type="button">Hari Ini</button>
+      </div>
+      <div class="opname-calendar-toolbar-pro">
+        <button id="opname-prev-month" class="secondary opname-month-button" type="button" aria-label="Bulan sebelumnya">‹</button>
+        <div class="opname-calendar-month-pro">
+          <strong>${escapeHtml(formatMonthKey(opnameMonth))}</strong>
+          <span>${monthRecordedDays} hari tercatat · ${monthOpnames.length} snapshot item</span>
+        </div>
+        <button id="opname-next-month" class="secondary opname-month-button" type="button" aria-label="Bulan berikutnya">›</button>
+      </div>
+      ${buildOpnameCalendar(state.stockOpnames, opnameMonth, date, allItems.length)}
+    </article>
+
+    <article class="panel opname-control-panel-modern opname-control-panel-pro">
+      <div class="opname-selected-date-pro">
+        <div>
+          <span class="overline">SO TERPILIH</span>
+          <strong>${escapeHtml(formatDate(date))}</strong>
+          <small>${savedCount ? `${savedCount}/${allItems.length} item sudah tersimpan` : "Belum ada SO tersimpan pada tanggal ini"}</small>
+        </div>
+        <div class="opname-selected-actions-pro">
+          ${savedCount ? `<button id="delete-opname-day" type="button" class="text-danger-button">Hapus SO tanggal ini</button>` : ""}
+          <label class="opname-date-fallback"><span>Pilih manual</span><input id="opname-date" type="date" value="${escapeHtml(date)}" /></label>
+        </div>
+      </div>
       <div class="opname-control-top">
-        <label class="opname-date-control">
-          <span>Tanggal SO</span>
-          <input id="opname-date" type="date" value="${escapeHtml(date)}" />
-        </label>
         <label class="search-control opname-search">
           <span>Cari barang</span>
           <input id="opname-search" type="search" autocomplete="off" value="${escapeHtml(state.opnameSearch || "")}" placeholder="Nama / kategori..." />
@@ -1906,9 +2077,10 @@ function renderStockOpname(target) {
 
       ${allItems.length ? `
         <div id="opname-save-bar" class="sticky-save-bar opname-save-bar-modern">
-          <div>
+          <div class="save-bar-copy">
             <strong>SO ${escapeHtml(formatDate(date))}</strong>
             <span id="opname-save-count">${allItems.length} barang tampil</span>
+            ${saveStateMarkup("opname-save-state", savedCount ? "saved" : "idle", savedCount ? `${savedCount} item sudah tersimpan` : "Belum ada SO tersimpan", "Perubahan input akan ditandai otomatis")}
           </div>
           <button class="primary">Simpan SO</button>
         </div>
@@ -1918,7 +2090,48 @@ function renderStockOpname(target) {
 
   document.querySelector("#opname-date")?.addEventListener("change", e => {
     state.opnameDate = e.target.value;
+    state.opnameMonth = String(e.target.value || today).slice(0, 7);
     renderShell();
+  });
+
+  document.querySelector("#opname-prev-month")?.addEventListener("click", () => {
+    state.opnameMonth = shiftMonthKey(opnameMonth, -1);
+    state.opnameDate = `${state.opnameMonth}-01`;
+    renderShell();
+  });
+  document.querySelector("#opname-next-month")?.addEventListener("click", () => {
+    state.opnameMonth = shiftMonthKey(opnameMonth, 1);
+    state.opnameDate = `${state.opnameMonth}-01`;
+    renderShell();
+  });
+  document.querySelector("#opname-today")?.addEventListener("click", () => {
+    state.opnameMonth = today.slice(0, 7);
+    state.opnameDate = today;
+    renderShell();
+  });
+  document.querySelectorAll("[data-opname-calendar-date]").forEach(btn => btn.addEventListener("click", () => {
+    state.opnameDate = btn.dataset.opnameCalendarDate;
+    state.opnameMonth = String(state.opnameDate).slice(0, 7);
+    renderShell();
+    requestAnimationFrame(() => document.querySelector(".opname-control-panel-pro")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }));
+
+  document.querySelector("#delete-opname-day")?.addEventListener("click", async () => {
+    const dayRows = state.stockOpnames.filter(x => x.date === date);
+    if (!dayRows.length) return showToast("Tidak ada data SO pada tanggal ini.", "info", "Stock Opname");
+    if (!confirm(`Hapus Stock Opname ${formatDate(date)} (${dayRows.length} item)? Stok sistem akan dipulihkan dengan aman bila ini snapshot terakhir.`)) return;
+    const btn = document.querySelector("#delete-opname-day");
+    if (btn) { btn.disabled = true; btn.textContent = "Menghapus..."; }
+    try {
+      const restores = buildOpnameRestoreRows(date);
+      await removeStockOpnameDay(date, restores);
+      showToast(`Stock Opname ${formatDate(date)} dihapus. ${restores.length ? "Stok sistem terkait sudah dipulihkan." : "Snapshot historis dihapus tanpa mengubah stok aktif."}`, "success", "Stock Opname dihapus");
+      state.opnameFilter = "Semua";
+      scheduleRender(["opname", "stock", "order", "dashboard"]);
+    } catch (err) {
+      if (btn) { btn.disabled = false; btn.textContent = "Hapus SO tanggal ini"; }
+      showToast(err?.message || friendlyError(err), "error", "Gagal menghapus Stock Opname");
+    }
   });
 
   document.querySelector("#opname-search")?.addEventListener("input", e => {
@@ -1943,6 +2156,8 @@ function renderStockOpname(target) {
       if (item) openStockItemEditor(item);
     };
   });
+
+  bindDirtyState(document.querySelector("#opname-form"), "#opname-save-state", "Perubahan SO belum disimpan");
 
   document.querySelectorAll(".qty-input").forEach(input => {
     input.addEventListener("input", () => {
@@ -2012,15 +2227,19 @@ function renderStockOpname(target) {
     const saveButton = e.currentTarget.querySelector("#opname-save-bar button");
     const oldLabel = saveButton?.textContent || "Simpan SO";
     if (saveButton) { saveButton.disabled = true; saveButton.textContent = "Menyimpan..."; }
+    setSaveState("#opname-save-state", "saving", "Menyimpan...", `${rows.length} item sedang diproses`);
     try {
       await saveStockOpname(date, rows, {
         uid: state.user?.uid,
         name: state.profile?.name || state.user?.email
       });
       if (saveButton) saveButton.textContent = "Tersimpan ✓";
+      setSaveState("#opname-save-state", "saved", "Tersimpan ✓", `Terakhir disimpan ${savedTimeLabel()}`);
+      showToast(`Stock Opname ${formatDate(date)} berhasil disimpan untuk ${rows.length} barang.`, "success", "Stock Opname tersimpan");
       setTimeout(() => scheduleRender(["opname"]), 250);
     } catch (err) {
-      alert(err?.message || friendlyError(err));
+      setSaveState("#opname-save-state", "error", "Gagal disimpan", err?.message || friendlyError(err));
+      showToast(err?.message || friendlyError(err), "error", "Stock Opname gagal disimpan");
       if (saveButton) { saveButton.disabled = false; saveButton.textContent = oldLabel; }
     }
   });
@@ -2131,12 +2350,14 @@ function openStockItemEditor(rawItem) {
         criticalItem: e.currentTarget.elements.criticalItem.checked,
         active: e.currentTarget.elements.active.checked
       });
+      showToast(`Barang “${fd.get("name")}” berhasil ${rawItem ? "diperbarui" : "ditambahkan"}.`, "success", "Master Stock tersimpan");
       close();
-    } catch (err) { alert(err?.message || friendlyError(err)); }
+    } catch (err) { showToast(err?.message || friendlyError(err), "error", "Master Stock gagal disimpan"); }
   };
   modal.querySelector("#delete-stock-item")?.addEventListener("click", async () => {
     if (!confirm(`Hapus master barang “${rawItem.name}”? Histori SO lama tetap tersimpan.`)) return;
-    await removeStockItem(rawItem.id); close();
+    try { await removeStockItem(rawItem.id); showToast(`Barang “${rawItem.name}” dihapus dari master.`, "success", "Master Stock diperbarui"); close(); }
+    catch (err) { showToast(err?.message || friendlyError(err), "error", "Gagal menghapus barang"); }
   });
 }
 
@@ -2203,8 +2424,9 @@ function openStockReceiptEditor() {
         supplier: fd.get("supplier"), note: fd.get("note"),
         createdByUid: state.user?.uid, createdByName: state.profile?.name || state.user?.email
       });
+      showToast(`${item.name} berhasil dicatat sebagai barang masuk.`, "success", "Barang masuk tersimpan");
       close();
-    } catch (err) { alert(err?.message || friendlyError(err)); }
+    } catch (err) { showToast(err?.message || friendlyError(err), "error", "Barang masuk gagal disimpan"); }
   };
 }
 
@@ -2246,8 +2468,8 @@ function openDailyStockUsageEditor(initialDate) {
     try{
       await saveDailyStockUsage(saveDate,rows,{uid:state.user?.uid,name:state.profile?.name||state.user?.email});
       close();
-      alert("Penggunaan harian tersimpan. Stok sistem dan prediksi order sudah diperbarui.");
-    }catch(err){alert(err?.message||friendlyError(err));if(btn){btn.disabled=false;btn.textContent="Simpan Penggunaan";}}
+      showToast("Penggunaan harian tersimpan. Stok dan prediksi order sudah diperbarui.", "success", "Penggunaan tersimpan");
+    }catch(err){showToast(err?.message||friendlyError(err), "error", "Penggunaan gagal disimpan");if(btn){btn.disabled=false;btn.textContent="Simpan Penggunaan";}}
   };
 }
 
@@ -2341,9 +2563,9 @@ function openStockSettingsEditor() {
     try {
       const status = await getTelegramWorkerStatus(currentUrl());
       state.telegramWorkerStatus = status;
-      alert(status.paired ? `Worker ONLINE. Telegram sudah dipair ke ${Number(status.recipientCount || 1)} penerima.` : `Worker ONLINE. ${status.hasSnapshot ? "Data operasional sudah tersinkron." : "Belum ada snapshot data."}`);
+      showToast(status.paired ? `Worker ONLINE · ${Number(status.recipientCount || 1)} penerima.` : `Worker ONLINE · ${status.hasSnapshot ? "Data operasional sudah tersinkron." : "Belum ada snapshot data."}`, "success", "Cloudflare Worker");
       close(); openStockSettingsEditor();
-    } catch (err) { alert(err?.message || friendlyError(err)); }
+    } catch (err) { showToast(err?.message || friendlyError(err), "error", "Cek Worker gagal"); }
   });
 
   modal.querySelector("#setup-telegram-webhook")?.addEventListener("click", async () => {
@@ -2356,8 +2578,8 @@ function openStockSettingsEditor() {
   modal.querySelector("#test-telegram-bot")?.addEventListener("click", async () => {
     try {
       const result = await sendTelegramTest(currentUrl());
-      alert(`Pesan test dikirim ke ${Number(result?.sent || 0)} penerima Telegram.`);
-    } catch (err) { alert(err?.message || friendlyError(err)); }
+      showToast(`Pesan test dikirim ke ${Number(result?.sent || 0)} penerima Telegram.`, "success", "Test Telegram berhasil");
+    } catch (err) { showToast(err?.message || friendlyError(err), "error", "Test Telegram gagal"); }
   });
 
   modal.querySelector("#unpair-telegram")?.addEventListener("click", async () => {
@@ -2366,8 +2588,8 @@ function openStockSettingsEditor() {
       const result = await unpairTelegram(currentUrl());
       state.telegramWorkerStatus = null;
       await saveStockSettings({ ...(state.stockSettings || {}), telegramChatId: "", telegramAllowedUserId: "" });
-      alert(`${Number(result?.removed || 0)} penerima Telegram sudah di-unpair.`); close();
-    } catch (err) { alert(err?.message || friendlyError(err)); }
+      showToast(`${Number(result?.removed || 0)} penerima Telegram sudah di-unpair.`, "success", "Telegram diperbarui"); close();
+    } catch (err) { showToast(err?.message || friendlyError(err), "error", "Unpair gagal"); }
   });
 
   modal.querySelector("#stock-settings-form").onsubmit = async e => {
@@ -2376,11 +2598,11 @@ function openStockSettingsEditor() {
     // Simpan reference + seluruh nilai form sebelum await.
     // Event.currentTarget dapat menjadi null setelah event handler melewati await.
     const form = e.currentTarget;
-    if (!form) return alert("Form Telegram tidak ditemukan. Tutup Settings lalu buka kembali.");
+    if (!form) return showToast("Form Telegram tidak ditemukan. Tutup Settings lalu buka kembali.", "error", "Form tidak tersedia");
 
     const fd = new FormData(form);
     const url = normalizeWorkerUrl(fd.get("cloudflareWorkerUrl"));
-    if (!url) return alert("Isi Cloudflare Worker URL yang valid dulu.");
+    if (!url) return showToast("Isi Cloudflare Worker URL yang valid dulu.", "warning", "Worker URL belum valid");
 
     const formSettings = {
       cloudflareWorkerUrl: url,
@@ -2547,6 +2769,7 @@ function renderWaste(target) {
   if (!state.wasteDate || !String(state.wasteDate).startsWith(monthKey)) state.wasteDate = defaultDate;
   const date = state.wasteDate;
   const dayDoc = state.wasteDays.find(x => x.date === date) || { values: {} };
+  const hasDayDoc = state.wasteDays.some(x => x.date === date);
   const activeItems = state.wasteItems.filter(x => x.active !== false);
   const analytics = buildWasteAnalytics(state.wasteItems, state.wasteDays, monthKey, date);
   const maxScore = Math.max(1, ...analytics.dailyScores.map(x => x.score));
@@ -2562,6 +2785,7 @@ function renderWaste(target) {
       <div class="action-row compact-action-rail">
         ${!state.wasteItems.length ? `<button id="seed-waste" class="secondary compact">Muat Histori Juli</button>` : ""}
         <button id="add-waste-item" class="primary compact">+ Item</button>
+        <button id="manage-waste-items" class="secondary compact">Kelola Item</button>
         <button id="import-waste" class="secondary compact">Import</button>
         <button id="export-waste" class="secondary compact" ${!activeItems.length ? 'disabled' : ''}>Export</button>
       </div>
@@ -2601,7 +2825,10 @@ function renderWaste(target) {
           <h2>${escapeHtml(formatDate(date))}</h2>
           <p>${selectedFilled ? `${selectedFilled} item sudah terisi. Ubah angka lalu simpan untuk update.` : 'Belum ada input. Isi hanya item yang terbuang.'}</p>
         </div>
-        <span class="selected-day-status ${selectedFilled ? 'has-data' : ''}">${selectedFilled ? `${selectedFilled} terisi` : 'Kosong'}</span>
+        <div class="selected-day-actions">
+          <span class="selected-day-status ${hasDayDoc ? 'has-data' : ''}">${hasDayDoc ? `${selectedFilled} terisi` : 'Belum disimpan'}</span>
+          ${hasDayDoc ? `<button id="delete-waste-day" type="button" class="text-danger-button">Hapus data tanggal</button>` : ""}
+        </div>
       </div>
 
       ${analytics.selectedWarnings.length ? `<div class="waste-inline-alerts">${analytics.selectedWarnings.slice(0, 3).map(w => `<div class="waste-inline-alert ${w.severity}"><span>!</span><p>${escapeHtml(w.message)}</p></div>`).join('')}</div>` : ''}
@@ -2609,7 +2836,7 @@ function renderWaste(target) {
       ${activeItems.length ? `<form id="waste-day-form" class="waste-day-form"><div class="waste-entry-grid easy-entry-grid">${activeItems.map(item => {
         const st = analytics.itemStats.find(x => x.id === item.id);
         return `<label class="waste-entry-card easy-entry-card"><div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.unit || 'QTY')}${st?.warning > 0 ? ` · alert ≥ ${formatQty(st.warning)}` : ''}</span></div><span class="waste-qty-control"><input name="w_${escapeHtml(item.id)}" type="number" inputmode="decimal" min="0" step="${item.unit === 'PCS' ? '1' : '0.01'}" value="${Number(dayDoc.values?.[item.id] || 0)}"/><span>${escapeHtml(item.unit || 'QTY')}</span></span></label>`;
-      }).join('')}</div><div class="sticky-save-bar waste-save-bar"><div><strong>${escapeHtml(formatDate(date))}</strong><span>Perubahan tersimpan ke Waste harian</span></div><button class="primary">Simpan Waste</button></div></form>` : `<article class="panel">${emptyState('Belum ada master item waste.')}</article>`}
+      }).join('')}</div><div class="sticky-save-bar waste-save-bar"><div class="save-bar-copy"><strong>${escapeHtml(formatDate(date))}</strong>${saveStateMarkup("waste-save-state", hasDayDoc ? "saved" : "idle", hasDayDoc ? "Data sudah tersimpan" : "Belum ada data tersimpan", hasDayDoc ? "Edit angka lalu simpan ulang" : "Isi angka lalu tekan Simpan")}</div><button class="primary">Simpan Waste</button></div></form>` : `<article class="panel">${emptyState('Belum ada master item waste.')}</article>`}
     </section>
 
     <div class="grid two waste-analytics-grid easy-analytics-grid">
@@ -2621,11 +2848,12 @@ function renderWaste(target) {
 
     <article class="panel"><div class="panel-head"><div><span class="overline">RINGKASAN BULAN</span><h3>Total per item</h3></div></div><div class="waste-summary-list">${analytics.itemStats.length ? analytics.itemStats.map(x => `<div class="waste-summary-row"><div><strong>${escapeHtml(x.name)}</strong><span>${x.maxDate ? `Tertinggi ${formatDate(x.maxDate)} · ${formatQty(x.maxQty)} ${escapeHtml(x.unit)}` : 'Belum ada waste'}</span></div><div class="waste-summary-numbers"><strong>${formatQty(x.total)} ${escapeHtml(x.unit)}</strong>${x.cost > 0 ? `<small>Rp ${formatMoney(x.cost)}</small>` : ''}</div></div>`).join('') : `<p class="muted">Belum ada item.</p>`}</div></article>
 
-    <details class="panel collapsible-panel waste-master-panel">
-      <summary>
-        <div><span class="overline">MASTER WASTE</span><strong>Kelola item & pengaturan</strong><small>${activeCount} aktif · ${archivedCount} arsip</small></div>
-        <span class="details-chevron">⌄</span>
-      </summary>
+    <article id="waste-master-section" class="panel waste-master-panel waste-master-visible">
+      <div class="panel-head waste-master-head">
+        <div><span class="overline">CRUD MASTER WASTE</span><h3>Kelola item Waste</h3><p class="muted small-copy">Tambah, lihat, edit, arsipkan, aktifkan kembali, atau hapus item yang belum punya histori.</p></div>
+        <button id="add-waste-item-master" class="primary compact" type="button">+ Item Waste</button>
+      </div>
+      <div class="waste-master-summary"><span>${activeCount} aktif</span><span>${archivedCount} arsip</span><span>${state.wasteItems.length} total</span></div>
       <div class="collapsible-content">
         <div class="waste-master-list">
           ${state.wasteItems.length ? state.wasteItems.map(item => {
@@ -2635,7 +2863,7 @@ function renderWaste(target) {
         </div>
         <p class="master-help">Item yang punya histori akan diarsipkan, bukan dihapus, supaya laporan lama tetap utuh.</p>
       </div>
-    </details>
+    </article>
   `;
 
   document.querySelector('#waste-prev-month')?.addEventListener('click', () => {
@@ -2664,15 +2892,19 @@ function renderWaste(target) {
       await seedWasteReference();
       state.wasteMonth = '2026-07';
       state.wasteDate = '2026-07-31';
-      alert('Histori Waste Juli berhasil dimuat.');
-    } catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
+      showToast('Histori Waste Juli berhasil dimuat.', 'success', 'Data Waste tersimpan');
+    } catch (err) { showToast(err?.message || friendlyError(err), 'error', 'Histori Waste gagal dimuat'); }
   });
   document.querySelector('#add-waste-item')?.addEventListener('click', () => openWasteItemEditor(null));
+  document.querySelector('#add-waste-item-master')?.addEventListener('click', () => openWasteItemEditor(null));
+  document.querySelector('#manage-waste-items')?.addEventListener('click', () => document.querySelector('#waste-master-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   document.querySelectorAll('[data-edit-master-waste]').forEach(btn => btn.onclick = () => openWasteItemEditor(state.wasteItems.find(x => x.id === btn.dataset.editMasterWaste)));
 
   document.querySelectorAll('[data-restore-waste]').forEach(btn => btn.onclick = async () => {
-    try { await restoreWasteItem(btn.dataset.restoreWaste); }
-    catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
+    try {
+      await restoreWasteItem(btn.dataset.restoreWaste);
+      showToast('Item Waste diaktifkan kembali.', 'success', 'CRUD Waste');
+    } catch (err) { showToast(err?.message || friendlyError(err), 'error', 'Gagal mengaktifkan item'); }
   });
 
   document.querySelectorAll('[data-remove-master-waste]').forEach(btn => btn.onclick = async () => {
@@ -2681,12 +2913,23 @@ function renderWaste(target) {
     const hasHistory = state.wasteDays.some(day => Number(day.values?.[id] || 0) > 0);
     if (hasHistory) {
       if (!confirm(`Arsipkan "${item?.name || id}"? Histori lama tetap aman.`)) return;
-      try { await archiveWasteItem(id); }
-      catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
+      try { await archiveWasteItem(id); showToast(`“${item?.name || id}” diarsipkan.`, 'success', 'CRUD Waste'); }
+      catch (err) { showToast(err?.message || friendlyError(err), 'error', 'Gagal mengarsipkan item'); }
     } else {
       if (!confirm(`Hapus permanen "${item?.name || id}"? Item ini belum punya histori Waste.`)) return;
-      try { await permanentDeleteWasteItem(id); }
-      catch (err) { alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`); }
+      try { await permanentDeleteWasteItem(id); showToast(`“${item?.name || id}” dihapus permanen.`, 'success', 'CRUD Waste'); }
+      catch (err) { showToast(err?.message || friendlyError(err), 'error', 'Gagal menghapus item'); }
+    }
+  });
+
+  document.querySelector('#delete-waste-day')?.addEventListener('click', async () => {
+    if (!confirm(`Hapus data Waste ${formatDate(date)}? Master item tidak ikut terhapus.`)) return;
+    try {
+      await removeWasteDay(date);
+      showToast(`Data Waste ${formatDate(date)} dihapus.`, "success", "Data dihapus");
+      state.wasteDate = date;
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Gagal menghapus Waste");
     }
   });
 
@@ -2697,7 +2940,9 @@ function renderWaste(target) {
     requestAnimationFrame(() => document.querySelector('.waste-selected-day')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   });
 
-  document.querySelector('#waste-day-form')?.addEventListener('submit', async e => {
+  const wasteDayForm = document.querySelector('#waste-day-form');
+  bindDirtyState(wasteDayForm, '#waste-save-state', 'Perubahan Waste belum disimpan');
+  wasteDayForm?.addEventListener('submit', async e => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
@@ -2706,12 +2951,16 @@ function renderWaste(target) {
     const oldLabel = submit?.textContent || 'Simpan Waste';
     if (submit) { submit.disabled = true; submit.textContent = 'Menyimpan...'; }
     try {
+      setSaveState('#waste-save-state', 'saving', 'Menyimpan...', 'Jangan tutup halaman dulu');
       await saveWasteDay(date, values, { uid: state.user?.uid, name: state.profile?.name || state.user?.email }, Object.fromEntries(activeItems.map(item => [item.id, { name: item.name, unit: item.unit, category: item.category }])));
       if (submit) submit.textContent = 'Tersimpan ✓';
+      setSaveState('#waste-save-state', 'saved', 'Tersimpan ✓', `Terakhir disimpan ${savedTimeLabel()}`);
+      showToast(`Waste ${formatDate(date)} berhasil disimpan.`, 'success', 'Waste tersimpan');
       setTimeout(() => { if (submit && document.body.contains(submit)) { submit.disabled = false; submit.textContent = oldLabel; } }, 900);
     } catch (err) {
       if (submit) { submit.disabled = false; submit.textContent = oldLabel; }
-      alert(`${err?.code || 'error'}: ${err?.message || friendlyError(err)}`);
+      setSaveState('#waste-save-state', 'error', 'Gagal disimpan', err?.message || friendlyError(err));
+      showToast(err?.message || friendlyError(err), 'error', 'Waste gagal disimpan');
     }
   });
   document.querySelector('#import-waste')?.addEventListener('click', () => runExcelImport('waste'));
@@ -2728,20 +2977,37 @@ function openWasteItemEditor(rawItem) {
   const modal=document.createElement('div');modal.id='waste-item-modal';modal.className='modal-backdrop';
   modal.innerHTML=`<section class="edit-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><span class="overline">MASTER WASTE</span><h3>${rawItem?'Edit Item Waste':'Tambah Item Waste'}</h3></div><button type="button" class="modal-close">×</button></div><form id="waste-item-form" class="modal-form"><label>Nama Item<input name="name" value="${escapeHtml(item.name)}" required/></label><div class="form-grid compact-grid"><label>Satuan<select name="unit">${['ML','GRAM','PCS','QTY'].map(u=>`<option value="${u}" ${String(item.unit||'QTY').toUpperCase()===u?'selected':''}>${u==='GRAM'?'Gram':u}</option>`).join('')}</select></label><label>Urutan<input name="sortOrder" type="number" min="0" value="${Number(item.sortOrder||0)}"/></label><label>Warning harian<input name="dailyWarningQty" type="number" min="0" step="0.01" value="${Number(item.dailyWarningQty||0)}" placeholder="0 = otomatis"/></label><label>Target waste / bulan<input name="monthlyTargetQty" type="number" min="0" step="0.01" value="${Number(item.monthlyTargetQty||0)}" placeholder="Opsional"/></label><label>Biaya per unit (Rp)<input name="costPerUnit" type="number" min="0" step="0.01" value="${Number(item.costPerUnit||0)}" placeholder="Opsional"/></label></div><label>Kategori<input name="category" value="${escapeHtml(item.category||'Waste')}"/></label><div class="unit-helper"><strong>Untuk analisis yang lebih tajam</strong><span>Warning 0 = SoWork hitung otomatis dari histori. Biaya/unit memungkinkan estimasi rupiah waste supaya pengeluaran bisa dipantau.</span></div><label class="check-line"><input name="active" type="checkbox" ${item.active!==false?'checked':''}/> Aktifkan item</label><div class="modal-actions">${rawItem?`<button type="button" id="delete-waste-item" class="danger">${state.wasteDays.some(day=>Number(day.values?.[rawItem.id]||0)>0)?'Arsipkan':'Hapus Permanen'}</button>`:'<span></span>'}<div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan</button></div></div></form></section>`;
   document.body.appendChild(modal);const close=()=>modal.remove();modal.querySelector('.modal-close').onclick=close;modal.querySelector('.modal-cancel').onclick=close;modal.onclick=e=>{if(e.target===modal)close()};
-  modal.querySelector('#waste-item-form').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await saveWasteItem({id:rawItem?.id,name:fd.get('name'),unit:fd.get('unit'),category:fd.get('category'),sortOrder:fd.get('sortOrder'),dailyWarningQty:fd.get('dailyWarningQty'),monthlyTargetQty:fd.get('monthlyTargetQty'),costPerUnit:fd.get('costPerUnit'),active:fd.get('active')==='on'});close()}catch(err){alert(`${err?.code||'error'}: ${err?.message||friendlyError(err)}`)}};
+  modal.querySelector('#waste-item-form').onsubmit=async e=>{
+    e.preventDefault();
+    const form=e.currentTarget;
+    const fd=new FormData(form);
+    const btn=form.querySelector('button[type="submit"], .primary:last-child');
+    const old=btn?.textContent||'Simpan';
+    if(btn){btn.disabled=true;btn.textContent='Menyimpan...';}
+    try{
+      await saveWasteItem({id:rawItem?.id,name:fd.get('name'),unit:fd.get('unit'),category:fd.get('category'),sortOrder:fd.get('sortOrder'),dailyWarningQty:fd.get('dailyWarningQty'),monthlyTargetQty:fd.get('monthlyTargetQty'),costPerUnit:fd.get('costPerUnit'),active:fd.get('active')==='on'});
+      showToast(`Item Waste “${fd.get('name')}” berhasil ${rawItem?'diperbarui':'ditambahkan'}.`, 'success', 'CRUD Waste');
+      close();
+    }catch(err){
+      if(btn){btn.disabled=false;btn.textContent=old;}
+      showToast(err?.message||friendlyError(err), 'error', 'Item Waste gagal disimpan');
+    }
+  };
   modal.querySelector('#delete-waste-item')?.addEventListener('click',async()=>{
     const hasHistory=state.wasteDays.some(day=>Number(day.values?.[item.id]||0)>0);
     try {
       if(hasHistory) {
         if(!confirm(`Arsipkan "${item.name}"? Item hilang dari input Waste baru, tetapi histori lama tetap tersimpan.`)) return;
         await archiveWasteItem(item.id);
+        showToast(`“${item.name}” diarsipkan.`, 'success', 'CRUD Waste');
       } else {
         if(!confirm(`Hapus permanen "${item.name}"? Item belum pernah dipakai pada histori Waste.`)) return;
         await permanentDeleteWasteItem(item.id);
+        showToast(`“${item.name}” dihapus permanen.`, 'success', 'CRUD Waste');
       }
       close();
     } catch(err) {
-      alert(`${err?.code||'error'}: ${err?.message||friendlyError(err)}`);
+      showToast(err?.message || friendlyError(err), 'error', 'CRUD Waste gagal');
     }
   });
 }
@@ -2905,16 +3171,17 @@ function openReportEditor(rawReport) {
         authorUid: state.user?.uid,
         authorName: state.profile?.name || state.user?.email
       });
+      showToast(`Laporan ${formatDate(fd.get("date"))} berhasil ${rawReport ? "diperbarui" : "disimpan"}.`, "success", "Laporan tersimpan");
       close();
     } catch (err) {
-      alert(err?.message || friendlyError(err));
+      showToast(err?.message || friendlyError(err), "error", "Laporan gagal disimpan");
     }
   };
 
   modal.querySelector("#delete-report")?.addEventListener("click", async () => {
     if (!confirm("Hapus laporan ini?")) return;
-    await removePersonalReport(rawReport.id);
-    close();
+    try { await removePersonalReport(rawReport.id); showToast("Laporan berhasil dihapus.", "success", "Laporan dihapus"); close(); }
+    catch (err) { showToast(err?.message || friendlyError(err), "error", "Gagal menghapus laporan"); }
   });
 }
 
@@ -3133,10 +3400,10 @@ async function runExcelImport(feature) {
       wasteDays: state.wasteDays,
       actor: { uid: state.user?.uid || "", name: state.profile?.name || state.user?.email || "Admin" }
     });
-    alert(`Import selesai. ${result.detail || `${result.count} data`}`);
+    showToast(`Import selesai. ${result.detail || `${result.count} data`}`, "success", "Import berhasil");
   } catch (err) {
     console.error("Excel import", feature, err);
-    alert(`Import gagal: ${err?.message || friendlyError(err)}`);
+    showToast(err?.message || friendlyError(err), "error", "Import gagal");
   }
 }
 
@@ -3211,7 +3478,7 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.3.4 Free Multi Telegram</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.5.3 Data Feedback + CRUD</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>
@@ -3231,9 +3498,9 @@ function renderSettings(target) {
         timezone: fd.get("timezone"),
         reportAutoFillSchedule: fd.get("reportAutoFillSchedule") === "on"
       });
-      alert("Settings tersimpan.");
+      showToast("Settings berhasil disimpan.", "success", "Settings tersimpan");
     } catch (err) {
-      alert(err?.message || friendlyError(err));
+      showToast(err?.message || friendlyError(err), "error", "Settings gagal disimpan");
     }
   });
 
@@ -3243,10 +3510,10 @@ function renderSettings(target) {
     try {
       await updateProfileName(state.user?.uid, fd.get("name"));
       state.profile = { ...state.profile, name: String(fd.get("name") || "").trim() };
-      alert("Nama profil diperbarui.");
+      showToast("Nama profil berhasil diperbarui.", "success", "Profil tersimpan");
       renderShell();
     } catch (err) {
-      alert(err?.message || friendlyError(err));
+      showToast(err?.message || friendlyError(err), "error", "Profil gagal diperbarui");
     }
   });
 

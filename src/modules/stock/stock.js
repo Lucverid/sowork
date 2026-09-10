@@ -262,6 +262,36 @@ export async function saveStockOpname(date, rows, actor = {}) {
   }
 }
 
+
+export async function removeStockOpnameDay(date, itemRestores = []) {
+  if (!date) throw new Error("Tanggal Stock Opname wajib dipilih.");
+  const snap = await getDocs(collection(db, "stockOpnames"));
+  const targets = snap.docs.filter(d => String(d.data()?.date || "") === String(date));
+  if (!targets.length) return 0;
+
+  for (const part of chunk(targets, 350)) {
+    const batch = writeBatch(db);
+    for (const row of part) batch.delete(row.ref);
+    await batch.commit();
+  }
+
+  for (const part of chunk(Array.isArray(itemRestores) ? itemRestores : [], 180)) {
+    const batch = writeBatch(db);
+    for (const row of part) {
+      if (!row?.itemId) continue;
+      batch.set(doc(db, "items", row.itemId), {
+        currentQty: Math.max(0, Number(row.currentQty || 0)),
+        lastOpnameDate: String(row.lastOpnameDate || ""),
+        lastPrimaryQty: Math.max(0, Number(row.lastPrimaryQty || 0)),
+        lastSecondaryQty: Math.max(0, Number(row.lastSecondaryQty || 0)),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    }
+    await batch.commit();
+  }
+  return targets.length;
+}
+
 export async function saveStockSettings(settings) {
   await setDoc(doc(db, "settings", "stockAlerts"), {
     whatsappNumber: normalizeWhatsappNumber(settings.whatsappNumber || ""),
