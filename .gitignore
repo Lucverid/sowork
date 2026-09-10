@@ -1,9 +1,0 @@
-node_modules
-dist
-.firebase
-.DS_Store
-
-.wrangler
-.dev.vars
-.env
-cloudflare-worker/.wrangler
