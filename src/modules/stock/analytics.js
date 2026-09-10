@@ -233,17 +233,41 @@ export function buildStockReconciliation(items = [], opnames = [], movements = [
   return items.filter(x => x.active !== false || currentByItem[x.id]).map(item => {
     const current = currentByItem[item.id] || null;
     const theoretical = calculateTheoreticalStock(item, date, opnames, movements);
-    const systemQty = current && Number.isFinite(Number(current.systemQtyBeforeOpname))
-      ? Number(current.systemQtyBeforeOpname)
-      : theoretical.systemQty;
-    const physicalQty = current ? Math.max(0, Number(current.totalQty || 0)) : null;
+
+    const optionalNumber = value => {
+      if (value === null || value === undefined || value === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    };
+
+    const storedTotal = optionalNumber(current?.totalQty);
+    const primaryQty = optionalNumber(current?.primaryQty) ?? 0;
+    const secondaryQty = optionalNumber(current?.secondaryQty) ?? 0;
+    const physicalQty = current ? Math.max(0, storedTotal ?? (primaryQty + secondaryQty)) : null;
+    const storedSystemQty = optionalNumber(current?.systemQtyBeforeOpname);
+    const storedVarianceQty = optionalNumber(current?.varianceQty);
+
+    // Histori lama belum selalu menyimpan systemQtyBeforeOpname / status rekonsiliasi.
+    // Jika variance lama tersedia, rekonstruksi stok sistem. Jika tidak, hitung ulang
+    // dari SO sebelumnya + barang masuk - penggunaan sampai tanggal yang dipilih.
+    const systemQty = storedSystemQty != null
+      ? storedSystemQty
+      : physicalQty != null && storedVarianceQty != null
+        ? physicalQty - storedVarianceQty
+        : Number(theoretical.systemQty || 0);
+
     const varianceQty = physicalQty == null ? null : physicalQty - systemQty;
     const variancePct = physicalQty == null || systemQty <= 0 ? null : (varianceQty / systemQty) * 100;
     const accuracyPct = physicalQty == null
       ? null
       : systemQty <= 0 ? (physicalQty === 0 ? 100 : 0) : Math.max(0, 100 - (Math.abs(varianceQty) / systemQty * 100));
-    const tolerance = Math.max(0.01, systemQty * 0.0025);
-    const status = physicalQty == null ? "Belum SO" : Math.abs(varianceQty) <= tolerance ? "Sesuai" : varianceQty < 0 ? "Selisih Kurang" : "Selisih Lebih";
+    const tolerance = Math.max(0.01, Math.abs(systemQty) * 0.0025);
+    const status = physicalQty == null
+      ? "Belum SO"
+      : Math.abs(varianceQty) <= tolerance
+        ? "Sesuai"
+        : varianceQty < 0 ? "Selisih Kurang" : "Selisih Lebih";
+
     return {
       ...item,
       physicalQty,
@@ -251,7 +275,8 @@ export function buildStockReconciliation(items = [], opnames = [], movements = [
       varianceQty,
       variancePct,
       accuracyPct,
-      reconciliationStatus: current?.reconciliationStatus || status,
+      // Selalu normalisasi dari angka. Field status versi lama kadang kosong/berbeda label.
+      reconciliationStatus: status,
       previousOpnameDate: current?.previousOpnameDate || theoretical.previousOpnameDate,
       incomingSincePrevious: Number(current?.incomingSincePrevious ?? theoretical.incoming ?? 0),
       usageSincePrevious: Number(current?.usageSincePrevious ?? theoretical.usage ?? 0)

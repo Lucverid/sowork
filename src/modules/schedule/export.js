@@ -49,8 +49,8 @@ export function exportScheduleWorkbook({ entries = [], rules, periodLabel = "Jad
     ...dates.map(() => ({ wch: 16 }))
   ];
   ws["!rows"] = [{ hpt: 25 }, { hpt: 24 }, ...crew.map(() => ({ hpt: 34 }))];
-  // Header identitas benar-benar digabung 2 baris, bukan hanya dibuat kosong pada baris kedua.
-  // Excel/LibreOffice akan membawa struktur merge ini saat range dicopy-paste.
+  // Header identitas benar-benar digabung 2 baris dan metadata merge disimpan di XLSX.
+  // Untuk mempertahankan merge saat dipindah ke workbook lain, import/copy worksheet; clipboard antar aplikasi tidak selalu membawa metadata merge.
   ws["!merges"] = [0, 1, 2, 3].map(c => ({ s: { r: 0, c }, e: { r: 1, c } }));
   ws["!freeze"] = { xSplit: 4, ySplit: 2 };
 

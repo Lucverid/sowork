@@ -754,7 +754,7 @@ function renderSchedule(target) {
           <div class="legend-inline">
             <span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span>
           </div>
-          ${admin ? `<div class="table-actions schedule-share-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="copy-schedule" class="secondary compact">Copy ke Sheet</button><button id="sheet-ready-schedule" class="secondary compact" title="Google Sheets: File → Import → Upload → Insert new sheet(s). Merge ikut dari file XLSX.">Sheet-ready</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div>` : ""}
+          ${admin ? `<div class="table-actions schedule-share-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="sheet-ready-schedule" class="secondary compact" title="Agar merge tetap utuh, import file XLSX ini sebagai sheet baru. Copy-paste cell antar workbook/app dapat menghilangkan merge.">Sheet-ready</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div>` : ""}
         </div>
       </div>
       ${renderScheduleMatrix(scheduleForGrid, rules, admin && !preview?.entries?.length)}
@@ -843,21 +843,6 @@ function renderSchedule(target) {
 
   document.querySelector("#add-schedule")?.addEventListener("click", () => openScheduleEditor(null, rules, selected));
   document.querySelector("#import-schedule")?.addEventListener("click", () => runExcelImport("schedule"));
-  document.querySelector("#copy-schedule")?.addEventListener("click", async e => {
-    const btn = e.currentTarget;
-    const original = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Menyalin...";
-    try {
-      await copyScheduleToClipboard({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected) });
-      btn.textContent = "Tersalin ✓";
-    } catch (err) {
-      alert(err?.message || "Gagal menyalin jadwal.");
-      btn.textContent = original;
-    } finally {
-      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
-    }
-  });
   document.querySelector("#sheet-ready-schedule")?.addEventListener("click", () => {
     try {
       exportScheduleSheetReadyWorkbook({
@@ -866,8 +851,9 @@ function renderSchedule(target) {
         periodLabel: monthTitle(selected),
         filename: `SoWork-Jadwal-SheetReady-${selected}.xlsx`
       });
+      showToast("File Sheet-ready dibuat. Untuk mempertahankan merge, import XLSX sebagai sheet baru; jangan copy-paste range antar file.", "success", "Sheet-ready siap");
     } catch (err) {
-      alert(err?.message || "Export Sheet-ready gagal.");
+      showToast(err?.message || "Export Sheet-ready gagal.", "error", "Export gagal");
     }
   });
   document.querySelector("#export-schedule")?.addEventListener("click", () => {
@@ -889,102 +875,6 @@ function renderSchedule(target) {
       if (item) openScheduleEditor(item, rules, selected);
     };
   });
-}
-
-async function copyScheduleToClipboard({ entries = [], rules, periodLabel = "Jadwal" }) {
-  if (!entries.length) throw new Error("Tidak ada jadwal untuk disalin.");
-
-  const preferred = [...(rules?.maleNames || []), ...(rules?.femaleNames || [])];
-  const preferredIndex = name => {
-    const index = preferred.indexOf(name);
-    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
-  };
-  const crew = [...new Set(entries.map(e => e.crewName).filter(Boolean))]
-    .sort((a, b) => preferredIndex(a) - preferredIndex(b) || String(a).localeCompare(String(b), "id"));
-  const dates = [...new Set(entries.map(e => e.date).filter(Boolean))].sort();
-  const byKey = new Map(entries.map(e => [`${e.date}__${e.crewName}`, e]));
-
-  const plainRows = [
-    ["No", "Nama Crew", "Gender", "Periode", ...dates.map(shortDate)],
-    ["", "", "", "", ...dates.map(dayNameFromDate)]
-  ];
-
-  const fillByShift = { S1: "#00e72d", S2: "#4285e8", Middle: "#ff9800", Libur: "#ff1616" };
-  const cols = [56, 145, 82, 145, ...dates.map(() => 122)];
-  const colgroup = `<colgroup>${cols.map(width => `<col style="width:${width}px">`).join("")}</colgroup>`;
-  const baseCell = "border:1px solid #d9d9d9;text-align:center;vertical-align:middle;white-space:pre-wrap;padding:7px 10px;font-family:Arial,sans-serif;font-size:10pt;";
-  const header = `${baseCell}background:#ffff00;color:#000;font-weight:700;`;
-
-  let table = `<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed">${colgroup}<thead><tr>`;
-  ["No", "Nama Crew", "Gender", "Periode"].forEach(label => {
-    table += `<th rowspan="2" style="${header}">${escapeHtml(label)}</th>`;
-  });
-  dates.forEach(date => { table += `<th style="${header}">${escapeHtml(shortDate(date))}</th>`; });
-  table += `</tr><tr>`;
-  dates.forEach(date => { table += `<th style="${header}">${escapeHtml(dayNameFromDate(date))}</th>`; });
-  table += `</tr></thead><tbody>`;
-
-  crew.forEach((name, index) => {
-    const gender = (rules?.maleNames || []).includes(name) ? "Pria" : "Wanita";
-    const identityFill = gender === "Pria" ? "#c6e0b4" : "#d5a6bd";
-    const row = [index + 1, name, gender, periodLabel];
-    table += `<tr>`;
-    table += `<td style="${baseCell}background:${identityFill}">${index + 1}</td>`;
-    table += `<td style="${baseCell}background:${identityFill}">${escapeHtml(name)}</td>`;
-    table += `<td style="${baseCell}background:${identityFill}">${escapeHtml(gender)}</td>`;
-    table += `<td style="${baseCell}background:#fff">${escapeHtml(periodLabel)}</td>`;
-
-    dates.forEach(date => {
-      const item = byKey.get(`${date}__${name}`);
-      if (!item) {
-        row.push("");
-        table += `<td style="${baseCell}background:#fff"></td>`;
-        return;
-      }
-      const value = item.shift === "Libur" ? "LIBUR" : `${item.role || "-"}${item.overtime ? `\nLEMBUR: ${item.overtimeType || "Buka"}` : ""}`;
-      row.push(value);
-      const fill = item.overtime ? "#ffe500" : (fillByShift[item.shift] || "#fff");
-      const dark = item.shift === "S1" || item.shift === "Middle" || item.overtime;
-      table += `<td style="${baseCell}background:${fill};color:${dark ? "#000" : "#fff"}">${escapeHtml(value).replaceAll("\n", "<br>")}</td>`;
-    });
-    plainRows.push(row);
-    table += `</tr>`;
-  });
-  table += `</tbody></table>`;
-
-  // Full Office-compatible HTML improves paste fidelity in Excel/Sheets.
-  // Merge metadata on browser clipboard is still target-app dependent, so a
-  // Sheet-ready XLSX is also provided as the guaranteed merge-preserving path.
-  const html = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><style>td,th{mso-number-format:"\\@";}br{mso-data-placement:same-cell;}</style></head><body>${table}</body></html>`;
-  const text = plainRows.map(row => row.map(value => String(value ?? "").replaceAll("\t", " ")).join("\t")).join("\n");
-
-  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
-    await navigator.clipboard.write([new ClipboardItem({
-      "text/html": new Blob([html], { type: "text/html" }),
-      "text/plain": new Blob([text], { type: "text/plain" })
-    })]);
-    return;
-  }
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  throw new Error("Browser ini tidak mendukung clipboard tabel.");
-}
-
-function ruleSummaryCards(rules) {
-  return `
-    <div><span>Pria</span><strong>${escapeHtml(rules.maleNames.join(", "))}</strong></div>
-    <div><span>Wanita</span><strong>${escapeHtml(rules.femaleNames.join(", "))}</strong></div>
-    <div><span>Libur Jumat</span><strong>${escapeHtml((rules.offDays.Jumat || []).join(", ") || "-")}</strong></div>
-  `;
-}
-
-function renderPreviewMessage(preview) {
-  if (preview.errors?.length) {
-    return `<div class="validation-box error"><strong>Jadwal belum bisa dibuat</strong>${preview.errors.map(x => `<span>${escapeHtml(x)}</span>`).join("")}</div>`;
-  }
-  return `<div class="validation-box success"><strong>Preview siap</strong><span>${escapeHtml(preview.range.start)} → ${escapeHtml(preview.range.end)} · ${preview.summary.days} hari · Fairness total ${preview.summary.overallFairnessScore ?? preview.summary.fairnessScore}/100</span><small>Role sudah dibuat otomatis. Middle hanya Bar atau Kitchen - Bar.</small>${(preview.warnings || []).map(x => `<small>${escapeHtml(x)}</small>`).join("")}</div>`;
 }
 
 function renderOvertimeWarning(entries) {
@@ -1830,22 +1720,26 @@ function renderStock(target) {
 }
 
 
-function buildOpnameCalendar(opnames, monthKey, selectedDate, totalItems = 0) {
+function buildOpnameCalendar(opnames, monthKey, selectedDate, items = [], movements = [], totalItems = 0) {
   const today = localDateKey(new Date());
   const safeMonth = /^\d{4}-\d{2}$/.test(String(monthKey || "")) ? monthKey : today.slice(0, 7);
   const [year, month] = safeMonth.split("-").map(Number);
   const totalDays = new Date(year, month, 0).getDate();
   const firstDay = new Date(year, month - 1, 1).getDay();
   const mondayOffset = (firstDay + 6) % 7;
+  const datesWithData = [...new Set((opnames || [])
+    .map(row => String(row?.date || ""))
+    .filter(date => date.startsWith(safeMonth)))];
   const byDate = new Map();
 
-  for (const row of opnames || []) {
-    if (!row?.date || !String(row.date).startsWith(safeMonth)) continue;
-    const stats = byDate.get(row.date) || { count: 0, variance: 0, critical: 0 };
-    stats.count += 1;
-    if (row.reconciliationStatus && row.reconciliationStatus !== "Sesuai") stats.variance += 1;
-    if (row.reconciliationStatus === "Selisih Kurang") stats.critical += 1;
-    byDate.set(row.date, stats);
+  for (const date of datesWithData) {
+    const rows = buildStockReconciliation(items, opnames, movements, date)
+      .filter(row => row.physicalQty != null);
+    byDate.set(date, {
+      count: rows.length,
+      variance: rows.filter(row => row.reconciliationStatus !== "Sesuai").length,
+      critical: rows.filter(row => row.reconciliationStatus === "Selisih Kurang").length
+    });
   }
 
   const cells = [];
@@ -1859,7 +1753,7 @@ function buildOpnameCalendar(opnames, monthKey, selectedDate, totalItems = 0) {
     const isSelected = dateKey === selectedDate;
     const complete = stats && totalItems > 0 && stats.count >= totalItems;
     const status = stats?.critical ? "is-critical" : stats?.variance ? "has-variance" : stats ? "has-data" : "";
-    const hint = stats ? `${stats.count}${totalItems ? `/${totalItems}` : ""} item` : (isToday ? "hari ini" : "");
+    const hint = stats ? `${stats.count} item` : (isToday ? "hari ini" : "");
     cells.push(`
       <button type="button" class="opname-calendar-day ${status} ${complete ? "is-complete" : ""} ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""}" data-opname-calendar-date="${escapeHtml(dateKey)}" aria-label="${escapeHtml(formatDate(dateKey))}${stats ? `, ${stats.count} item tersimpan${stats.variance ? `, ${stats.variance} selisih` : ""}` : ", belum ada Stock Opname"}">
         <span class="opname-calendar-number">${day}</span>
@@ -1917,6 +1811,7 @@ function renderStockOpname(target) {
   const opnameMonth = state.opnameMonth;
   const monthOpnames = state.stockOpnames.filter(x => String(x.date || "").startsWith(opnameMonth));
   const monthRecordedDays = new Set(monthOpnames.map(x => x.date)).size;
+  const monthUniqueSnapshots = new Set(monthOpnames.map(x => `${x.date}__${x.itemId || x.id || ""}`)).size;
   const search = normalizeSearchText(state.opnameSearch);
   const filter = state.opnameFilter || "Semua";
   const allItems = state.stockItems
@@ -1928,6 +1823,9 @@ function renderStockOpname(target) {
   );
   const reconciliationRows = buildStockReconciliation(allItems, state.stockOpnames, state.stockMovements, date);
   const reconciliationByItem = Object.fromEntries(reconciliationRows.map(x => [x.id, x]));
+  // Gunakan hasil rekonsiliasi yang dihitung ulang untuk tanggal terpilih.
+  // Ini membuat histori SO lama (sebelum field reconciliationStatus disimpan)
+  // tetap menampilkan Sesuai / Kurang / Lebih dengan benar.
   const savedRecon = reconciliationRows.filter(x => x.physicalQty != null);
   const shortageCount = savedRecon.filter(x => x.reconciliationStatus === "Selisih Kurang").length;
   const overCount = savedRecon.filter(x => x.reconciliationStatus === "Selisih Lebih").length;
@@ -1966,11 +1864,11 @@ function renderStockOpname(target) {
         <button id="opname-prev-month" class="secondary opname-month-button" type="button" aria-label="Bulan sebelumnya">‹</button>
         <div class="opname-calendar-month-pro">
           <strong>${escapeHtml(formatMonthKey(opnameMonth))}</strong>
-          <span>${monthRecordedDays} hari tercatat · ${monthOpnames.length} snapshot item</span>
+          <span>${monthRecordedDays} hari tercatat · ${monthUniqueSnapshots} snapshot item</span>
         </div>
         <button id="opname-next-month" class="secondary opname-month-button" type="button" aria-label="Bulan berikutnya">›</button>
       </div>
-      ${buildOpnameCalendar(state.stockOpnames, opnameMonth, date, allItems.length)}
+      ${buildOpnameCalendar(state.stockOpnames, opnameMonth, date, state.stockItems, state.stockMovements, allItems.length)}
     </article>
 
     <article class="panel opname-control-panel-modern opname-control-panel-pro">
@@ -2020,12 +1918,15 @@ function renderStockOpname(target) {
           const q1 = row.primaryQty ?? item.lastPrimaryQty ?? item.currentQty ?? 0;
           const q2 = row.secondaryQty ?? item.lastSecondaryQty ?? 0;
           const total = Number(q1 || 0) + Number(q2 || 0);
+          const recon = reconciliationByItem[item.id];
           const theoretical = calculateTheoreticalStock(item, date, state.stockOpnames, state.stockMovements);
-          const systemQty = row.systemQtyBeforeOpname ?? theoretical.systemQty;
-          const diff = total - Number(systemQty || 0);
+          const systemQty = Number(recon?.systemQty ?? theoretical.systemQty ?? 0);
+          const diff = hasExisting ? Number(recon?.varianceQty ?? (total - systemQty)) : (total - systemQty);
           const tol = Math.max(0.01, Number(systemQty || 0) * 0.0025);
-          const reconStatus = Math.abs(diff) <= tol ? "Sesuai" : diff < 0 ? "Selisih Kurang" : "Selisih Lebih";
-          const diffClass = reconStatus === "Sesuai" ? "safe" : diff < 0 ? "critical" : "low";
+          const reconStatus = hasExisting
+            ? (recon?.reconciliationStatus || (Math.abs(diff) <= tol ? "Sesuai" : diff < 0 ? "Selisih Kurang" : "Selisih Lebih"))
+            : "";
+          const diffClass = Math.abs(diff) <= tol ? "safe" : diff < 0 ? "critical" : "low";
           return `
             <article class="opname-item-card opname-item-modern"
               data-opname-row="${escapeHtml(item.id)}"
@@ -2174,7 +2075,8 @@ function renderStockOpname(target) {
       const diffEl = card.querySelector(`[data-diff-for="${CSS.escape(id)}"]`);
       const theo = calculateTheoreticalStock(item, state.opnameDate || localDateKey(new Date()), state.stockOpnames, state.stockMovements);
       const saved = existing[id];
-      const sys = Number(saved?.systemQtyBeforeOpname ?? theo.systemQty ?? 0);
+      const recon = reconciliationByItem[id];
+      const sys = Number(recon?.systemQty ?? saved?.systemQtyBeforeOpname ?? theo.systemQty ?? 0);
       const diff = (q1 + q2) - sys;
       const tol = Math.max(0.01, sys * 0.0025);
       const status = Math.abs(diff) <= tol ? "Sesuai" : diff < 0 ? "Selisih Kurang" : "Selisih Lebih";
