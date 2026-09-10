@@ -64,6 +64,9 @@ async function apiSync(request, env, ctx) {
     ok: true,
     syncedAt: new Date().toISOString(),
     counts: {
+      schedules: snapshot.schedules.length,
+      checklist: snapshot.checklist.length,
+      checklistCompletions: snapshot.checklistCompletions.length,
       stockItems: snapshot.stockItems.length,
       stockOpnames: snapshot.stockOpnames.length,
       stockMovements: snapshot.stockMovements.length,
@@ -171,6 +174,7 @@ Perintah:
 /stock — stok menipis/kritis
 /order — prediksi order + jumlah beli
 /waste — kondisi waste terbaru
+/check — status Daily Check hari ini
 /help — bantuan`,
       settings
     );
@@ -193,9 +197,12 @@ Perintah:
   } else if (text.startsWith("/waste")) {
     const msg = buildCurrentWasteMessage(snapshot || {});
     await sendTelegram(env, chatId, msg || "✅ Belum ada high waste yang terdeteksi.", settings);
+  } else if (text.startsWith("/check")) {
+    const msg = buildChecklistStatusMessage(snapshot || {}, jakartaDateKey(new Date()), true);
+    await sendTelegram(env, chatId, msg || "✅ Daily Check hari ini tidak punya task aktif.", settings);
   } else {
     await sendTelegram(env, chatId,
-      "🤖 SoWork Bot — Cloudflare Free\n\n/stock — stok kritis & menipis\n/order — prediksi order + jumlah beli\n/waste — status waste terbaru\n/help — bantuan\n\nAlert punya tombol ‘Teruskan ke WhatsApp’ jika nomor WA relay diisi di SoWork.",
+      "🤖 SoWork Bot — Cloudflare Free\n\n/stock — stok kritis & menipis\n/order — prediksi order + jumlah beli\n/waste — status waste terbaru\n/check — status Daily Check hari ini\n/help — bantuan\n\nAlert punya tombol ‘Teruskan ke WhatsApp’ jika nomor WA relay diisi di SoWork.",
       settings
     );
   }
@@ -209,17 +216,41 @@ async function handleScheduled(cron, env) {
     if (!snapshot || !connections.length || snapshot.settings?.telegramEnabled !== true) return;
 
     const today = jakartaDateKey(new Date());
+
     if (cron === "30 23 * * *") {
       if (snapshot.settings?.telegramNotifyWasteRiskDay !== false) {
         const msg = buildWasteRiskReminder(snapshot, today);
         if (msg) await sendAlertOnce(env, `waste_risk_${today}`, "waste-risk", msg, snapshot.settings);
       }
-    } else {
+      return;
+    }
+
+    if (cron === "0 1 * * *") {
       if (snapshot.settings?.telegramNotifyOrderDue !== false) {
         const rows = buildAllStockAnalytics(snapshot);
         const msg = buildDailyOrderReminder(rows, false);
         if (msg) await sendAlertOnce(env, `order_${today}`, "order-reminder", msg, snapshot.settings);
       }
+      return;
+    }
+
+    const cronHour = cron === "0 11 * * *" ? 18 : cron === "0 13 * * *" ? 20 : null;
+    if (!cronHour) return;
+    const configuredHour = [18, 20].includes(Number(snapshot.settings?.telegramOpsReminderHour))
+      ? Number(snapshot.settings.telegramOpsReminderHour)
+      : 20;
+    if (cronHour !== configuredHour) return;
+
+    const blocks = [];
+    if (snapshot.settings?.telegramNotifyDailyCheck !== false) {
+      const checklist = buildChecklistStatusMessage(snapshot, today, false);
+      if (checklist) blocks.push(checklist);
+    }
+    if (snapshot.settings?.telegramNotifyOpsReminder !== false) {
+      blocks.push(buildEveningOpsReminder(snapshot, today));
+    }
+    if (blocks.length) {
+      await sendAlertOnce(env, `evening_ops_${today}_${cronHour}`, "evening-ops", blocks.join("\n\n──────────\n\n"), snapshot.settings);
     }
   } catch (error) {
     console.error("scheduled error", error);
@@ -284,9 +315,25 @@ function compactSnapshot(input) {
 
   const stockMovements = (Array.isArray(input.stockMovements) ? input.stockMovements : [])
     .map(cleanObject)
-    .filter(x => x.type === "IN")
+    .filter(x => x.date && (x.type === "IN" || x.type === "OUT"))
     .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")))
-    .slice(0, 1500);
+    .slice(0, 1800);
+
+  const schedules = (Array.isArray(input.schedules) ? input.schedules : [])
+    .map(cleanObject)
+    .filter(x => x.date && x.crewName)
+    .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")))
+    .slice(0, 900);
+
+  const checklist = (Array.isArray(input.checklist) ? input.checklist : [])
+    .map(cleanObject)
+    .slice(0, 300);
+
+  const checklistCompletions = (Array.isArray(input.checklistCompletions) ? input.checklistCompletions : [])
+    .map(cleanObject)
+    .filter(x => x.date && x.templateId)
+    .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")))
+    .slice(0, 1200);
 
   const wasteItems = (Array.isArray(input.wasteItems) ? input.wasteItems : []).map(cleanObject).slice(0, 500);
   const wasteDays = (Array.isArray(input.wasteDays) ? input.wasteDays : [])
@@ -299,6 +346,9 @@ function compactSnapshot(input) {
   return {
     syncedAt: now,
     settings: cleanSettings(input.settings || {}),
+    schedules,
+    checklist,
+    checklistCompletions,
     stockItems,
     stockOpnames,
     stockMovements,
@@ -316,6 +366,9 @@ function cleanSettings(s) {
     telegramNotifyOrderDue: s.telegramNotifyOrderDue !== false,
     telegramNotifyWasteHigh: s.telegramNotifyWasteHigh !== false,
     telegramNotifyWasteRiskDay: s.telegramNotifyWasteRiskDay !== false,
+    telegramNotifyDailyCheck: s.telegramNotifyDailyCheck !== false,
+    telegramNotifyOpsReminder: s.telegramNotifyOpsReminder !== false,
+    telegramOpsReminderHour: [18, 20].includes(Number(s.telegramOpsReminderHour)) ? Number(s.telegramOpsReminderHour) : 20,
     defaultLeadTimeDays: Math.max(0, Number(s.defaultLeadTimeDays || 2)),
     defaultTargetCoverageDays: Math.max(1, Number(s.defaultTargetCoverageDays || 7))
   };
@@ -587,6 +640,75 @@ function analyzeWasteDay(snapshot, date, values) {
   high.slice(0, 10).forEach(x => lines.push(`• ${x.name}: ${fmt(x.qty)} ${x.unit}${x.baseline > 0 ? ` (~${x.ratio.toFixed(1)}× pola normal)` : ""}`));
   lines.push("", "Hati-hati, waste bahan di atas pola normal.", "Saran: kurangi batch awal ±10–15%, refill bertahap sesuai traffic/penjualan, dan periksa sisa closing sebelum menambah prep.", "", "Targetnya bahan baku terkontrol dan pengeluaran tetap stabil.");
   return { highItems: high, message: lines.join("\n") };
+}
+
+
+function normalizeChecklistForWorker(item = {}) {
+  const legacy = String(item.section || "").toUpperCase();
+  const legacyShift = legacy === "OPENING" ? "S1" : legacy === "MIDDLE" ? "Middle" : legacy === "CLOSING" ? "S2" : legacy === "GENERAL" ? "All" : "";
+  return {
+    ...item,
+    title: String(item.title || "Untitled task"),
+    shift: String(item.shift || legacyShift || "S1"),
+    assignmentType: String(item.assignmentType || "Role"),
+    requiredRole: String(item.requiredRole || "Bar"),
+    specificCrew: String(item.specificCrew || ""),
+    active: item.active !== false
+  };
+}
+
+function applicableChecklistTasks(snapshot, date) {
+  const schedules = (Array.isArray(snapshot.schedules) ? snapshot.schedules : [])
+    .filter(x => x.date === date && x.shift && x.shift !== "Libur");
+  const templates = (Array.isArray(snapshot.checklist) ? snapshot.checklist : [])
+    .map(normalizeChecklistForWorker)
+    .filter(x => x.active !== false);
+
+  return templates.filter(item => {
+    let candidates = item.shift === "All" ? schedules : schedules.filter(s => s.shift === item.shift);
+    if (item.assignmentType === "Role") candidates = candidates.filter(s => String(s.role || "") === item.requiredRole);
+    else if (item.assignmentType === "Specific Crew") candidates = candidates.filter(s => String(s.crewName || "") === item.specificCrew);
+    return candidates.length > 0;
+  });
+}
+
+function buildChecklistStatusMessage(snapshot, today, showAll = false) {
+  const tasks = applicableChecklistTasks(snapshot, today);
+  if (!tasks.length) return showAll ? `📋 DAILY CHECK — ${dateShort(today)}\n\nBelum ada task aktif yang cocok dengan jadwal hari ini.` : "";
+
+  const completions = (Array.isArray(snapshot.checklistCompletions) ? snapshot.checklistCompletions : [])
+    .filter(x => x.date === today);
+  const doneIds = new Set(completions.filter(x => x.completed === true).map(x => String(x.templateId || "")));
+  const done = tasks.filter(x => doneIds.has(String(x.id || "")));
+  const pending = tasks.filter(x => !doneIds.has(String(x.id || "")));
+
+  if (!pending.length) {
+    return showAll ? `✅ DAILY CHECK SELESAI\n\n${dateShort(today)} · ${done.length}/${tasks.length} task selesai.` : "";
+  }
+
+  const lines = ["📋 DAILY CHECK BELUM SELESAI", "", `${dateShort(today)} · ${done.length}/${tasks.length} selesai`, ""];
+  pending.slice(0, 8).forEach(item => {
+    const shift = item.shift === "All" ? "General" : item.shift;
+    lines.push(`• ${shift} — ${item.title}`);
+  });
+  if (pending.length > 8) lines.push(`• +${pending.length - 8} task lainnya`);
+  lines.push("", "Selesaikan checklist sebelum closing supaya operasional hari ini tercatat lengkap.");
+  return lines.join("\n");
+}
+
+function buildEveningOpsReminder(snapshot, today) {
+  const movements = Array.isArray(snapshot.stockMovements) ? snapshot.stockMovements : [];
+  const stockUsageRecorded = movements.some(x => x.date === today && x.type === "OUT" && (x.source === "DAILY_USAGE" || String(x.id || "").startsWith("USE_")));
+  const wasteRecorded = (Array.isArray(snapshot.wasteDays) ? snapshot.wasteDays : []).some(x => x.date === today);
+  const rows = buildAllStockAnalytics(snapshot);
+  const attention = rows.filter(x => x.status !== "Aman").length;
+
+  const lines = ["🌙 REMINDER OPERASIONAL SOWORK", "", `${dateShort(today)} · sebelum closing`, ""];
+  lines.push(`${stockUsageRecorded ? "✅" : "⚠️"} Penggunaan Stock: ${stockUsageRecorded ? "sudah diinput" : "belum ada input hari ini"}`);
+  lines.push(`${wasteRecorded ? "✅" : "⚠️"} Waste: ${wasteRecorded ? "sudah diinput" : "belum ada input hari ini"}`);
+  if (attention > 0) lines.push(`📦 Stock Alert: ${attention} item perlu perhatian`);
+  lines.push("", "Cek stok fisik, input penggunaan, dan waste hari ini sebelum tutup shift agar data besok tetap akurat.");
+  return lines.join("\n");
 }
 
 function buildCurrentWasteMessage(snapshot) {

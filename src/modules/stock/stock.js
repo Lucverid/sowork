@@ -56,6 +56,9 @@ export function watchStockSettings(callback, onError) {
       telegramNotifyOrderDue: true,
       telegramNotifyWasteHigh: true,
       telegramNotifyWasteRiskDay: true,
+      telegramNotifyDailyCheck: true,
+      telegramNotifyOpsReminder: true,
+      telegramOpsReminderHour: 20,
       defaultLeadTimeDays: 2,
       defaultTargetCoverageDays: 7
     });
@@ -277,6 +280,9 @@ export async function saveStockSettings(settings) {
     telegramNotifyOrderDue: settings.telegramNotifyOrderDue !== false,
     telegramNotifyWasteHigh: settings.telegramNotifyWasteHigh !== false,
     telegramNotifyWasteRiskDay: settings.telegramNotifyWasteRiskDay !== false,
+    telegramNotifyDailyCheck: settings.telegramNotifyDailyCheck !== false,
+    telegramNotifyOpsReminder: settings.telegramNotifyOpsReminder !== false,
+    telegramOpsReminderHour: [18, 20].includes(Number(settings.telegramOpsReminderHour)) ? Number(settings.telegramOpsReminderHour) : 20,
     defaultLeadTimeDays: Math.max(0, Number(settings.defaultLeadTimeDays || 2)),
     defaultTargetCoverageDays: Math.max(1, Number(settings.defaultTargetCoverageDays || 7)),
     updatedAt: serverTimestamp()

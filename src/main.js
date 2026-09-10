@@ -2,7 +2,7 @@ import "./style.css";
 import { getUserProfile, isAdmin, login, logout, observeAuth, registerViewer } from "./auth/auth.js";
 import { watchSchedules, saveSchedule, removeSchedule, watchScheduleRules, saveScheduleRules, replaceScheduleRange } from "./modules/schedule/schedule.js";
 import { DEFAULT_SCHEDULE_RULES, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries } from "./modules/schedule/generator.js";
-import { exportScheduleWorkbook } from "./modules/schedule/export.js";
+import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
 import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
@@ -34,10 +34,12 @@ let state = {
   stockItems: [],
   stockMovements: [],
   stockOpnames: [],
-  stockSettings: { whatsappNumber: "", autoWhatsappEnabled: false, notifyCriticalOnly: true, notifyLowStock: false, whatsappTemplateName: "stock_alert_sowork", whatsappTemplateLanguage: "id", telegramEnabled: false, cloudflareWorkerUrl: "", telegramChatId: "", telegramAllowedUserId: "", telegramPairCode: "", telegramWhatsappNumber: "", telegramNotifyLowStock: true, telegramNotifyOrderDue: true, telegramNotifyWasteHigh: true, telegramNotifyWasteRiskDay: true, defaultLeadTimeDays: 2, defaultTargetCoverageDays: 7 },
+  stockSettings: { whatsappNumber: "", autoWhatsappEnabled: false, notifyCriticalOnly: true, notifyLowStock: false, whatsappTemplateName: "stock_alert_sowork", whatsappTemplateLanguage: "id", telegramEnabled: false, cloudflareWorkerUrl: "", telegramChatId: "", telegramAllowedUserId: "", telegramPairCode: "", telegramWhatsappNumber: "", telegramNotifyLowStock: true, telegramNotifyOrderDue: true, telegramNotifyWasteHigh: true, telegramNotifyWasteRiskDay: true, telegramNotifyDailyCheck: true, telegramNotifyOpsReminder: true, telegramOpsReminderHour: 20, defaultLeadTimeDays: 2, defaultTargetCoverageDays: 7 },
   stockSearch: "",
   stockStatusFilter: "Semua",
   opnameDate: null,
+  opnameSearch: "",
+  opnameFilter: "Semua",
   stockUsageDate: null,
   stockUsageMonth: null,
   wasteItems: [],
@@ -707,7 +709,7 @@ function renderSchedule(target) {
           <div class="legend-inline">
             <span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span>
           </div>
-          ${admin ? `<div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="copy-schedule" class="secondary compact">Copy Jadwal</button><button id="export-schedule" class="secondary compact">Export Excel</button></div>` : ""}
+          ${admin ? `<div class="table-actions schedule-share-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="copy-schedule" class="secondary compact">Copy ke Sheet</button><button id="sheet-ready-schedule" class="secondary compact" title="Google Sheets: File → Import → Upload → Insert new sheet(s). Merge ikut dari file XLSX.">Sheet-ready</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div>` : ""}
         </div>
       </div>
       ${renderScheduleMatrix(scheduleForGrid, rules, admin && !preview?.entries?.length)}
@@ -807,6 +809,18 @@ function renderSchedule(target) {
       setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
     }
   });
+  document.querySelector("#sheet-ready-schedule")?.addEventListener("click", () => {
+    try {
+      exportScheduleSheetReadyWorkbook({
+        entries: scheduleForGrid,
+        rules,
+        periodLabel: monthTitle(selected),
+        filename: `SoWork-Jadwal-SheetReady-${selected}.xlsx`
+      });
+    } catch (err) {
+      alert(err?.message || "Export Sheet-ready gagal.");
+    }
+  });
   document.querySelector("#export-schedule")?.addEventListener("click", () => {
     try {
       exportScheduleWorkbook({
@@ -846,49 +860,55 @@ async function copyScheduleToClipboard({ entries = [], rules, periodLabel = "Jad
     ["", "", "", "", ...dates.map(dayNameFromDate)]
   ];
 
-  const border = "border:1px solid #d9d9d9;";
-  const center = "text-align:center;vertical-align:middle;white-space:pre-wrap;";
-  const header = `background:#ffff00;color:#000;font-weight:700;${border}${center}`;
   const fillByShift = { S1: "#00e72d", S2: "#4285e8", Middle: "#ff9800", Libur: "#ff1616" };
+  const cols = [56, 145, 82, 145, ...dates.map(() => 122)];
+  const colgroup = `<colgroup>${cols.map(width => `<col style="width:${width}px">`).join("")}</colgroup>`;
+  const baseCell = "border:1px solid #d9d9d9;text-align:center;vertical-align:middle;white-space:pre-wrap;padding:7px 10px;font-family:Arial,sans-serif;font-size:10pt;";
+  const header = `${baseCell}background:#ffff00;color:#000;font-weight:700;`;
 
-  let html = `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:10pt"><thead><tr>`;
+  let table = `<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed">${colgroup}<thead><tr>`;
   ["No", "Nama Crew", "Gender", "Periode"].forEach(label => {
-    html += `<th rowspan="2" style="${header}padding:7px 10px">${escapeHtml(label)}</th>`;
+    table += `<th rowspan="2" style="${header}">${escapeHtml(label)}</th>`;
   });
-  dates.forEach(date => { html += `<th style="${header}padding:7px 10px">${escapeHtml(shortDate(date))}</th>`; });
-  html += `</tr><tr>`;
-  dates.forEach(date => { html += `<th style="${header}padding:6px 10px">${escapeHtml(dayNameFromDate(date))}</th>`; });
-  html += `</tr></thead><tbody>`;
+  dates.forEach(date => { table += `<th style="${header}">${escapeHtml(shortDate(date))}</th>`; });
+  table += `</tr><tr>`;
+  dates.forEach(date => { table += `<th style="${header}">${escapeHtml(dayNameFromDate(date))}</th>`; });
+  table += `</tr></thead><tbody>`;
 
   crew.forEach((name, index) => {
     const gender = (rules?.maleNames || []).includes(name) ? "Pria" : "Wanita";
     const identityFill = gender === "Pria" ? "#c6e0b4" : "#d5a6bd";
     const row = [index + 1, name, gender, periodLabel];
-    html += `<tr>`;
-    html += `<td style="background:${identityFill};${border}${center}padding:7px">${index + 1}</td>`;
-    html += `<td style="background:${identityFill};${border}${center}padding:7px">${escapeHtml(name)}</td>`;
-    html += `<td style="background:${identityFill};${border}${center}padding:7px">${escapeHtml(gender)}</td>`;
-    html += `<td style="background:#fff;${border}${center}padding:7px">${escapeHtml(periodLabel)}</td>`;
+    table += `<tr>`;
+    table += `<td style="${baseCell}background:${identityFill}">${index + 1}</td>`;
+    table += `<td style="${baseCell}background:${identityFill}">${escapeHtml(name)}</td>`;
+    table += `<td style="${baseCell}background:${identityFill}">${escapeHtml(gender)}</td>`;
+    table += `<td style="${baseCell}background:#fff">${escapeHtml(periodLabel)}</td>`;
 
     dates.forEach(date => {
       const item = byKey.get(`${date}__${name}`);
       if (!item) {
         row.push("");
-        html += `<td style="background:#fff;${border}${center}padding:7px"></td>`;
+        table += `<td style="${baseCell}background:#fff"></td>`;
         return;
       }
       const value = item.shift === "Libur" ? "LIBUR" : `${item.role || "-"}${item.overtime ? `\nLEMBUR: ${item.overtimeType || "Buka"}` : ""}`;
       row.push(value);
       const fill = item.overtime ? "#ffe500" : (fillByShift[item.shift] || "#fff");
       const dark = item.shift === "S1" || item.shift === "Middle" || item.overtime;
-      html += `<td style="background:${fill};color:${dark ? "#000" : "#fff"};${border}${center}padding:7px">${escapeHtml(value).replaceAll("\n", "<br>")}</td>`;
+      table += `<td style="${baseCell}background:${fill};color:${dark ? "#000" : "#fff"}">${escapeHtml(value).replaceAll("\n", "<br>")}</td>`;
     });
     plainRows.push(row);
-    html += `</tr>`;
+    table += `</tr>`;
   });
-  html += `</tbody></table>`;
+  table += `</tbody></table>`;
 
+  // Full Office-compatible HTML improves paste fidelity in Excel/Sheets.
+  // Merge metadata on browser clipboard is still target-app dependent, so a
+  // Sheet-ready XLSX is also provided as the guaranteed merge-preserving path.
+  const html = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><style>td,th{mso-number-format:"\\@";}br{mso-data-placement:same-cell;}</style></head><body>${table}</body></html>`;
   const text = plainRows.map(row => row.map(value => String(value ?? "").replaceAll("\t", " ")).join("\t")).join("\n");
+
   if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
     await navigator.clipboard.write([new ClipboardItem({
       "text/html": new Blob([html], { type: "text/html" }),
@@ -1470,16 +1490,24 @@ function applyStockFilters() {
 
 function applyOpnameFilter() {
   const query = normalizeSearchText(state.opnameSearch);
+  const filter = state.opnameFilter || "Semua";
   let visible = 0;
   document.querySelectorAll("#opname-form [data-opname-row]").forEach(card => {
-    const match = !query || normalizeSearchText(card.dataset.searchText).includes(query);
-    card.hidden = !match;
-    if (match) visible += 1;
+    const matchQuery = !query || normalizeSearchText(card.dataset.searchText).includes(query);
+    const matchFilter = filter === "Semua"
+      || (filter === "Belum diisi" && card.dataset.hasExisting !== "true")
+      || (filter === "Selisih" && card.dataset.reconStatus && card.dataset.reconStatus !== "Sesuai")
+      || (filter === "Krusial" && card.dataset.critical === "true");
+    card.hidden = !(matchQuery && matchFilter);
+    if (!card.hidden) visible += 1;
+  });
+  document.querySelectorAll("[data-opname-filter]").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.opnameFilter === filter);
   });
   const summary = document.querySelector("#opname-visible-count");
   if (summary) summary.textContent = String(visible);
   const saveCount = document.querySelector("#opname-save-count");
-  if (saveCount) saveCount.textContent = `${visible} barang akan disimpan`;
+  if (saveCount) saveCount.textContent = `${visible} barang tampil`;
   const saveBar = document.querySelector("#opname-save-bar");
   if (saveBar) saveBar.hidden = visible === 0;
   const empty = document.querySelector("#opname-filter-empty");
@@ -1746,127 +1774,143 @@ function renderStockOpname(target) {
   const date = state.opnameDate || localDateKey(new Date());
   state.opnameDate = date;
   const search = normalizeSearchText(state.opnameSearch);
+  const filter = state.opnameFilter || "Semua";
   const allItems = state.stockItems
     .filter(x => x.active !== false)
     .slice()
     .sort((a,b) => String(a.name).localeCompare(String(b.name), "id"));
-  const visibleItems = allItems.filter(item =>
-    !search || normalizeSearchText(`${item.name || ""} ${item.category || ""}`).includes(search)
-  );
   const existing = Object.fromEntries(
     state.stockOpnames.filter(x => x.date === date).map(x => [x.itemId, x])
   );
   const reconciliationRows = buildStockReconciliation(allItems, state.stockOpnames, state.stockMovements, date);
-  const reconciliationByItem = Object.fromEntries(reconciliationRows.map(x=>[x.id,x]));
-  const savedRecon = reconciliationRows.filter(x=>x.physicalQty!=null);
-  const shortageCount = savedRecon.filter(x=>x.reconciliationStatus==="Selisih Kurang").length;
-  const overCount = savedRecon.filter(x=>x.reconciliationStatus==="Selisih Lebih").length;
-  const matchedCount = savedRecon.filter(x=>x.reconciliationStatus==="Sesuai").length;
+  const reconciliationByItem = Object.fromEntries(reconciliationRows.map(x => [x.id, x]));
+  const savedRecon = reconciliationRows.filter(x => x.physicalQty != null);
+  const shortageCount = savedRecon.filter(x => x.reconciliationStatus === "Selisih Kurang").length;
+  const overCount = savedRecon.filter(x => x.reconciliationStatus === "Selisih Lebih").length;
+  const matchedCount = savedRecon.filter(x => x.reconciliationStatus === "Sesuai").length;
+  const savedCount = allItems.filter(item => Boolean(existing[item.id])).length;
 
   target.innerHTML = `
-    <section class="page-intro stock-opname-intro">
+    <section class="page-intro stock-opname-intro opname-intro-compact">
       <div>
         <span class="overline">STOCK OPNAME</span>
-        <h1>Hitung stok tanpa ribet.</h1>
-        <p>Isi stok fisik per lokasi. SoWork membandingkannya dengan stok sistem: <b>SO sebelumnya + barang masuk − penggunaan harian</b>. Selisih akhir bulan jadi alat kontrol kehilangan, salah input, atau pemakaian yang belum tercatat.</p>
+        <h1>Stock fisik, lebih cepat dicek.</h1>
+        <p>Pilih tanggal, cari barang, lalu isi jumlah di tiap lokasi. Selisih terhadap stok sistem langsung terlihat.</p>
       </div>
-      <div class="action-row"><button id="import-opname" class="secondary">Import Excel</button><button id="export-opname" class="secondary">Export Excel</button><button id="opname-add-item" class="primary">+ Barang Baru</button></div>
+      <div class="opname-top-actions">
+        <button id="opname-add-item" class="primary compact">+ Barang</button>
+        <details class="opname-file-actions">
+          <summary class="secondary compact">File</summary>
+          <div class="opname-file-menu">
+            <button id="import-opname" class="secondary compact" type="button">Import Excel</button>
+            <button id="export-opname" class="secondary compact" type="button">Export Excel</button>
+          </div>
+        </details>
+      </div>
     </section>
 
-    <article class="panel opname-toolbar">
-      <div class="opname-toolbar-main">
+    <article class="panel opname-control-panel-modern">
+      <div class="opname-control-top">
         <label class="opname-date-control">
           <span>Tanggal SO</span>
           <input id="opname-date" type="date" value="${escapeHtml(date)}" />
         </label>
         <label class="search-control opname-search">
           <span>Cari barang</span>
-          <input id="opname-search" value="${escapeHtml(state.opnameSearch || "")}" placeholder="Gula, cup, yoghurt..." />
+          <input id="opname-search" type="search" autocomplete="off" value="${escapeHtml(state.opnameSearch || "")}" placeholder="Nama / kategori..." />
         </label>
+        <div class="opname-progress-mini">
+          <strong id="opname-visible-count">${allItems.length}</strong>
+          <span>tampil · ${savedCount}/${allItems.length} sudah SO</span>
+        </div>
       </div>
-      <div class="opname-summary">
-        <strong id="opname-visible-count">${visibleItems.length}</strong>
-        <span>dari ${allItems.length} barang</span>
+      <div class="opname-filter-chips" aria-label="Filter Stock Opname">
+        ${[
+          ["Semua", allItems.length],
+          ["Belum diisi", Math.max(0, allItems.length - savedCount)],
+          ["Selisih", shortageCount + overCount],
+          ["Krusial", allItems.filter(x => x.criticalItem).length]
+        ].map(([id,count]) => `<button type="button" class="opname-filter-chip ${filter === id ? "active" : ""}" data-opname-filter="${id}"><span>${id}</span><b>${count}</b></button>`).join("")}
       </div>
     </article>
 
-    <div class="metric-grid reconciliation-metrics">
-      <article class="metric-card"><span class="metric-label">Sesuai</span><strong>${matchedCount}</strong><small>fisik ≈ sistem</small></article>
-      <article class="metric-card ${shortageCount?"metric-alert":""}"><span class="metric-label">Selisih Kurang</span><strong>${shortageCount}</strong><small>fisik lebih sedikit</small></article>
-      <article class="metric-card"><span class="metric-label">Selisih Lebih</span><strong>${overCount}</strong><small>fisik lebih banyak</small></article>
-      <article class="metric-card"><span class="metric-label">Rekonsiliasi</span><strong>${savedRecon.length}</strong><small>item sudah punya hasil SO</small></article>
+    <div class="opname-status-strip">
+      <div><span>Sesuai</span><strong>${matchedCount}</strong></div>
+      <div class="${shortageCount ? "is-alert" : ""}"><span>Kurang</span><strong>${shortageCount}</strong></div>
+      <div><span>Lebih</span><strong>${overCount}</strong></div>
+      <div><span>Tersimpan</span><strong>${savedCount}</strong></div>
     </div>
 
-    <form id="opname-form">
-      <div class="opname-list">
+    <form id="opname-form" class="opname-form-modern">
+      <div class="opname-list opname-list-modern">
         ${allItems.map(item => {
           const row = existing[item.id] || {};
+          const hasExisting = Boolean(existing[item.id]);
           const q1 = row.primaryQty ?? item.lastPrimaryQty ?? item.currentQty ?? 0;
           const q2 = row.secondaryQty ?? item.lastSecondaryQty ?? 0;
           const total = Number(q1 || 0) + Number(q2 || 0);
           const theoretical = calculateTheoreticalStock(item, date, state.stockOpnames, state.stockMovements);
           const systemQty = row.systemQtyBeforeOpname ?? theoretical.systemQty;
           const diff = total - Number(systemQty || 0);
-          const diffClass = Math.abs(diff) <= Math.max(0.01, Number(systemQty||0)*0.0025) ? "safe" : diff < 0 ? "critical" : "low";
+          const tol = Math.max(0.01, Number(systemQty || 0) * 0.0025);
+          const reconStatus = Math.abs(diff) <= tol ? "Sesuai" : diff < 0 ? "Selisih Kurang" : "Selisih Lebih";
+          const diffClass = reconStatus === "Sesuai" ? "safe" : diff < 0 ? "critical" : "low";
           return `
-            <article class="opname-item-card" data-opname-row="${escapeHtml(item.id)}" data-search-text="${escapeHtml(`${item.name || ""} ${item.category || ""}`)}">
-              <div class="opname-item-head">
+            <article class="opname-item-card opname-item-modern"
+              data-opname-row="${escapeHtml(item.id)}"
+              data-search-text="${escapeHtml(`${item.name || ""} ${item.category || ""}`)}"
+              data-has-existing="${hasExisting ? "true" : "false"}"
+              data-recon-status="${escapeHtml(hasExisting ? reconStatus : "") }"
+              data-critical="${item.criticalItem ? "true" : "false"}">
+              <div class="opname-item-head opname-item-head-modern">
                 <div class="opname-item-title">
-                  <strong>${escapeHtml(item.name)}</strong>
+                  <div class="opname-title-line">
+                    <strong>${escapeHtml(item.name)}</strong>
+                    ${item.criticalItem ? `<span class="opname-mini-badge critical">Krusial</span>` : ""}
+                    ${hasExisting ? `<span class="opname-mini-badge saved">Tersimpan</span>` : `<span class="opname-mini-badge pending">Belum SO</span>`}
+                  </div>
                   <span>${escapeHtml(item.category || "Bahan")} · ${escapeHtml(item.unit || "PCS")}${item.cartonSize ? ` · 1 karton = ${formatQty(item.cartonSize)} ${escapeHtml(item.unit || "PCS")}` : ""}</span>
                 </div>
-                <div class="opname-item-actions">
-                  ${item.criticalItem ? `<span class="stock-status critical">Krusial</span>` : ""}
-                  <button type="button" class="secondary small" data-edit-opname-item="${escapeHtml(item.id)}">Edit Master</button>
-                </div>
+                <button type="button" class="opname-master-link" data-edit-opname-item="${escapeHtml(item.id)}">Edit</button>
               </div>
 
-              <div class="opname-entry-grid">
-                <label>
-                  <span>Lokasi 1</span>
-                  <input name="loc1_${escapeHtml(item.id)}" value="${escapeHtml(row.primaryLocation || item.primaryLocation || "Gudang Utama")}" />
+              <div class="opname-location-grid">
+                <label class="opname-location-card">
+                  <span class="opname-location-label">Lokasi 1</span>
+                  <input class="opname-location-input" name="loc1_${escapeHtml(item.id)}" value="${escapeHtml(row.primaryLocation || item.primaryLocation || "Gudang Utama")}" aria-label="Nama lokasi 1 ${escapeHtml(item.name)}" />
+                  <div class="opname-qty-box">
+                    <input class="qty-input" inputmode="decimal" name="q1_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(q1 || 0)}" aria-label="Jumlah lokasi 1 ${escapeHtml(item.name)}" />
+                    <b>${escapeHtml(item.unit || "PCS")}</b>
+                  </div>
                 </label>
-                <label>
-                  <span>Jumlah</span>
-                  <input class="qty-input" name="q1_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(q1 || 0)}" />
-                </label>
-                <label>
-                  <span>Lokasi 2</span>
-                  <input name="loc2_${escapeHtml(item.id)}" value="${escapeHtml(row.secondaryLocation || item.secondaryLocation || "Gudang 2")}" />
-                </label>
-                <label>
-                  <span>Jumlah</span>
-                  <input class="qty-input" name="q2_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(q2 || 0)}" />
+                <label class="opname-location-card">
+                  <span class="opname-location-label">Lokasi 2</span>
+                  <input class="opname-location-input" name="loc2_${escapeHtml(item.id)}" value="${escapeHtml(row.secondaryLocation || item.secondaryLocation || "Gudang 2")}" aria-label="Nama lokasi 2 ${escapeHtml(item.name)}" />
+                  <div class="opname-qty-box">
+                    <input class="qty-input" inputmode="decimal" name="q2_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(q2 || 0)}" aria-label="Jumlah lokasi 2 ${escapeHtml(item.name)}" />
+                    <b>${escapeHtml(item.unit || "PCS")}</b>
+                  </div>
                 </label>
               </div>
 
-              <div class="opname-result-bar">
-                <div>
-                  <span>Total aktual</span>
-                  <strong data-total-for="${escapeHtml(item.id)}">${escapeHtml(formatQtyWithCarton(total, item))}</strong>
-                  <small data-total-base-for="${escapeHtml(item.id)}">${formatQty(total)} ${escapeHtml(item.unit || "PCS")}</small>
-                </div>
-                <div class="opname-system-compare">
-                  <span>Stok sistem <b>${formatQty(systemQty)} ${escapeHtml(item.unit||"PCS")}</b></span>
-                  <span>Selisih <b class="stock-status ${diffClass}" data-diff-for="${escapeHtml(item.id)}">${diff>0?"+":""}${formatQty(diff)} ${escapeHtml(item.unit||"PCS")}</b></span>
-                </div>
-                <div class="opname-thresholds">
-                  <span>Kritis ≤ <b>${formatQty(item.criticalThreshold || 0)}</b></span>
-                  <span>Menipis ≤ <b>${formatQty(item.lowThreshold || 0)}</b></span>
-                </div>
+              <div class="opname-result-grid">
+                <div><span>Sistem</span><strong>${formatQty(systemQty)} ${escapeHtml(item.unit || "PCS")}</strong></div>
+                <div><span>Fisik</span><strong data-total-for="${escapeHtml(item.id)}">${escapeHtml(formatQtyWithCarton(total, item))}</strong><small data-total-base-for="${escapeHtml(item.id)}">${formatQty(total)} ${escapeHtml(item.unit || "PCS")}</small></div>
+                <div><span>Selisih</span><strong class="stock-status ${diffClass}" data-diff-for="${escapeHtml(item.id)}">${diff > 0 ? "+" : ""}${formatQty(diff)} ${escapeHtml(item.unit || "PCS")}</strong></div>
               </div>
+              <div class="opname-limit-note">Batas: kritis ≤ ${formatQty(item.criticalThreshold || 0)} · menipis ≤ ${formatQty(item.lowThreshold || 0)}</div>
             </article>`;
         }).join("")}
-        <div id="opname-filter-empty" hidden>${emptyState("Barang tidak ditemukan.")}</div>
+        <div id="opname-filter-empty" hidden>${emptyState("Barang tidak ditemukan untuk filter ini.")}</div>
       </div>
 
       ${allItems.length ? `
-        <div id="opname-save-bar" class="sticky-save-bar">
+        <div id="opname-save-bar" class="sticky-save-bar opname-save-bar-modern">
           <div>
             <strong>SO ${escapeHtml(formatDate(date))}</strong>
-            <span id="opname-save-count">${visibleItems.length} barang akan disimpan</span>
+            <span id="opname-save-count">${allItems.length} barang tampil</span>
           </div>
-          <button class="primary">Simpan Stock Opname</button>
+          <button class="primary">Simpan SO</button>
         </div>
       ` : ""}
     </form>
@@ -1882,6 +1926,13 @@ function renderStockOpname(target) {
     applyOpnameFilter();
   });
 
+  document.querySelectorAll("[data-opname-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.opnameFilter = btn.dataset.opnameFilter || "Semua";
+      applyOpnameFilter();
+    });
+  });
+
   document.querySelector("#import-opname")?.addEventListener("click", () => runExcelImport("opname"));
   document.querySelector("#export-opname")?.addEventListener("click", () => exportStockOpnameWorkbook({ items: state.stockItems, opnames: state.stockOpnames, movements: state.stockMovements, filename: `SoWork-Stock-Opname-${date}.xlsx` }));
   document.querySelector("#opname-add-item")?.addEventListener("click", () => openStockItemEditor(null));
@@ -1895,28 +1946,35 @@ function renderStockOpname(target) {
 
   document.querySelectorAll(".qty-input").forEach(input => {
     input.addEventListener("input", () => {
-      const row = input.closest("[data-opname-row]");
-      const id = row?.dataset.opnameRow;
+      const card = input.closest("[data-opname-row]");
+      const id = card?.dataset.opnameRow;
       if (!id) return;
-      const q1 = Number(row.querySelector(`[name="q1_${CSS.escape(id)}"]`)?.value || 0);
-      const q2 = Number(row.querySelector(`[name="q2_${CSS.escape(id)}"]`)?.value || 0);
-      const total = row.querySelector(`[data-total-for="${CSS.escape(id)}"]`);
-      const totalBase = row.querySelector(`[data-total-base-for="${CSS.escape(id)}"]`);
+      const q1 = Number(card.querySelector(`[name="q1_${CSS.escape(id)}"]`)?.value || 0);
+      const q2 = Number(card.querySelector(`[name="q2_${CSS.escape(id)}"]`)?.value || 0);
+      const total = card.querySelector(`[data-total-for="${CSS.escape(id)}"]`);
+      const totalBase = card.querySelector(`[data-total-base-for="${CSS.escape(id)}"]`);
       const item = state.stockItems.find(x => x.id === id);
       if (total) total.textContent = formatQtyWithCarton(q1 + q2, item);
       if (totalBase) totalBase.textContent = `${formatQty(q1 + q2)} ${item?.unit || "PCS"}`;
-      const diffEl=row.querySelector(`[data-diff-for="${CSS.escape(id)}"]`);
-      const theo=calculateTheoreticalStock(item,state.opnameDate||localDateKey(new Date()),state.stockOpnames,state.stockMovements);
-      const saved=existing[id];
-      const sys=Number(saved?.systemQtyBeforeOpname ?? theo.systemQty ?? 0);
-      const diff=(q1+q2)-sys;
-      if(diffEl){diffEl.textContent=`${diff>0?"+":""}${formatQty(diff)} ${item?.unit||"PCS"}`;diffEl.className=`stock-status ${Math.abs(diff)<=Math.max(0.01,sys*0.0025)?"safe":diff<0?"critical":"low"}`;}
+      const diffEl = card.querySelector(`[data-diff-for="${CSS.escape(id)}"]`);
+      const theo = calculateTheoreticalStock(item, state.opnameDate || localDateKey(new Date()), state.stockOpnames, state.stockMovements);
+      const saved = existing[id];
+      const sys = Number(saved?.systemQtyBeforeOpname ?? theo.systemQty ?? 0);
+      const diff = (q1 + q2) - sys;
+      const tol = Math.max(0.01, sys * 0.0025);
+      const status = Math.abs(diff) <= tol ? "Sesuai" : diff < 0 ? "Selisih Kurang" : "Selisih Lebih";
+      card.dataset.reconStatus = status;
+      if (diffEl) {
+        diffEl.textContent = `${diff > 0 ? "+" : ""}${formatQty(diff)} ${item?.unit || "PCS"}`;
+        diffEl.className = `stock-status ${status === "Sesuai" ? "safe" : diff < 0 ? "critical" : "low"}`;
+      }
+      if (state.opnameFilter === "Selisih") applyOpnameFilter();
     });
   });
 
   document.querySelector("#opname-form")?.addEventListener("submit", async e => {
     e.preventDefault();
-    const visibleIds = new Set([...e.currentTarget.querySelectorAll("[data-opname-row]:not([hidden])")].map(row => row.dataset.opnameRow));
+    const visibleIds = new Set([...e.currentTarget.querySelectorAll("[data-opname-row]:not([hidden])")].map(card => card.dataset.opnameRow));
     const submitItems = allItems.filter(item => visibleIds.has(item.id));
     if (!submitItems.length) return;
     const fd = new FormData(e.currentTarget);
@@ -1929,28 +1987,41 @@ function renderStockOpname(target) {
       secondaryQty: fd.get(`q2_${item.id}`),
       unit: item.unit,
       ...(() => {
-        const physical = Number(fd.get(`q1_${item.id}`)||0) + Number(fd.get(`q2_${item.id}`)||0);
+        const physical = Number(fd.get(`q1_${item.id}`) || 0) + Number(fd.get(`q2_${item.id}`) || 0);
         const t = calculateTheoreticalStock(item, date, state.stockOpnames, state.stockMovements);
         const saved = existing[item.id];
         const systemQty = Number(saved?.systemQtyBeforeOpname ?? t.systemQty ?? item.currentQty ?? 0);
         const varianceQty = physical - systemQty;
-        const variancePct = systemQty > 0 ? (varianceQty/systemQty)*100 : null;
-        const accuracyPct = systemQty > 0 ? Math.max(0,100-(Math.abs(varianceQty)/systemQty*100)) : (physical===0?100:0);
-        const tol=Math.max(0.01,systemQty*0.0025);
-        return {systemQtyBeforeOpname:systemQty,varianceQty,variancePct,accuracyPct,reconciliationStatus:Math.abs(varianceQty)<=tol?"Sesuai":varianceQty<0?"Selisih Kurang":"Selisih Lebih",previousOpnameDate:t.previousOpnameDate,incomingSincePrevious:t.incoming,usageSincePrevious:t.usage};
+        const variancePct = systemQty > 0 ? (varianceQty / systemQty) * 100 : null;
+        const accuracyPct = systemQty > 0 ? Math.max(0, 100 - (Math.abs(varianceQty) / systemQty * 100)) : (physical === 0 ? 100 : 0);
+        const tol = Math.max(0.01, systemQty * 0.0025);
+        return {
+          systemQtyBeforeOpname: systemQty,
+          varianceQty,
+          variancePct,
+          accuracyPct,
+          reconciliationStatus: Math.abs(varianceQty) <= tol ? "Sesuai" : varianceQty < 0 ? "Selisih Kurang" : "Selisih Lebih",
+          previousOpnameDate: t.previousOpnameDate,
+          incomingSincePrevious: t.incoming,
+          usageSincePrevious: t.usage
+        };
       })()
     }));
 
-    if (!confirm(`Simpan Stock Opname ${formatDate(date)} untuk ${rows.length} barang? Setelah tersimpan, stok sistem dikoreksi ke stok fisik dan selisih rekonsiliasi disimpan.`)) return;
-
+    if (!confirm(`Simpan Stock Opname ${formatDate(date)} untuk ${rows.length} barang? Stok sistem akan dikoreksi ke stok fisik.`)) return;
+    const saveButton = e.currentTarget.querySelector("#opname-save-bar button");
+    const oldLabel = saveButton?.textContent || "Simpan SO";
+    if (saveButton) { saveButton.disabled = true; saveButton.textContent = "Menyimpan..."; }
     try {
       await saveStockOpname(date, rows, {
         uid: state.user?.uid,
         name: state.profile?.name || state.user?.email
       });
-      alert("Stock Opname berhasil disimpan. Selisih fisik vs sistem tercatat dan stok sistem sudah dikoreksi ke stok fisik.");
+      if (saveButton) saveButton.textContent = "Tersimpan ✓";
+      setTimeout(() => scheduleRender(["opname"]), 250);
     } catch (err) {
       alert(err?.message || friendlyError(err));
+      if (saveButton) { saveButton.disabled = false; saveButton.textContent = oldLabel; }
     }
   });
   applyOpnameFilter();
@@ -2226,7 +2297,16 @@ function openStockSettingsEditor() {
           <label class="check-line simple"><input name="telegramNotifyOrderDue" type="checkbox" ${s.telegramNotifyOrderDue !== false ? "checked" : ""}/><span>Reminder order + jumlah beli (08:00 WIB)</span></label>
           <label class="check-line simple"><input name="telegramNotifyWasteHigh" type="checkbox" ${s.telegramNotifyWasteHigh !== false ? "checked" : ""}/><span>Alert High Waste</span></label>
           <label class="check-line simple"><input name="telegramNotifyWasteRiskDay" type="checkbox" ${s.telegramNotifyWasteRiskDay !== false ? "checked" : ""}/><span>Reminder hari rawan Waste (06:30 WIB)</span></label>
+          <label class="check-line simple"><input name="telegramNotifyDailyCheck" type="checkbox" ${s.telegramNotifyDailyCheck !== false ? "checked" : ""}/><span>Ingatkan Daily Check yang belum selesai</span></label>
+          <label class="check-line simple"><input name="telegramNotifyOpsReminder" type="checkbox" ${s.telegramNotifyOpsReminder !== false ? "checked" : ""}/><span>Ingatkan cek Stock + Waste malam</span></label>
         </div>
+        <label class="telegram-time-setting">Jam reminder operasional
+          <select name="telegramOpsReminderHour">
+            <option value="18" ${Number(s.telegramOpsReminderHour || 20) === 18 ? "selected" : ""}>18:00 WIB</option>
+            <option value="20" ${Number(s.telegramOpsReminderHour || 20) === 20 ? "selected" : ""}>20:00 WIB</option>
+          </select>
+          <small class="field-help">Daily Check yang belum selesai dan pengingat cek Stock/Waste dikirim pada jam ini.</small>
+        </label>
 
         <div class="settings-shortcut-actions cloudflare-actions">
           <button type="button" id="check-cloudflare-worker" class="secondary">Cek Worker</button>
@@ -2235,8 +2315,8 @@ function openStockSettingsEditor() {
           ${paired ? '<button type="button" id="unpair-telegram" class="danger">Unpair Semua</button>' : ''}
         </div>
 
-        <div class="inline-rule telegram-rule"><strong>Alur gratis:</strong> SoWork menyimpan data utama di Firestore Spark. Saat Admin mengubah Stock/Waste, browser mengirim snapshot terproteksi Firebase ID Token ke Cloudflare D1. Cron Cloudflare kemudian bisa mengingatkan Telegram walaupun SoWork sudah ditutup.</div>
-        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Kode yang sama bisa dipakai beberapa akun Telegram; pairing baru menambah penerima dan tidak mengganti akun yang sudah terhubung. Setelah itu command <code>/stock</code>, <code>/order</code>, dan <code>/waste</code> aktif.</div>
+        <div class="inline-rule telegram-rule"><strong>Alur gratis:</strong> SoWork menyimpan data utama di Firestore Spark. Saat Admin mengubah Jadwal/Daily Check/Stock/Waste, browser mengirim snapshot terproteksi Firebase ID Token ke Cloudflare D1. Cron Cloudflare kemudian bisa mengingatkan Telegram walaupun SoWork sudah ditutup.</div>
+        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Kode yang sama bisa dipakai beberapa akun Telegram; pairing baru menambah penerima dan tidak mengganti akun yang sudah terhubung. Setelah itu command <code>/stock</code>, <code>/order</code>, <code>/waste</code>, dan <code>/check</code> aktif.</div>
         <div class="inline-rule telegram-rule"><strong>WhatsApp:</strong> alert Telegram punya tombol “Teruskan ke WhatsApp”. Auto-send WA tanpa klik tetap membutuhkan WhatsApp Business API resmi.</div>
 
         <input type="hidden" name="telegramChatId" value="${escapeHtml(workerStatus?.chatId || s.telegramChatId || "")}"/>
@@ -2317,6 +2397,9 @@ function openStockSettingsEditor() {
       telegramNotifyOrderDue: Boolean(form.elements.namedItem("telegramNotifyOrderDue")?.checked),
       telegramNotifyWasteHigh: Boolean(form.elements.namedItem("telegramNotifyWasteHigh")?.checked),
       telegramNotifyWasteRiskDay: Boolean(form.elements.namedItem("telegramNotifyWasteRiskDay")?.checked),
+      telegramNotifyDailyCheck: Boolean(form.elements.namedItem("telegramNotifyDailyCheck")?.checked),
+      telegramNotifyOpsReminder: Boolean(form.elements.namedItem("telegramNotifyOpsReminder")?.checked),
+      telegramOpsReminderHour: [18, 20].includes(Number(fd.get("telegramOpsReminderHour"))) ? Number(fd.get("telegramOpsReminderHour")) : 20,
       defaultLeadTimeDays: Number(fd.get("defaultLeadTimeDays") || 2),
       defaultTargetCoverageDays: Number(fd.get("defaultTargetCoverageDays") || 7)
     };
@@ -3204,6 +3287,9 @@ function renderPlaceholder(target) {
 function buildCloudflareSnapshot() {
   return {
     settings: state.stockSettings || {},
+    schedules: state.schedules || [],
+    checklist: state.checklist || [],
+    checklistCompletions: state.checklistCompletions || [],
     stockItems: state.stockItems || [],
     stockMovements: state.stockMovements || [],
     stockOpnames: state.stockOpnames || [],
@@ -3295,21 +3381,21 @@ function startRealtime() {
 
   state.unsubs.push(
     watchSchedules(
-      rows => { state.schedules = rows; scheduleRender(["dashboard","schedule","checklist"]); },
+      rows => { state.schedules = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","schedule","checklist"]); },
       err => console.error("Schedule listener:", err)
     )
   );
 
   state.unsubs.push(
     watchChecklist(
-      rows => { state.checklist = rows; scheduleRender(["dashboard","checklist"]); },
+      rows => { state.checklist = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","checklist"]); },
       err => console.error("Checklist listener:", err)
     )
   );
 
   state.unsubs.push(
     watchChecklistCompletions(
-      rows => { state.checklistCompletions = rows; scheduleRender(["checklist"]); },
+      rows => { state.checklistCompletions = rows; scheduleCloudflareSync(); scheduleRender(["checklist"]); },
       err => console.error("Checklist completion listener:", err)
     )
   );

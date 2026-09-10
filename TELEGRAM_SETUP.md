@@ -117,3 +117,15 @@ Auto-send 100% tanpa klik tetap membutuhkan API WhatsApp resmi.
 ## Batas Free yang relevan
 
 Cloudflare Workers Free memiliki request harian yang jauh di atas kebutuhan SoWork kecil, dan akun Free mendukung Cron Trigger. D1 Free cukup untuk snapshot operasional ringan. Cek dokumentasi Cloudflare jika limit berubah.
+
+## v1.5.2 — Daily Check + reminder malam
+
+SoWork sekarang ikut menyinkronkan Jadwal, template Daily Check, dan status completion ke snapshot Cloudflare.
+
+- Command baru `/check` menampilkan progres Daily Check hari ini.
+- Jika **Ingatkan Daily Check** aktif, task yang belum selesai akan ikut dikirim pada reminder malam.
+- Jika **Ingatkan cek Stock + Waste malam** aktif, bot mengecek apakah penggunaan Stock dan Waste hari ini sudah diinput.
+- Jam reminder dapat dipilih **18:00 WIB** atau **20:00 WIB** dari Settings → Telegram & Alert.
+- Cron tambahan Cloudflare: `0 11 * * *` (18:00 WIB) dan `0 13 * * *` (20:00 WIB). Worker hanya mengirim pada jam yang dipilih di Settings.
+
+> Perubahan frontend otomatis terdeploy lewat GitHub Pages. Perubahan cron/logic Telegram berada di `cloudflare-worker`, jadi Worker perlu dideploy ulang setelah update versi ini (`npm.cmd run cf:deploy`) kecuali deployment Cloudflare sudah diotomatisasi sendiri.

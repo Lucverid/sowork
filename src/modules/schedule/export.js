@@ -124,6 +124,67 @@ export function exportScheduleWorkbook({ entries = [], rules, periodLabel = "Jad
   XLSX.writeFile(wb, filename);
 }
 
+
+// File khusus untuk dimasukkan ke spreadsheet pribadi lewat File → Import.
+// Berbeda dari clipboard biasa, format XLSX membawa metadata merge secara nyata.
+export function exportScheduleSheetReadyWorkbook({ entries = [], rules, periodLabel = "Jadwal", filename = "SoWork-Jadwal-SheetReady.xlsx" }) {
+  if (!entries.length) throw new Error("Tidak ada jadwal untuk diekspor.");
+
+  const preferred = [...(rules?.maleNames || []), ...(rules?.femaleNames || [])];
+  const preferredIndex = name => {
+    const index = preferred.indexOf(name);
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  const crew = [...new Set(entries.map(e => e.crewName).filter(Boolean))]
+    .sort((a, b) => preferredIndex(a) - preferredIndex(b) || String(a).localeCompare(String(b), "id"));
+  const dates = [...new Set(entries.map(e => e.date).filter(Boolean))].sort();
+  const byKey = new Map(entries.map(e => [`${e.date}__${e.crewName}`, e]));
+
+  const row1 = ["No", "Nama Crew", "Gender", "Periode", ...dates.map(shortDate)];
+  const row2 = ["", "", "", "", ...dates.map(dayName)];
+  const aoa = [row1, row2];
+
+  crew.forEach((name, index) => {
+    const gender = (rules?.maleNames || []).includes(name) ? "Pria" : "Wanita";
+    const row = [index + 1, name, gender, periodLabel];
+    dates.forEach(date => {
+      const item = byKey.get(`${date}__${name}`);
+      if (!item) return row.push("");
+      row.push(item.shift === "Libur" ? "LIBUR" : `${item.role || "-"}${item.overtime ? `\nLEMBUR: ${item.overtimeType || "Buka"}` : ""}`);
+    });
+    aoa.push(row);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 6 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, ...dates.map(() => ({ wch: 16 }))];
+  ws["!rows"] = [{ hpt: 25 }, { hpt: 24 }, ...crew.map(() => ({ hpt: 34 }))];
+  ws["!merges"] = [0, 1, 2, 3].map(c => ({ s: { r: 0, c }, e: { r: 1, c } }));
+  ws["!freeze"] = { xSplit: 4, ySplit: 2 };
+
+  for (let c = 0; c < row1.length; c++) {
+    for (let r = 0; r < 2; r++) styleCell(ws, r, c, COLORS.header, "FF000000", true);
+  }
+
+  crew.forEach((name, crewIndex) => {
+    const rowIndex = crewIndex + 2;
+    const gender = (rules?.maleNames || []).includes(name) ? "Pria" : "Wanita";
+    const identityFill = gender === "Pria" ? COLORS.male : COLORS.female;
+    [0,1,2].forEach(c => styleCell(ws, rowIndex, c, identityFill, "FF000000", false));
+    styleCell(ws, rowIndex, 3, "FFFFFFFF", "FF000000", false);
+    dates.forEach((date, dateIndex) => {
+      const item = byKey.get(`${date}__${name}`);
+      if (!item) return;
+      const fill = item.overtime ? COLORS.Lembur : (COLORS[item.shift] || "FFFFFFFF");
+      const darkText = item.shift === "S1" || item.shift === "Middle" || item.overtime;
+      styleCell(ws, rowIndex, dateIndex + 4, fill, darkText ? "FF000000" : "FFFFFFFF", false);
+    });
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Jadwal");
+  XLSX.writeFile(wb, filename);
+}
+
 function styleCell(ws, row, col, fill, fontColor, bold) {
   const addr = XLSX.utils.encode_cell({ r: row, c: col });
   if (!ws[addr]) ws[addr] = { t: "s", v: "" };
