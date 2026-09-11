@@ -2,7 +2,7 @@ import "./style.css";
 import { getUserProfile, isAdmin, login, logout, observeAuth, registerViewer } from "./auth/auth.js";
 import { watchSchedules, saveSchedule, removeSchedule, watchScheduleRules, saveScheduleRules, replaceScheduleRange } from "./modules/schedule/schedule.js";
 import { DEFAULT_SCHEDULE_RULES, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries } from "./modules/schedule/generator.js";
-import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
+import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook, copyScheduleToClipboard } from "./modules/schedule/export.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
 import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
@@ -516,14 +516,7 @@ function renderPage() {
   }
 
   if (state.page === "dashboard") return renderDashboard(target);
-  if (state.page === "schedule") {
-    try {
-      return renderSchedule(target);
-    } catch (err) {
-      console.error("[SoWork] Schedule render failed", err);
-      return renderScheduleEmergency(target, err);
-    }
-  }
+  if (state.page === "schedule") return renderSchedule(target);
   if (state.page === "checklist") return renderChecklist(target);
   if (state.page === "stock") return renderStock(target);
   if (state.page === "opname") return renderStockOpname(target);
@@ -681,7 +674,7 @@ function scheduleMonthForDate(value) {
 
 function latestScheduleMonth(entries = []) {
   const dates = entries.map(x => String(x?.date || "")).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)).sort();
-  return dates.length ? scheduleMonthForDate(dates.at(-1)) : null;
+  return dates.length ? scheduleMonthForDate(dates[dates.length - 1]) : null;
 }
 
 function scheduleRangeKeys(monthKey, includeCarryover = true) {
@@ -696,43 +689,6 @@ function schedulesForPeriod(entries, monthKey, includeCarryover = true) {
   return (entries || []).filter(row => {
     const key = String(row?.date || "");
     return key >= range.start && key <= range.end;
-  });
-}
-
-function renderScheduleEmergency(target, err) {
-  const admin = isAdmin(state.profile);
-  const rules = normalizeRules(state.scheduleRules || DEFAULT_SCHEDULE_RULES);
-  const selected = /^\d{4}-\d{2}$/.test(String(state.scheduleMonth || "")) ? state.scheduleMonth : defaultScheduleMonth();
-  state.scheduleMonth = selected;
-  const entries = Array.isArray(state.schedules)
-    ? state.schedules.filter(x => x && typeof x === "object" && /^\d{4}-\d{2}-\d{2}$/.test(String(x.date || "")) && x.crewName)
-    : [];
-  const [year, month] = selected.split("-").map(Number);
-  const start = new Date(year, month - 2, 26);
-  const end = new Date(year, month - 1, 25);
-  const visible = entries.filter(x => {
-    const d = parseLocalDate(x.date);
-    return d && d >= start && d <= end;
-  });
-
-  target.innerHTML = `
-    <section class="page-intro">
-      <div><span class="overline">SMART SCHEDULER</span><h1>Jadwal Kerja</h1><p>Mode pemulihan aktif. Data jadwal tetap bisa dilihat meski komponen tambahan mengalami error.</p></div>
-      <span class="access-tag ${admin ? "" : "read"}">${admin ? "ADMIN" : "VIEWER"}</span>
-    </section>
-    <div class="notice warning"><strong>Jadwal dibuka dalam mode aman</strong><span>${escapeHtml(err?.message || "Renderer utama gagal dimuat.")}</span></div>
-    <article class="panel schedule-grid-panel">
-      <div class="panel-head schedule-head-actions">
-        <div><span class="overline">MONTHLY VIEW</span><h3>${escapeHtml(monthTitle(selected))}</h3></div>
-        <label>Bulan jadwal<input id="schedule-emergency-month" type="month" value="${escapeHtml(selected)}" /></label>
-      </div>
-      ${renderScheduleMatrix(visible, rules, false)}
-    </article>
-  `;
-  document.querySelector("#schedule-emergency-month")?.addEventListener("change", e => {
-    if (!/^\d{4}-\d{2}$/.test(e.target.value)) return;
-    state.scheduleMonth = e.target.value;
-    renderShell();
   });
 }
 
@@ -766,7 +722,7 @@ function renderSchedule(target) {
     ${admin ? `
       <article class="panel scheduler-panel">
         <div class="panel-head">
-          <div><span class="overline">AUTO GENERATOR</span><h3>Generate Jadwal</h3></div>
+          <div><span class="overline">KONTROL JADWAL</span><h3>Generate Jadwal</h3></div>
           <span class="count-pill">${includeCarryover ? "26 → 25" : "1 → 25"}</span>
         </div>
 
@@ -823,7 +779,7 @@ function renderSchedule(target) {
           <div class="legend-inline">
             <span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span>
           </div>
-          ${admin ? `<div class="schedule-export-stack"><div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="sheet-ready-schedule" class="secondary compact" title="Untuk mempertahankan merge, import file XLSX sebagai sheet baru.">Sheet-ready (Import)</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div><small class="muted small-copy schedule-export-note">Merge tetap utuh saat file XLSX di-import / seluruh worksheet dipindahkan. Copy-paste cell antar aplikasi tidak menjamin merge ikut.</small></div>` : ""}
+          ${admin ? `<div class="schedule-export-stack"><div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="copy-schedule-sheet" class="secondary compact" title="Salin tabel jadwal rich HTML untuk ditempel langsung ke Google Sheets.">Copy ke Sheet</button><button id="sheet-ready-schedule" class="secondary compact" title="Untuk mempertahankan merge secara pasti, import file XLSX sebagai sheet baru.">Sheet-ready</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div><small class="muted small-copy schedule-export-note">Copy ke Sheet memakai rich table dengan header merge. Sheet-ready tetap tersedia untuk merge XLSX yang pasti.</small></div>` : ""}
         </div>
       </div>
       ${renderScheduleMatrix(scheduleForGrid, rules, admin && !preview?.entries?.length)}
@@ -912,6 +868,18 @@ function renderSchedule(target) {
 
   document.querySelector("#add-schedule")?.addEventListener("click", () => openScheduleEditor(null, rules, selected));
   document.querySelector("#import-schedule")?.addEventListener("click", () => runExcelImport("schedule"));
+  document.querySelector("#copy-schedule-sheet")?.addEventListener("click", async () => {
+    try {
+      const result = await copyScheduleToClipboard({
+        entries: scheduleForGrid,
+        rules,
+        periodLabel: monthTitle(selected)
+      });
+      showToast(result?.message || "Jadwal tersalin. Tempel dengan Ctrl+V di Google Sheets.", "success", "Copy ke Sheet siap");
+    } catch (err) {
+      showToast(err?.message || "Copy ke Sheet gagal. Gunakan Sheet-ready.", "error", "Copy gagal");
+    }
+  });
   document.querySelector("#sheet-ready-schedule")?.addEventListener("click", () => {
     try {
       exportScheduleSheetReadyWorkbook({
@@ -945,6 +913,21 @@ function renderSchedule(target) {
       if (item) openScheduleEditor(item, rules, selected);
     };
   });
+}
+
+function ruleSummaryCards(rules) {
+  return `
+    <div><span>Pria</span><strong>${escapeHtml(rules.maleNames.join(", "))}</strong></div>
+    <div><span>Wanita</span><strong>${escapeHtml(rules.femaleNames.join(", "))}</strong></div>
+    <div><span>Libur Jumat</span><strong>${escapeHtml((rules.offDays.Jumat || []).join(", ") || "-")}</strong></div>
+  `;
+}
+
+function renderPreviewMessage(preview) {
+  if (preview.errors?.length) {
+    return `<div class="validation-box error"><strong>Jadwal belum bisa dibuat</strong>${preview.errors.map(x => `<span>${escapeHtml(x)}</span>`).join("")}</div>`;
+  }
+  return `<div class="validation-box success"><strong>Preview siap</strong><span>${escapeHtml(preview.range.start)} → ${escapeHtml(preview.range.end)} · Fairness shift ${preview.summary.fairnessScore}/100 · fairness role ${preview.summary.roleFairnessScore}/100 · total ${preview.summary.overallFairnessScore}/100</span>${preview.warnings?.map(x => `<span>${escapeHtml(x)}</span>`).join("") || ""}</div>`;
 }
 
 function renderOvertimeWarning(entries) {
