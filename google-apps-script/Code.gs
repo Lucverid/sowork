@@ -19,8 +19,8 @@ function doGet(e) {
     return jsonpResponse_(callback, readStatus_(String(e.parameter.requestId || '')));
   }
   return callback
-    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.7' })
-    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.7' });
+    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.8' })
+    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.8' });
 }
 
 function doPost(e) {
@@ -55,6 +55,7 @@ function writeSchedule_(payload) {
   let sheet = ss.getSheetByName(sheetName);
   if (!sheet) sheet = ss.insertSheet(sheetName);
 
+  // Bersihkan format/merge lama supaya export selalu konsisten.
   const used = sheet.getDataRange();
   try { used.breakApart(); } catch (_) {}
   sheet.clear();
@@ -72,32 +73,23 @@ function writeSchedule_(payload) {
   const byKey = {};
   entries.forEach(x => { byKey[`${x.date}__${x.crewName}`] = x; });
 
-  // v1.6.7: role dirangkum dinamis agar role baru otomatis ikut direkap.
+  // Role dirangkum dinamis. Role standar tetap ditempatkan lebih dulu.
   const roleNames = unique_(entries
-    .filter(x => String(x.shift || '') !== 'Libur')
+    .filter(x => normalizeShift_(x.shift) !== 'Libur')
     .map(x => normalizeRole_(x.role))
     .filter(Boolean));
   roleNames.sort((a, b) => roleRank_(a) - roleRank_(b) || a.localeCompare(b, 'id'));
 
-  const summaryHeaders = ['Total Kerja', 'S1', 'S2', 'Middle', 'Libur', ...roleNames.map(role => `Role ${role}`)];
   const dateStartCol = 5;
-  const summaryStartCol = dateStartCol + dates.length;
-  const totalCols = 4 + dates.length + summaryHeaders.length;
+  const scheduleCols = 4 + dates.length;
 
-  const row1 = [
-    'No', 'Nama Crew', 'Gender', 'Periode',
-    ...dates.map(shortDateId_),
-    ...summaryHeaders
-  ];
-  const row2 = [
-    '', '', '', '',
-    ...dates.map(dayNameId_),
-    ...summaryHeaders.map(() => '')
-  ];
-  const values = [row1, row2];
+  const row1 = ['No', 'Nama Crew', 'Gender', 'Periode', ...dates.map(shortDateId_)];
+  const row2 = ['', '', '', '', ...dates.map(dayNameId_)];
+  const scheduleValues = [row1, row2];
   const crewStats = {};
 
-  // Setiap crew memakai 2 baris agar semua cell jadwal + rekap bisa merge vertikal.
+  // ===== TABEL JADWAL UTAMA =====
+  // Setiap crew memakai 2 baris dan semua sel digabung vertikal.
   crew.forEach((name, index) => {
     const gender = genderFor_(name, payload.rules);
     const stats = makeCrewStats_(roleNames);
@@ -111,18 +103,25 @@ function writeSchedule_(payload) {
       }
 
       const shift = normalizeShift_(item.shift);
+
       if (shift === 'Libur') {
         stats.Libur += 1;
         firstRow.push('LIBUR');
         return;
       }
 
-      if (shift === 'S1') stats.S1 += 1;
-      else if (shift === 'S2') stats.S2 += 1;
-      else if (shift === 'Middle') stats.Middle += 1;
-
-      // Semua shift kerja selain Libur dihitung sebagai jadwal kerja.
       stats.totalKerja += 1;
+
+      // Shift lembur dipisah seperti format rekap kerja lama.
+      if (shift === 'S1') {
+        if (item.overtime) stats.S1Lembur += 1;
+        else stats.S1 += 1;
+      } else if (shift === 'S2') {
+        if (item.overtime) stats.S2Lembur += 1;
+        else stats.S2 += 1;
+      } else if (shift === 'Middle') {
+        stats.Middle += 1;
+      }
 
       const role = normalizeRole_(item.role);
       if (role && Object.prototype.hasOwnProperty.call(stats.roles, role)) {
@@ -133,90 +132,98 @@ function writeSchedule_(payload) {
       firstRow.push(`${item.role || '-'}${overtime}`);
     });
 
-    firstRow.push(
-      stats.totalKerja,
-      stats.S1,
-      stats.S2,
-      stats.Middle,
-      stats.Libur,
-      ...roleNames.map(role => stats.roles[role] || 0)
-    );
-
     crewStats[name] = stats;
-    values.push(firstRow);
-    values.push(new Array(totalCols).fill(''));
+    scheduleValues.push(firstRow);
+    scheduleValues.push(new Array(scheduleCols).fill(''));
   });
 
-  // Rekap seluruh crew di bagian bawah tabel.
+  // ===== TABEL REKAP DI BAWAH JADWAL =====
+  // Diletakkan terpisah supaya tidak mengganggu freeze 4 kolom pada tabel utama.
+  const summaryStartCol = 4; // Mulai dari kolom D, mengikuti format contoh user.
+  const summaryHeaderRow = 3 + (crew.length * 2) + 2; // 1 baris kosong setelah jadwal.
+  const summaryHeaders = [
+    'Nama',
+    'Shift 1',
+    'Shift 1+Lembur',
+    'Shift 2',
+    'Shift 2+Lembur',
+    'Middle',
+    ...roleNames,
+    'Hari Kerja',
+    'Hari Libur'
+  ];
+
+  const summaryValues = [summaryHeaders];
+
+  crew.forEach(name => {
+    const stats = crewStats[name] || makeCrewStats_(roleNames);
+    summaryValues.push([
+      name,
+      stats.S1,
+      stats.S1Lembur,
+      stats.S2,
+      stats.S2Lembur,
+      stats.Middle,
+      ...roleNames.map(role => stats.roles[role] || 0),
+      stats.totalKerja,
+      stats.Libur
+    ]);
+  });
+
   const totals = makeCrewStats_(roleNames);
   crew.forEach(name => addCrewStats_(totals, crewStats[name], roleNames));
 
-  const totalRowIndex = values.length + 1; // 1-based Sheet row setelah values ditulis.
-  const totalRow = new Array(totalCols).fill('');
-  totalRow[0] = 'TOTAL SEMUA CREW';
-  totalRow[summaryStartCol - 1] = totals.totalKerja;
-  totalRow[summaryStartCol] = totals.S1;
-  totalRow[summaryStartCol + 1] = totals.S2;
-  totalRow[summaryStartCol + 2] = totals.Middle;
-  totalRow[summaryStartCol + 3] = totals.Libur;
-  roleNames.forEach((role, idx) => {
-    totalRow[summaryStartCol + 4 + idx] = totals.roles[role] || 0;
-  });
-  values.push(totalRow);
+  summaryValues.push([
+    'TOTAL SEMUA CREW',
+    totals.S1,
+    totals.S1Lembur,
+    totals.S2,
+    totals.S2Lembur,
+    totals.Middle,
+    ...roleNames.map(role => totals.roles[role] || 0),
+    totals.totalKerja,
+    totals.Libur
+  ]);
 
-  ensureSize_(sheet, values.length, totalCols);
+  const summaryCols = summaryHeaders.length;
+  const requiredCols = Math.max(scheduleCols, summaryStartCol - 1 + summaryCols);
+  const requiredRows = summaryHeaderRow + summaryValues.length - 1;
+  ensureSize_(sheet, requiredRows, requiredCols);
 
-  const range = sheet.getRange(1, 1, values.length, totalCols);
-  range.setValues(values);
-  range
+  // Tulis jadwal.
+  const scheduleRange = sheet.getRange(1, 1, scheduleValues.length, scheduleCols);
+  scheduleRange.setValues(scheduleValues);
+  scheduleRange
     .setFontFamily('Arial')
     .setFontSize(10)
     .setVerticalAlignment('middle')
     .setHorizontalAlignment('center')
     .setWrap(true);
-  range.setBorder(
+  scheduleRange.setBorder(
     true, true, true, true, true, true,
     SOWORK_COLORS.border,
     SpreadsheetApp.BorderStyle.SOLID
   );
 
-  // Header identitas + summary memakai merge 2 baris.
+  // Header utama merge A1:A2 s.d. D1:D2.
   for (let col = 1; col <= 4; col++) {
     sheet.getRange(1, col, 2, 1).merge();
   }
-  for (let col = summaryStartCol; col <= totalCols; col++) {
-    sheet.getRange(1, col, 2, 1).merge();
-  }
 
-  // Setiap crew = 2 baris, seluruh kolom digabung vertikal.
-  crew.forEach((name, crewIndex) => {
+  // Seluruh sel crew pada tabel jadwal memakai merge 2-row.
+  crew.forEach((_, crewIndex) => {
     const startRow = 3 + (crewIndex * 2);
-    for (let col = 1; col <= totalCols; col++) {
+    for (let col = 1; col <= scheduleCols; col++) {
       sheet.getRange(startRow, col, 2, 1).merge();
     }
   });
 
-  // Baris total: label digabung dari A sampai kolom terakhir sebelum rekap.
-  const totalLabelEndCol = Math.max(1, summaryStartCol - 1);
-  if (totalLabelEndCol > 1) {
-    sheet.getRange(totalRowIndex, 1, 1, totalLabelEndCol).merge();
-  }
-
-  // Header utama.
-  sheet.getRange(1, 1, 2, totalCols)
+  sheet.getRange(1, 1, 2, scheduleCols)
     .setBackground(SOWORK_COLORS.header)
     .setFontColor(SOWORK_COLORS.dark)
     .setFontWeight('bold');
 
-  // Beda tipis antara area jadwal dan area rekap.
-  if (summaryHeaders.length) {
-    sheet.getRange(1, summaryStartCol, 2, summaryHeaders.length)
-      .setBackground('#FFF2CC')
-      .setFontColor(SOWORK_COLORS.dark)
-      .setFontWeight('bold');
-  }
-
-  // Identity + warna shift + rekap per crew.
+  // Identity + warna shift.
   crew.forEach((name, crewIndex) => {
     const row = 3 + (crewIndex * 2);
     const gender = genderFor_(name, payload.rules);
@@ -248,41 +255,90 @@ function writeSchedule_(payload) {
 
       cell.setBackground(fill).setFontColor(font);
     });
+  });
 
-    // Ringkasan shift diberi warna yang sama dengan legend jadwal.
-    sheet.getRange(row, summaryStartCol, 2, 1).setBackground('#E2F0D9').setFontWeight('bold');
-    sheet.getRange(row, summaryStartCol + 1, 2, 1).setBackground(SOWORK_COLORS.S1).setFontColor(SOWORK_COLORS.dark);
-    sheet.getRange(row, summaryStartCol + 2, 2, 1).setBackground(SOWORK_COLORS.S2).setFontColor(SOWORK_COLORS.light);
-    sheet.getRange(row, summaryStartCol + 3, 2, 1).setBackground(SOWORK_COLORS.Middle).setFontColor(SOWORK_COLORS.dark);
-    sheet.getRange(row, summaryStartCol + 4, 2, 1).setBackground(SOWORK_COLORS.Libur).setFontColor(SOWORK_COLORS.light);
+  // ===== FORMAT REKAP =====
+  const summaryRange = sheet.getRange(summaryHeaderRow, summaryStartCol, summaryValues.length, summaryCols);
+  summaryRange.setValues(summaryValues);
+  summaryRange
+    .setFontFamily('Arial')
+    .setFontSize(10)
+    .setVerticalAlignment('middle')
+    .setHorizontalAlignment('center')
+    .setWrap(true);
+  summaryRange.setBorder(
+    true, true, true, true, true, true,
+    SOWORK_COLORS.dark,
+    SpreadsheetApp.BorderStyle.SOLID
+  );
 
+  // Header rekap lavender seperti template contoh.
+  sheet.getRange(summaryHeaderRow, summaryStartCol, 1, summaryCols)
+    .setBackground('#D9D2E9')
+    .setFontWeight('bold')
+    .setFontColor(SOWORK_COLORS.dark);
+
+  // Body rekap: warna per jenis shift.
+  if (crew.length) {
+    const bodyStart = summaryHeaderRow + 1;
+    const bodyRows = crew.length;
+
+    // Nama.
+    sheet.getRange(bodyStart, summaryStartCol, bodyRows, 1)
+      .setBackground(SOWORK_COLORS.light)
+      .setFontWeight('bold');
+
+    // Shift 1, Shift 1+Lembur, Shift 2, Shift 2+Lembur, Middle.
+    sheet.getRange(bodyStart, summaryStartCol + 1, bodyRows, 1)
+      .setBackground(SOWORK_COLORS.S1);
+    sheet.getRange(bodyStart, summaryStartCol + 2, bodyRows, 1)
+      .setBackground(SOWORK_COLORS.Lembur);
+    sheet.getRange(bodyStart, summaryStartCol + 3, bodyRows, 1)
+      .setBackground(SOWORK_COLORS.S2)
+      .setFontColor(SOWORK_COLORS.light);
+    sheet.getRange(bodyStart, summaryStartCol + 4, bodyRows, 1)
+      .setBackground('#00E5FF');
+    sheet.getRange(bodyStart, summaryStartCol + 5, bodyRows, 1)
+      .setBackground(SOWORK_COLORS.Middle);
+
+    // Role.
     if (roleNames.length) {
-      sheet.getRange(row, summaryStartCol + 5, 2, roleNames.length)
+      sheet.getRange(bodyStart, summaryStartCol + 6, bodyRows, roleNames.length)
         .setBackground('#F3F4F6')
         .setFontColor(SOWORK_COLORS.dark);
     }
-  });
 
-  // Total semua crew.
-  sheet.getRange(totalRowIndex, 1, 1, totalCols)
+    const hariKerjaCol = summaryStartCol + 6 + roleNames.length;
+    const hariLiburCol = hariKerjaCol + 1;
+
+    sheet.getRange(bodyStart, hariKerjaCol, bodyRows, 1)
+      .setBackground('#E2F0D9')
+      .setFontWeight('bold');
+    sheet.getRange(bodyStart, hariLiburCol, bodyRows, 1)
+      .setBackground(SOWORK_COLORS.Libur)
+      .setFontColor(SOWORK_COLORS.light)
+      .setFontWeight('bold');
+  }
+
+  // Baris total keseluruhan.
+  const totalSummaryRow = summaryHeaderRow + summaryValues.length - 1;
+  sheet.getRange(totalSummaryRow, summaryStartCol, 1, summaryCols)
+    .setBackground('#FFF2CC')
     .setFontWeight('bold')
-    .setBackground('#D9EAD3')
     .setFontColor(SOWORK_COLORS.dark);
 
-  // Layout.
+  // ===== UKURAN / FREEZE =====
   sheet.setColumnWidth(1, 52);
   sheet.setColumnWidth(2, 145);
   sheet.setColumnWidth(3, 88);
   sheet.setColumnWidth(4, 130);
   if (dates.length) sheet.setColumnWidths(dateStartCol, dates.length, 112);
 
-  // Rekap dibuat lebih ringkas daripada kolom tanggal.
-  sheet.setColumnWidth(summaryStartCol, 92);
-  sheet.setColumnWidth(summaryStartCol + 1, 56);
-  sheet.setColumnWidth(summaryStartCol + 2, 56);
-  sheet.setColumnWidth(summaryStartCol + 3, 72);
-  sheet.setColumnWidth(summaryStartCol + 4, 62);
-  if (roleNames.length) sheet.setColumnWidths(summaryStartCol + 5, roleNames.length, 92);
+  // Lebar tabel rekap.
+  sheet.setColumnWidth(summaryStartCol, 120);
+  if (summaryCols > 1) {
+    sheet.setColumnWidths(summaryStartCol + 1, summaryCols - 1, 92);
+  }
 
   sheet.setRowHeight(1, 25);
   sheet.setRowHeight(2, 24);
@@ -292,8 +348,13 @@ function writeSchedule_(payload) {
     sheet.setRowHeight(row, 21);
     sheet.setRowHeight(row + 1, 21);
   });
-  sheet.setRowHeight(totalRowIndex, 28);
 
+  sheet.setRowHeight(summaryHeaderRow, 28);
+  for (let i = 1; i < summaryValues.length; i++) {
+    sheet.setRowHeight(summaryHeaderRow + i, 25);
+  }
+
+  // Aman karena tidak ada merge horizontal yang memotong batas frozen column.
   sheet.setFrozenRows(2);
   sheet.setFrozenColumns(4);
 
@@ -302,7 +363,7 @@ function writeSchedule_(payload) {
     payload.metadata && payload.metadata.branch ? `Cabang: ${payload.metadata.branch}` : '',
     payload.metadata && payload.metadata.sentBy ? `Dikirim oleh: ${payload.metadata.sentBy}` : '',
     payload.metadata && payload.metadata.sentAt ? `Sync: ${payload.metadata.sentAt}` : '',
-    `Rekap: total kerja, S1, S2, Middle, Libur, dan ${roleNames.length} role`
+    `Rekap bawah: S1, S1+Lembur, S2, S2+Lembur, Middle, ${roleNames.length} role, Hari Kerja, Hari Libur`
   ].filter(Boolean).join(' | ');
   sheet.getRange(1, 1).setNote(note);
 
@@ -312,11 +373,12 @@ function writeSchedule_(payload) {
     spreadsheetId,
     spreadsheetName: ss.getName(),
     sheetName,
-    rowCount: values.length,
-    columnCount: totalCols,
+    rowCount: requiredRows,
+    columnCount: requiredCols,
     crewCount: crew.length,
     mergedCrewRows: true,
     summaryEnabled: true,
+    summaryPosition: 'below',
     roleSummaryColumns: roleNames,
     url: `${ss.getUrl()}#gid=${sheet.getSheetId()}`
   };
@@ -351,14 +413,25 @@ function roleRank_(role) {
 function makeCrewStats_(roleNames) {
   const roles = {};
   roleNames.forEach(role => { roles[role] = 0; });
-  return { totalKerja: 0, S1: 0, S2: 0, Middle: 0, Libur: 0, roles };
+  return {
+    totalKerja: 0,
+    S1: 0,
+    S1Lembur: 0,
+    S2: 0,
+    S2Lembur: 0,
+    Middle: 0,
+    Libur: 0,
+    roles
+  };
 }
 
 function addCrewStats_(target, source, roleNames) {
   if (!source) return target;
   target.totalKerja += Number(source.totalKerja || 0);
   target.S1 += Number(source.S1 || 0);
+  target.S1Lembur += Number(source.S1Lembur || 0);
   target.S2 += Number(source.S2 || 0);
+  target.S2Lembur += Number(source.S2Lembur || 0);
   target.Middle += Number(source.Middle || 0);
   target.Libur += Number(source.Libur || 0);
   roleNames.forEach(role => {
