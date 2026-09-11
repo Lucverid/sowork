@@ -344,13 +344,9 @@ function renderPagePreservingFocus() {
 }
 
 function renderShell() {
-  // v1.4: shell dibuat sekali. Update realtime cukup menggambar ulang halaman aktif,
-  // bukan sidebar + topbar + mobile nav dari nol setiap snapshot Firestore.
-  if (refreshShellChrome()) {
-    renderPagePreservingFocus();
-    return;
-  }
-
+  // v1.5.9: rebuild shell saat navigasi seperti versi klasik yang stabil.
+  // Ini sengaja mengutamakan reliability daripada optimasi shell incremental,
+  // karena shell reuse dapat meninggalkan event/page-content dalam state stale.
   const admin = isAdmin(state.profile);
   const displayName = state.profile?.name || state.user?.email || "User";
   const initials = displayName.trim().slice(0, 1).toUpperCase();
@@ -520,7 +516,14 @@ function renderPage() {
   }
 
   if (state.page === "dashboard") return renderDashboard(target);
-  if (state.page === "schedule") return renderSchedule(target);
+  if (state.page === "schedule") {
+    try {
+      return renderSchedule(target);
+    } catch (err) {
+      console.error("[SoWork] Schedule render failed", err);
+      return renderScheduleEmergency(target, err);
+    }
+  }
   if (state.page === "checklist") return renderChecklist(target);
   if (state.page === "stock") return renderStock(target);
   if (state.page === "opname") return renderStockOpname(target);
@@ -693,6 +696,43 @@ function schedulesForPeriod(entries, monthKey, includeCarryover = true) {
   return (entries || []).filter(row => {
     const key = String(row?.date || "");
     return key >= range.start && key <= range.end;
+  });
+}
+
+function renderScheduleEmergency(target, err) {
+  const admin = isAdmin(state.profile);
+  const rules = normalizeRules(state.scheduleRules || DEFAULT_SCHEDULE_RULES);
+  const selected = /^\d{4}-\d{2}$/.test(String(state.scheduleMonth || "")) ? state.scheduleMonth : defaultScheduleMonth();
+  state.scheduleMonth = selected;
+  const entries = Array.isArray(state.schedules)
+    ? state.schedules.filter(x => x && typeof x === "object" && /^\d{4}-\d{2}-\d{2}$/.test(String(x.date || "")) && x.crewName)
+    : [];
+  const [year, month] = selected.split("-").map(Number);
+  const start = new Date(year, month - 2, 26);
+  const end = new Date(year, month - 1, 25);
+  const visible = entries.filter(x => {
+    const d = parseLocalDate(x.date);
+    return d && d >= start && d <= end;
+  });
+
+  target.innerHTML = `
+    <section class="page-intro">
+      <div><span class="overline">SMART SCHEDULER</span><h1>Jadwal Kerja</h1><p>Mode pemulihan aktif. Data jadwal tetap bisa dilihat meski komponen tambahan mengalami error.</p></div>
+      <span class="access-tag ${admin ? "" : "read"}">${admin ? "ADMIN" : "VIEWER"}</span>
+    </section>
+    <div class="notice warning"><strong>Jadwal dibuka dalam mode aman</strong><span>${escapeHtml(err?.message || "Renderer utama gagal dimuat.")}</span></div>
+    <article class="panel schedule-grid-panel">
+      <div class="panel-head schedule-head-actions">
+        <div><span class="overline">MONTHLY VIEW</span><h3>${escapeHtml(monthTitle(selected))}</h3></div>
+        <label>Bulan jadwal<input id="schedule-emergency-month" type="month" value="${escapeHtml(selected)}" /></label>
+      </div>
+      ${renderScheduleMatrix(visible, rules, false)}
+    </article>
+  `;
+  document.querySelector("#schedule-emergency-month")?.addEventListener("change", e => {
+    if (!/^\d{4}-\d{2}$/.test(e.target.value)) return;
+    state.scheduleMonth = e.target.value;
+    renderShell();
   });
 }
 
