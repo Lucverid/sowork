@@ -1,48 +1,24 @@
-SoWork v1.6.5 — Apps Script Confirm + 2-Row Merge Fix
+SoWork v1.6.6 — Auth Recovery
 
-PERUBAHAN
-1. Konfirmasi Apps Script
-   - SoWork tidak lagi mentok "Mengirim..." setelah Sheet sebenarnya berhasil dibuat.
-   - Frontend menerima balasan dari wrapper Google yang valid dengan verifikasi origin,
-     requestId, dan callbackToken.
+Base: source yang sedang dideploy (v1.6.4 + Apps Script/merge fix v1.6.5).
 
-2. Merge 2 baris per crew
-   - Setiap crew sekarang memakai 2 row dan seluruh sel crew digabung vertikal.
-   - Crew pertama: A3:A4, B3:B4, C3:C4, D3:D4, E3:E4, F3:F4, dst.
-   - Crew kedua: A5:A6, B5:B6, ... dst.
-   - Jadi role per tanggal seperti E3:E4 benar-benar merged.
-   - Warna S1/S2/Middle/Libur/Lembur tetap mengikuti merged cell.
+Perubahan:
+- Firebase login memakai browserLocalPersistence secara eksplisit.
+- auth/network-request-failed otomatis dicoba ulang maksimal 3 kali.
+- Tombol login dikunci selama proses agar tidak mengirim request ganda.
+- Status retry tampil di halaman login.
+- Error network dibuat lebih jelas.
+- Apps Script v1.6.5 dan merge 2-row tidak diubah.
 
-CARA PASANG
+Upload ke GitHub sesuai path:
+1. src/auth/auth.js
+2. src/main.js
+3. package.json
+4. package-lock.json
 
-A. GitHub
-Replace file:
-  src/modules/schedule/googleSheet.js
-Lalu Commit Changes dan tunggu GitHub Actions selesai.
+Setelah commit, tunggu GitHub Actions selesai lalu Ctrl+F5.
 
-B. Google Apps Script
-Paling aman:
-1. Buka project Apps Script SoWork.
-2. Buka Code.gs.
-3. Ctrl+A lalu hapus semua.
-4. Copy seluruh isi:
-   google-apps-script/Code.gs
-   dari paket ini ke Apps Script.
-5. Save.
-6. Deploy > Manage deployments > Edit (pensil)
-   > Version: New version > Deploy.
-7. Pastikan:
-   Execute as: Me
-   Who has access: Anyone
-8. URL /exec tetap bisa dipakai jika edit deployment yang sama.
-
-C. TEST
-1. Refresh SoWork pakai Ctrl+F5.
-2. Tes koneksi.
-3. Kirim jadwal.
-4. SoWork harus memberi konfirmasi sukses.
-5. Google Sheet harus tampil 2 row per crew dengan merge vertikal.
-
-CATATAN
-Secret Token pernah terlihat di screenshot. Setelah semuanya berhasil,
-ganti SOWORK_SECRET di Apps Script dan Secret Token di SoWork.
+Catatan:
+Jika jaringan/DNS/VPN/ISP benar-benar memblokir endpoint Firebase Auth,
+retry dari aplikasi tidak bisa menembus blokir eksternal. Patch ini fokus pada
+transient network failure dan persistence browser.

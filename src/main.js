@@ -180,12 +180,25 @@ function renderAuth() {
 
   loginForm.onsubmit = async e => {
     e.preventDefault();
-    msg.textContent = "Memproses...";
+    const submitButton = loginForm.querySelector('button[type="submit"], button.primary');
+    msg.textContent = navigator.onLine === false
+      ? "Perangkat terdeteksi offline. Menunggu jaringan..."
+      : "Menghubungkan ke Firebase...";
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Menghubungkan...";
+    }
     const fd = new FormData(loginForm);
     try {
-      await login(fd.get("email"), fd.get("password"));
+      await login(fd.get("email"), fd.get("password"), (attempt, total) => {
+        msg.textContent = `Koneksi Firebase belum merespons. Coba ulang otomatis ${attempt}/${total}...`;
+      });
     } catch (err) {
       msg.textContent = friendlyError(err);
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = "Coba Masuk Lagi";
+      }
     }
   };
 
@@ -207,6 +220,10 @@ function friendlyError(err) {
   if (code.includes("email-already-in-use")) return "Email sudah terdaftar.";
   if (code.includes("weak-password")) return "Password terlalu lemah.";
   if (code.includes("permission-denied")) return "Akses ditolak oleh Firestore Rules.";
+  if (code.includes("network-request-failed")) {
+    return "Firebase tidak bisa dijangkau setelah 3 percobaan. Coba ganti jaringan / matikan VPN atau Private DNS, lalu tekan Coba Masuk Lagi.";
+  }
+  if (code.includes("too-many-requests")) return "Terlalu banyak percobaan login. Tunggu sebentar lalu coba lagi.";
   return err?.message || "Terjadi kesalahan.";
 }
 
@@ -3619,7 +3636,7 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.6.4 Performance Fix</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.6.6 Auth Recovery</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>

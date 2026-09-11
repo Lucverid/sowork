@@ -1,6 +1,8 @@
 import {
+  browserLocalPersistence,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  setPersistence,
   signInWithEmailAndPassword,
   signOut
 } from "firebase/auth";
@@ -22,8 +24,38 @@ export async function registerViewer(email, password, name) {
   return credential.user;
 }
 
-export function login(email, password) {
-  return signInWithEmailAndPassword(auth, email, password);
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function isNetworkAuthError(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  return code.includes("network-request-failed") || /network request failed/i.test(message);
+}
+
+export async function login(email, password, onRetry = null) {
+  // v1.6.6: pakai persistence localStorage yang lebih sederhana daripada
+  // mengandalkan persistence default browser, lalu retry hanya untuk error network.
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+  } catch (_) {
+    // Persistence gagal tidak boleh memblokir proses login.
+  }
+
+  let lastError = null;
+  const delays = [0, 900, 1800];
+
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt]) await wait(delays[attempt]);
+    try {
+      return await signInWithEmailAndPassword(auth, String(email || "").trim(), String(password || ""));
+    } catch (error) {
+      lastError = error;
+      if (!isNetworkAuthError(error) || attempt === delays.length - 1) throw error;
+      if (typeof onRetry === "function") onRetry(attempt + 2, delays.length);
+    }
+  }
+
+  throw lastError || new Error("Login gagal.");
 }
 
 export function logout() {
