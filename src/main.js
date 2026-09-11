@@ -1668,9 +1668,15 @@ function buildStockUsageCalendar(usageRows, monthKey) {
 
   usageRows.forEach(row => {
     if (!row?.date || !String(row.date).startsWith(safeMonth)) return;
-    const current = byDate.get(row.date) || { rows: 0, used: 0 };
-    current.rows += 1;
-    if (Number(row.qty || 0) > 0) current.used += 1;
+    const current = byDate.get(row.date) || { rows: 0, used: 0, recorded: false };
+    if (row.source === "DAILY_USAGE_DAY") {
+      current.recorded = true;
+      current.used = Math.max(current.used, Number(row.usedCount || 0));
+    } else if (row.type === "OUT") {
+      current.recorded = true;
+      current.rows += 1;
+      if (Number(row.qty || 0) > 0) current.used += 1;
+    }
     byDate.set(row.date, current);
   });
 
@@ -1681,9 +1687,9 @@ function buildStockUsageCalendar(usageRows, monthKey) {
     const stats = byDate.get(dateKey);
     const isToday = dateKey === today;
     cells.push(`
-      <button type="button" class="usage-calendar-day ${stats ? "has-usage" : ""} ${isToday ? "is-today" : ""}" data-open-usage-date="${escapeHtml(dateKey)}" aria-label="${escapeHtml(formatDate(dateKey))}${stats ? `, ${stats.used} barang digunakan` : ", belum ada penggunaan"}">
+      <button type="button" class="usage-calendar-day ${stats?.recorded ? "has-usage" : ""} ${isToday ? "is-today" : ""}" data-open-usage-date="${escapeHtml(dateKey)}" aria-label="${escapeHtml(formatDate(dateKey))}${stats?.recorded ? `, ${stats.used} barang digunakan` : ", belum ada penggunaan"}">
         <span class="usage-calendar-number">${day}</span>
-        ${stats ? `<span class="usage-calendar-badge">${stats.used}</span><small>${stats.used ? "terisi" : "0"}</small>` : `<small>${isToday ? "hari ini" : ""}</small>`}
+        ${stats?.recorded ? `<span class="usage-calendar-badge">${stats.used}</span><small>${stats.used ? "terisi" : "sudah dicek"}</small>` : `<small>${isToday ? "hari ini" : ""}</small>`}
       </button>`);
   }
 
@@ -1713,12 +1719,12 @@ function renderStock(target) {
   const fastCount = analytics.filter(x => x.velocity === "Fast").length;
   const status = state.stockStatusFilter || "Semua";
   const deliveries = state.stockMovements.filter(x => x.type === "IN").slice(0, 18);
-  const usageRows = state.stockMovements.filter(x => x.type === "OUT");
+  const usageRows = state.stockMovements.filter(x => x.type === "OUT" || x.source === "DAILY_USAGE_DAY");
   const todayKey = localDateKey(new Date());
   const usageMonth = state.stockUsageMonth || todayKey.slice(0, 7);
   state.stockUsageMonth = usageMonth;
   const monthUsageRows = usageRows.filter(x => String(x.date || "").startsWith(usageMonth));
-  const usageDaysRecorded = new Set(monthUsageRows.filter(x => Number(x.qty || 0) > 0).map(x => x.date)).size;
+  const usageDaysRecorded = new Set(monthUsageRows.filter(x => x.source === "DAILY_USAGE_DAY" || x.type === "OUT").map(x => x.date)).size;
 
   target.innerHTML = `
     <section class="page-intro">
@@ -1773,7 +1779,7 @@ function renderStock(target) {
         <button id="usage-prev-month" class="secondary usage-month-button" type="button" aria-label="Bulan sebelumnya">‹</button>
         <div class="usage-calendar-month">
           <strong>${escapeHtml(formatMonthKey(usageMonth))}</strong>
-          <span>${usageDaysRecorded} hari · ${monthUsageRows.filter(x => Number(x.qty || 0) > 0).length} entri</span>
+          <span>${usageDaysRecorded} hari · ${monthUsageRows.filter(x => x.type === "OUT" && Number(x.qty || 0) > 0).length} entri</span>
         </div>
         <button id="usage-next-month" class="secondary usage-month-button" type="button" aria-label="Bulan berikutnya">›</button>
       </div>
@@ -2537,11 +2543,15 @@ function openDailyStockUsageEditor(initialDate) {
   modal.id="stock-usage-modal";
   modal.className="modal-backdrop";
   const activeItems=state.stockItems.filter(x=>x.active!==false).slice().sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),"id"));
-  const existing=Object.fromEntries(state.stockMovements.filter(x=>x.type==="OUT"&&x.date===date).map(x=>[x.itemId,x]));
+  const dayRows=state.stockMovements.filter(x=>x.type==="OUT"&&x.date===date&&x.source!=="DAILY_USAGE_DAY");
+  const existing=Object.fromEntries(dayRows.map(x=>[x.itemId,x]));
+  const dayMarker=state.stockMovements.find(x=>x.source==="DAILY_USAGE_DAY"&&x.date===date);
+  const initialNote=String(dayMarker?.note || dayRows.find(x=>x.note)?.note || "");
+  const dayAlreadyRecorded=Boolean(dayMarker || dayRows.length);
   modal.innerHTML=`<section class="edit-modal wide-modal usage-modal" role="dialog" aria-modal="true">
-    <div class="modal-head"><div><span class="overline">PENGGUNAAN STOK</span><h3>Pemakaian barang harian</h3><p class="muted">Isi setiap hari, termasuk 0 jika barang tidak digunakan. Edit tanggal lama otomatis menghitung selisih stoknya.</p></div><button type="button" class="modal-close">×</button></div>
+    <div class="modal-head"><div><span class="overline">PENGGUNAAN STOK</span><h3>Pemakaian barang harian</h3><p class="muted">Isi setiap hari, termasuk 0 jika barang tidak digunakan. Simpan cepat hanya memproses barang yang berubah.</p></div><button type="button" class="modal-close">×</button></div>
     <form id="stock-usage-form" class="edit-form">
-      <div class="usage-toolbar"><label>Tanggal penggunaan<input name="date" type="date" value="${escapeHtml(date)}" required/></label><label>Catatan umum<input name="note" value="" placeholder="Produksi normal / event / ramai..."/></label></div>
+      <div class="usage-toolbar"><label>Tanggal penggunaan<input name="date" type="date" value="${escapeHtml(date)}" required/></label><label>Catatan umum<input name="note" value="${escapeHtml(initialNote)}" placeholder="Produksi normal / event / ramai..."/></label></div>
       <div class="usage-input-list">
         ${activeItems.map(item=>{const row=existing[item.id]||{};return `<div class="usage-input-row"><div><strong>${escapeHtml(item.name)}</strong><span>Stok sistem ${formatQty(item.currentQty)} ${escapeHtml(item.unit||"PCS")}</span></div><label><input name="use_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(row.qty||0)}"/><span>${escapeHtml(item.unit||"PCS")}</span></label></div>`}).join("")}
       </div>
@@ -2559,15 +2569,38 @@ function openDailyStockUsageEditor(initialDate) {
     e.preventDefault();
     const fd=new FormData(form);
     const saveDate=String(fd.get("date")||date);
-    const note=String(fd.get("note")||"");
-    const rows=activeItems.map(item=>({itemId:item.id,itemName:item.name,unit:item.unit,qty:fd.get(`use_${item.id}`),category:"Pemakaian Harian",note}));
-    if(!confirm(`Simpan penggunaan stok ${formatDate(saveDate)} untuk ${rows.length} item? Nilai akan langsung memengaruhi stok sistem.`))return;
+    const note=String(fd.get("note")||"").trim();
+    const rows=activeItems.map(item=>{
+      const old=existing[item.id]||{};
+      return {
+        itemId:item.id,
+        itemName:item.name,
+        unit:item.unit,
+        qty:fd.get(`use_${item.id}`),
+        oldQty:Number(old.qty||0),
+        oldNote:String(old.note||""),
+        currentQty:Number(item.currentQty||0),
+        lastOpnameDate:String(item.lastOpnameDate||""),
+        movementId:old.id||`USE_${saveDate}_${item.id}`,
+        hadExisting:Boolean(old.id),
+        category:"Pemakaian Harian",
+        note
+      };
+    });
+    const changedCount=rows.filter(r=>Math.abs(Number(r.qty||0)-Number(r.oldQty||0))>1e-9 || (Number(r.qty||0)>0 && r.note!==r.oldNote) || (r.hadExisting && Number(r.qty||0)<=0)).length;
+    const noteChanged=note!==initialNote;
+    if(dayAlreadyRecorded && changedCount===0 && !noteChanged){
+      showToast("Tidak ada perubahan untuk tanggal ini.", "info", "Sudah terbaru");
+      return;
+    }
+    if(!confirm(`Simpan penggunaan stok ${formatDate(saveDate)}? ${changedCount} barang berubah${!dayAlreadyRecorded ? " · tanggal akan ditandai sudah dicek" : ""}.`))return;
     const btn=form.querySelector('button[type="submit"],button.primary:last-child');
-    if(btn){btn.disabled=true;btn.textContent="Menyimpan...";}
+    if(btn){btn.disabled=true;btn.textContent=changedCount?`Menyimpan ${changedCount} perubahan...`:"Menyimpan tanggal...";}
     try{
-      await saveDailyStockUsage(saveDate,rows,{uid:state.user?.uid,name:state.profile?.name||state.user?.email});
+      const result=await saveDailyStockUsage(saveDate,rows,{uid:state.user?.uid,name:state.profile?.name||state.user?.email});
       close();
-      showToast("Penggunaan harian tersimpan. Stok dan prediksi order sudah diperbarui.", "success", "Penggunaan tersimpan");
+      const changed=Number(result?.changedItems||changedCount||0);
+      showToast(changed ? `${changed} barang diperbarui. Stok dan prediksi order sudah sinkron.` : "Tanggal ditandai sudah dicek. Tidak ada stok yang berubah.", "success", "Penggunaan tersimpan");
     }catch(err){showToast(err?.message||friendlyError(err), "error", "Penggunaan gagal disimpan");if(btn){btn.disabled=false;btn.textContent="Simpan Penggunaan";}}
   };
 }
@@ -3586,7 +3619,7 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.6.1 Direct Google Sheet</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.6.4 Performance Fix</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>

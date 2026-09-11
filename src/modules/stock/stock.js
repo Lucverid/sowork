@@ -153,60 +153,77 @@ export async function saveStockReceipt(entry) {
 export async function saveDailyStockUsage(date, rows, actor = {}) {
   if (!date || !Array.isArray(rows) || !rows.length) throw new Error("Tanggal dan penggunaan stok wajib diisi.");
 
-  // v1.4: baca dokumen secara paralel per gelombang. Versi lama menunggu
-  // 2 read Firestore untuk SETIAP barang secara berurutan sehingga waktu
-  // simpan tumbuh hampir linear terhadap jumlah master barang.
+  // v1.6.4: fast path. Seluruh data pembanding dikirim dari state realtime
+  // yang sudah ada di client, jadi tidak ada lagi getDoc per item saat save.
+  // Hanya item yang berubah yang ditulis. Nilai 0 tidak membuat movement baru.
   const validRows = rows.filter(row => row?.itemId);
+  const epsilon = 1e-9;
   const prepared = [];
 
-  for (const rowPart of chunk(validRows, 40)) {
-    const snapshots = await Promise.all(rowPart.map(async row => {
-      const qty = Math.max(0, Number(row.qty || 0));
-      const movementId = `USE_${date}_${row.itemId}`;
-      const movementRef = doc(db, "stockMovements", movementId);
-      const itemRef = doc(db, "items", row.itemId);
-      const [movementSnap, itemSnap] = await Promise.all([getDoc(movementRef), getDoc(itemRef)]);
-      return { row, qty, movementId, movementRef, itemRef, movementSnap, itemSnap };
-    }));
+  for (const row of validRows) {
+    const qty = Math.max(0, Number(row.qty || 0));
+    const oldQty = Math.max(0, Number(row.oldQty || 0));
+    const currentQty = Math.max(0, Number(row.currentQty || 0));
+    const lastOpnameDate = String(row.lastOpnameDate || "");
+    const affectsCurrentStock = !lastOpnameDate || String(date) > lastOpnameDate;
+    const delta = qty - oldQty;
+    const movementId = String(row.movementId || `USE_${date}_${row.itemId}`);
+    const movementRef = doc(db, "stockMovements", movementId);
+    const itemRef = doc(db, "items", row.itemId);
+    const note = String(row.note || "").trim();
+    const oldNote = String(row.oldNote || "").trim();
+    const hadExisting = Boolean(row.hadExisting);
+    const qtyChanged = Math.abs(delta) > epsilon;
+    const noteChanged = qty > epsilon && note !== oldNote;
 
-    for (const rec of snapshots) {
-      const { row, qty, movementId, movementRef, itemRef, movementSnap, itemSnap } = rec;
-      if (!itemSnap.exists()) continue;
-
-      const oldQty = movementSnap.exists() && movementSnap.data()?.type === "OUT"
-        ? Math.max(0, Number(movementSnap.data()?.qty || 0))
-        : 0;
-      const delta = qty - oldQty;
-      const currentQty = Math.max(0, Number(itemSnap.data()?.currentQty || 0));
-      const lastOpnameDate = String(itemSnap.data()?.lastOpnameDate || "");
-      const affectsCurrentStock = !lastOpnameDate || String(date) > lastOpnameDate;
-      if (affectsCurrentStock && delta > currentQty + 1e-9) {
-        throw new Error(`${row.itemName || itemSnap.data()?.name || row.itemId}: penggunaan tambahan ${delta} melebihi stok sistem ${currentQty}.`);
-      }
-      prepared.push({ row, qty, oldQty, delta, movementId, movementRef, itemRef, affectsCurrentStock });
+    if (affectsCurrentStock && delta > currentQty + epsilon) {
+      throw new Error(`${row.itemName || row.itemId}: penggunaan tambahan ${delta} melebihi stok sistem ${currentQty}.`);
     }
+
+    // Legacy zero-doc dibersihkan ketika hari tersebut disimpan ulang.
+    const shouldDeleteZero = qty <= epsilon && hadExisting;
+    if (!qtyChanged && !noteChanged && !shouldDeleteZero) continue;
+
+    prepared.push({ row, qty, delta, movementRef, itemRef, affectsCurrentStock, note, hadExisting });
   }
 
-  for (const part of chunk(prepared, 170)) {
+  // Satu marker per hari menjaga kalender tahu bahwa tanggal ini sudah diisi,
+  // termasuk jika SEMUA barang bernilai 0, tanpa membuat puluhan dokumen qty=0.
+  const dayMarkerRef = doc(db, "stockMovements", `USE_DAY_${date}`);
+  const usedCount = validRows.filter(row => Number(row.qty || 0) > epsilon).length;
+  const dayNote = String(validRows.find(row => row?.note != null)?.note || "").trim();
+
+  const chunks = chunk(prepared, 160);
+  if (!chunks.length) chunks.push([]);
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const part = chunks[index];
     const batch = writeBatch(db);
+
     for (const rec of part) {
-      const { row, qty, delta, movementRef, itemRef, affectsCurrentStock } = rec;
-      batch.set(movementRef, {
-        itemId: row.itemId,
-        itemName: String(row.itemName || ""),
-        type: "OUT",
-        source: "DAILY_USAGE",
-        date,
-        qty,
-        unit: String(row.unit || "PCS"),
-        category: String(row.category || "Pemakaian Harian"),
-        note: String(row.note || "").trim(),
-        affectsCurrentStock,
-        updatedAt: serverTimestamp(),
-        updatedByUid: String(actor.uid || ""),
-        updatedByName: String(actor.name || "")
-      }, { merge: true });
-      if (affectsCurrentStock && Math.abs(delta) > 1e-9) {
+      const { row, qty, delta, movementRef, itemRef, affectsCurrentStock, note, hadExisting } = rec;
+
+      if (qty <= epsilon) {
+        if (hadExisting) batch.delete(movementRef);
+      } else {
+        batch.set(movementRef, {
+          itemId: row.itemId,
+          itemName: String(row.itemName || ""),
+          type: "OUT",
+          source: "DAILY_USAGE",
+          date,
+          qty,
+          unit: String(row.unit || "PCS"),
+          category: String(row.category || "Pemakaian Harian"),
+          note,
+          affectsCurrentStock,
+          updatedAt: serverTimestamp(),
+          updatedByUid: String(actor.uid || ""),
+          updatedByName: String(actor.name || "")
+        }, { merge: true });
+      }
+
+      if (affectsCurrentStock && Math.abs(delta) > epsilon) {
         batch.set(itemRef, {
           currentQty: increment(-delta),
           lastUsageDate: date,
@@ -214,8 +231,28 @@ export async function saveDailyStockUsage(date, rows, actor = {}) {
         }, { merge: true });
       }
     }
+
+    if (index === 0) {
+      batch.set(dayMarkerRef, {
+        itemId: "__DAY__",
+        itemName: "Daily usage marker",
+        type: "META",
+        source: "DAILY_USAGE_DAY",
+        date,
+        qty: 0,
+        rowCount: validRows.length,
+        usedCount,
+        note: dayNote,
+        updatedAt: serverTimestamp(),
+        updatedByUid: String(actor.uid || ""),
+        updatedByName: String(actor.name || "")
+      }, { merge: true });
+    }
+
     await batch.commit();
   }
+
+  return { changedItems: prepared.length, usedCount, rowCount: validRows.length };
 }
 
 export async function saveStockOpname(date, rows, actor = {}) {
