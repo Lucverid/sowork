@@ -3454,3 +3454,7 @@ input, select { min-height: 40px; padding: 8px 11px; border-radius: 10px; }
   .google-sheet-actions { align-items:stretch; }
   .google-sheet-actions button { width:100%; }
 }
+
+
+/* SoWork v1.6.2 · Verified Google Sheet bridge */
+.google-sheet-live-status{display:flex;flex-direction:column;gap:4px;padding:12px 14px;border:1px solid var(--line,#dde5e8);border-radius:14px;background:#f7f9fa;font-size:13px}.google-sheet-live-status strong{font-size:13px}.google-sheet-live-status span{color:var(--muted,#71808c)}.google-sheet-live-status.loading{background:#fff9e8;border-color:#ead8a6}.google-sheet-live-status.success{background:#eefaf5;border-color:#b8e4d2}.google-sheet-live-status.error{background:#fff1f0;border-color:#efc0bb}.google-sheet-actions{flex-wrap:wrap}.google-sheet-actions .muted{margin-right:auto}

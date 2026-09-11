@@ -20,6 +20,22 @@ export function extractSpreadsheetId(value) {
   return "";
 }
 
+export async function testGoogleSheetConnection({ webAppUrl, secret, spreadsheetUrl }) {
+  const endpoint = normalizeAppsScriptUrl(webAppUrl);
+  if (!endpoint) throw new Error("Apps Script Web App URL tidak valid.");
+  const spreadsheetId = extractSpreadsheetId(spreadsheetUrl);
+  if (!spreadsheetId) throw new Error("URL Google Spreadsheet tidak valid.");
+  if (!String(secret || "").trim()) throw new Error("Secret Token belum diisi.");
+
+  const payload = {
+    action: "testConnection",
+    requestId: createRequestId(),
+    secret: String(secret).trim(),
+    spreadsheetId
+  };
+  return submitAndVerify(endpoint, payload, { timeoutMs: 20000 });
+}
+
 export async function sendScheduleToGoogleSheet({
   webAppUrl,
   secret,
@@ -39,6 +55,7 @@ export async function sendScheduleToGoogleSheet({
 
   const payload = {
     action: "writeSchedule",
+    requestId: createRequestId(),
     secret: String(secret).trim(),
     spreadsheetId,
     sheetName: sanitizeSheetName(sheetName || `Jadwal ${periodLabel}`),
@@ -68,79 +85,89 @@ export async function sendScheduleToGoogleSheet({
   };
 
   if (!payload.entries.length) throw new Error("Data jadwal tidak valid.");
-
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=UTF-8" },
-      body: JSON.stringify(payload),
-      redirect: "follow",
-      credentials: "omit"
-    });
-    if (!response.ok) throw new Error(`Apps Script merespons HTTP ${response.status}.`);
-    const text = await response.text();
-    let result;
-    try { result = JSON.parse(text); } catch { result = null; }
-    if (!result?.ok) {
-      throw new Error(result?.error || "Apps Script tidak mengembalikan status sukses.");
-    }
-    return { ...result, verified: true };
-  } catch (err) {
-    if (!isLikelyCorsError(err)) throw err;
-    await submitViaHiddenForm(endpoint, payload);
-    return { ok: true, verified: false, sheetName: payload.sheetName, mode: "form-fallback" };
-  }
+  return submitAndVerify(endpoint, payload, { timeoutMs: 30000 });
 }
 
-function isLikelyCorsError(err) {
-  const text = String(err?.message || err || "").toLowerCase();
-  return err instanceof TypeError || text.includes("fetch") || text.includes("cors") || text.includes("network");
+function createRequestId() {
+  try {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  } catch (_) {}
+  return `sowork-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+async function submitAndVerify(endpoint, payload, { timeoutMs = 25000 } = {}) {
+  if (typeof document === "undefined") throw new Error("Pengiriman Google Sheet hanya tersedia di browser.");
+  submitViaHiddenForm(endpoint, payload);
+
+  const started = Date.now();
+  let lastPending = null;
+  while (Date.now() - started < timeoutMs) {
+    await delay(lastPending ? 850 : 500);
+    const status = await readStatusJsonp(endpoint, payload.requestId);
+    if (status?.pending) {
+      lastPending = status;
+      continue;
+    }
+    if (!status?.ok) throw new Error(status?.error || "Apps Script menolak permintaan.");
+    return { ...status, verified: true };
+  }
+  throw new Error("Apps Script tidak memberi konfirmasi dalam waktu yang ditentukan. Cek deployment dan izin Web App.");
 }
 
 function submitViaHiddenForm(endpoint, payload) {
+  const frameName = `sowork-sheet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const iframe = document.createElement("iframe");
+  iframe.name = frameName;
+  iframe.style.display = "none";
+  iframe.setAttribute("aria-hidden", "true");
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = endpoint;
+  form.target = frameName;
+  form.style.display = "none";
+  const input = document.createElement("input");
+  input.type = "hidden";
+  input.name = "payload";
+  input.value = JSON.stringify(payload);
+  form.appendChild(input);
+  document.body.appendChild(iframe);
+  document.body.appendChild(form);
+  try {
+    form.submit();
+  } catch (error) {
+    iframe.remove();
+    form.remove();
+    throw error;
+  }
+  setTimeout(() => { iframe.remove(); form.remove(); }, 45000);
+}
+
+function readStatusJsonp(endpoint, requestId) {
   return new Promise((resolve, reject) => {
-    if (typeof document === "undefined") return reject(new Error("Fallback browser tidak tersedia."));
-    const frameName = `sowork-sheet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const iframe = document.createElement("iframe");
-    iframe.name = frameName;
-    iframe.style.display = "none";
-    iframe.setAttribute("aria-hidden", "true");
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = endpoint;
-    form.target = frameName;
-    form.style.display = "none";
-    const input = document.createElement("input");
-    input.type = "hidden";
-    input.name = "payload";
-    input.value = JSON.stringify(payload);
-    form.appendChild(input);
-    document.body.appendChild(iframe);
-    document.body.appendChild(form);
-    const cleanup = () => {
-      setTimeout(() => { iframe.remove(); form.remove(); }, 1000);
-    };
-    let settled = false;
-    iframe.addEventListener("load", () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve();
-    }, { once: true });
-    try {
-      form.submit();
-      setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      }, 3500);
-    } catch (error) {
-      cleanup();
-      reject(error);
+    const callback = `__soworkSheetStatus_${Date.now()}_${Math.random().toString(36).slice(2)}`.replace(/[^A-Za-z0-9_$]/g, "_");
+    const script = document.createElement("script");
+    const timer = setTimeout(() => cleanup(new Error("Tidak bisa membaca status Apps Script.")), 7000);
+
+    function cleanup(error, value) {
+      clearTimeout(timer);
+      try { delete globalThis[callback]; } catch (_) { globalThis[callback] = undefined; }
+      script.remove();
+      if (error) reject(error); else resolve(value);
     }
+
+    globalThis[callback] = value => cleanup(null, value);
+    script.onerror = () => cleanup(new Error("Status Apps Script tidak dapat diakses. Pastikan Web App diizinkan untuk Anyone."));
+    const url = new URL(endpoint);
+    url.searchParams.set("action", "status");
+    url.searchParams.set("requestId", requestId);
+    url.searchParams.set("callback", callback);
+    url.searchParams.set("_", String(Date.now()));
+    script.src = url.toString();
+    document.head.appendChild(script);
   });
 }
+
+function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function sanitizeSheetName(value) {
   const cleaned = String(value || "Jadwal")

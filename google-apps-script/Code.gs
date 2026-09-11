@@ -12,20 +12,35 @@ const SOWORK_COLORS = Object.freeze({
   light: '#FFFFFF'
 });
 
-function doGet() {
-  return jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.1' });
+function doGet(e) {
+  const action = String((e && e.parameter && e.parameter.action) || '').trim();
+  const callback = String((e && e.parameter && e.parameter.callback) || '').trim();
+  if (action === 'status') {
+    return jsonpResponse_(callback, readStatus_(String(e.parameter.requestId || '')));
+  }
+  return callback
+    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.2' })
+    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.2' });
 }
 
 function doPost(e) {
+  let requestId = '';
   try {
     const payload = parsePayload_(e);
+    requestId = String(payload.requestId || '').trim();
     verifySecret_(payload.secret);
-    if (payload.action !== 'writeSchedule') throw new Error('Action tidak didukung.');
-    const result = writeSchedule_(payload);
-    return jsonResponse_({ ok: true, ...result });
+    let result;
+    if (payload.action === 'writeSchedule') result = writeSchedule_(payload);
+    else if (payload.action === 'testConnection') result = testConnection_(payload);
+    else throw new Error('Action tidak didukung.');
+    const response = { ok: true, requestId, action: payload.action, ...result };
+    saveStatus_(requestId, response);
+    return jsonResponse_(response);
   } catch (error) {
     console.error(error);
-    return jsonResponse_({ ok: false, error: String(error && error.message ? error.message : error) });
+    const response = { ok: false, requestId, error: String(error && error.message ? error.message : error) };
+    saveStatus_(requestId, response);
+    return jsonResponse_(response);
   }
 }
 
@@ -189,4 +204,33 @@ function dayNameId_(value) {
 }
 function jsonResponse_(object) {
   return ContentService.createTextOutput(JSON.stringify(object)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function jsonpResponse_(callback, object) {
+  const safe = String(callback || '').trim();
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(safe)) return jsonResponse_(object);
+  return ContentService.createTextOutput(`${safe}(${JSON.stringify(object)});`).setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function statusKey_(requestId) {
+  return `SOWORK_STATUS_${String(requestId || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120)}`;
+}
+
+function saveStatus_(requestId, object) {
+  if (!requestId) return;
+  CacheService.getScriptCache().put(statusKey_(requestId), JSON.stringify(object), 600);
+}
+
+function readStatus_(requestId) {
+  if (!requestId) return { ok: false, error: 'requestId kosong.' };
+  const raw = CacheService.getScriptCache().get(statusKey_(requestId));
+  if (!raw) return { ok: true, pending: true };
+  try { return JSON.parse(raw); } catch (_) { return { ok: false, error: 'Status request rusak.' }; }
+}
+
+function testConnection_(payload) {
+  const spreadsheetId = String(payload.spreadsheetId || '').trim();
+  if (!spreadsheetId) throw new Error('Spreadsheet ID kosong.');
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  return { spreadsheetId, spreadsheetName: ss.getName(), url: ss.getUrl() };
 }

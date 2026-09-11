@@ -3,7 +3,7 @@ import { getUserProfile, isAdmin, login, logout, observeAuth, registerViewer } f
 import { watchSchedules, saveSchedule, removeSchedule, watchScheduleRules, saveScheduleRules, replaceScheduleRange } from "./modules/schedule/schedule.js";
 import { DEFAULT_SCHEDULE_RULES, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries } from "./modules/schedule/generator.js";
 import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
-import { sendScheduleToGoogleSheet, normalizeAppsScriptUrl, extractSpreadsheetId } from "./modules/schedule/googleSheet.js";
+import { sendScheduleToGoogleSheet, testGoogleSheetConnection, normalizeAppsScriptUrl, extractSpreadsheetId } from "./modules/schedule/googleSheet.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
 import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
@@ -944,9 +944,11 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
           <input name="sheetName" value="${escapeHtml(defaultSheetName)}" maxlength="90" required />
         </label>
         <div class="inline-rule google-sheet-rule"><strong>Yang dilakukan:</strong> SoWork membuat/menimpa tab ini, merge A1:A2 sampai D1:D2, mempertahankan warna shift, border, ukuran kolom, wrap text, serta freeze 2 baris + 4 kolom.</div>
+        <div id="google-sheet-live-status" class="google-sheet-live-status idle"><strong>Belum diuji</strong><span>Tes koneksi dulu untuk memastikan Secret Token dan Spreadsheet benar.</span></div>
         <details class="google-sheet-setup"><summary>Setup pertama kali</summary><div><span>1. Buka script.google.com → New project.</span><span>2. Paste <code>google-apps-script/Code.gs</code>.</span><span>3. Script Properties → buat <code>SOWORK_SECRET</code>.</span><span>4. Deploy sebagai Web app: Execute as Me, access Anyone.</span><span>5. Copy URL <code>/exec</code>, lalu samakan Secret Token di sini.</span></div></details>
         <div class="form-foot google-sheet-actions">
           <span class="muted small-copy">Jika nama tab sudah ada, isi tab tersebut akan diganti.</span>
+          <button type="button" class="secondary" id="test-google-sheet-connection">Tes koneksi</button>
           <button type="button" class="secondary" id="save-google-sheet-config">Simpan koneksi</button>
           <button type="submit" class="primary" id="send-google-sheet-now">Kirim sekarang</button>
         </div>
@@ -958,6 +960,12 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
   modal.querySelector(".modal-close")?.addEventListener("click", close);
   modal.addEventListener("click", e => { if (e.target === modal) close(); });
   const form = modal.querySelector("#google-sheet-schedule-form");
+  const liveStatus = modal.querySelector("#google-sheet-live-status");
+  const setSheetStatus = (type, title, message) => {
+    if (!liveStatus) return;
+    liveStatus.className = `google-sheet-live-status ${type || "idle"}`;
+    liveStatus.innerHTML = `<strong>${escapeHtml(title || "Status")}</strong><span>${escapeHtml(message || "")}</span>`;
+  };
 
   const persistConfig = async () => {
     const fd = new FormData(form);
@@ -978,12 +986,33 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
     return { webAppUrl, spreadsheetUrl, secret, sheetName: String(fd.get("sheetName") || defaultSheetName).trim() || defaultSheetName };
   };
 
+  modal.querySelector("#test-google-sheet-connection")?.addEventListener("click", async () => {
+    const btn = modal.querySelector("#test-google-sheet-connection");
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.textContent = "Menguji...";
+    setSheetStatus("loading", "Menguji koneksi...", "Memeriksa Secret Token dan akses Spreadsheet ke Apps Script.");
+    try {
+      const cfg = await persistConfig();
+      const result = await testGoogleSheetConnection(cfg);
+      setSheetStatus("success", "Koneksi valid ✓", `Terhubung ke ${result?.spreadsheetName || "Google Spreadsheet"}. Secret Token cocok.`);
+      showToast(`Koneksi valid ke “${result?.spreadsheetName || "Google Spreadsheet"}”.`, "success", "Google Sheet terhubung");
+    } catch (err) {
+      setSheetStatus("error", "Koneksi gagal", err?.message || "Secret Token / Spreadsheet / deployment tidak valid.");
+      showToast(err?.message || "Tes koneksi Google Sheet gagal.", "error", "Koneksi gagal");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldLabel;
+    }
+  });
+
   modal.querySelector("#save-google-sheet-config")?.addEventListener("click", async () => {
     const btn = modal.querySelector("#save-google-sheet-config");
     btn.disabled = true;
     try {
       await persistConfig();
-      showToast("Koneksi Google Sheet berhasil disimpan.", "success", "Google Sheet siap");
+      showToast("Konfigurasi Google Sheet disimpan. Gunakan Tes koneksi untuk memverifikasi secret dan akses spreadsheet.", "info", "Konfigurasi disimpan");
+      setSheetStatus("idle", "Konfigurasi tersimpan", "Belum diverifikasi ke Apps Script.");
     } catch (err) {
       showToast(err?.message || "Koneksi Google Sheet gagal disimpan.", "error", "Setup gagal");
     } finally {
@@ -997,6 +1026,7 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
     btn.disabled = true;
     const oldLabel = btn.textContent;
     btn.textContent = "Mengirim...";
+    setSheetStatus("loading", "Mengirim jadwal...", "Menunggu konfirmasi nyata dari Apps Script.");
     try {
       const cfg = await persistConfig();
       const result = await sendScheduleToGoogleSheet({
@@ -1011,13 +1041,10 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
           sentBy: state.profile?.name || state.user?.email || "Admin"
         }
       });
-      if (result?.verified === false) {
-        showToast("Permintaan sudah dikirim lewat fallback browser. Cek tab Google Sheet untuk memastikan hasilnya.", "success", "Jadwal dikirim");
-      } else {
-        showToast(`Jadwal berhasil dikirim ke tab “${result?.sheetName || cfg.sheetName}” dengan merge asli.`, "success", "Google Sheet diperbarui");
-      }
-      close();
+      setSheetStatus("success", "Jadwal berhasil dikirim ✓", `Apps Script mengonfirmasi tab “${result?.sheetName || cfg.sheetName}” sudah diperbarui.`);
+      showToast(`Jadwal berhasil dikirim ke tab “${result?.sheetName || cfg.sheetName}” dengan merge asli.`, "success", "Google Sheet diperbarui");
     } catch (err) {
+      setSheetStatus("error", "Pengiriman gagal", err?.message || "Apps Script menolak atau gagal memproses jadwal.");
       showToast(err?.message || "Gagal mengirim jadwal ke Google Sheet.", "error", "Google Sheet gagal");
     } finally {
       btn.disabled = false;
