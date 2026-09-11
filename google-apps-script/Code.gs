@@ -19,28 +19,28 @@ function doGet(e) {
     return jsonpResponse_(callback, readStatus_(String(e.parameter.requestId || '')));
   }
   return callback
-    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.2' })
-    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.2' });
+    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.3' })
+    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.3' });
 }
 
 function doPost(e) {
   let requestId = '';
+  let callbackToken = '';
   try {
     const payload = parsePayload_(e);
     requestId = String(payload.requestId || '').trim();
+    callbackToken = String(payload.callbackToken || '').trim();
     verifySecret_(payload.secret);
     let result;
     if (payload.action === 'writeSchedule') result = writeSchedule_(payload);
     else if (payload.action === 'testConnection') result = testConnection_(payload);
     else throw new Error('Action tidak didukung.');
     const response = { ok: true, requestId, action: payload.action, ...result };
-    saveStatus_(requestId, response);
-    return jsonResponse_(response);
+    return bridgeResponse_(requestId, callbackToken, response);
   } catch (error) {
     console.error(error);
     const response = { ok: false, requestId, error: String(error && error.message ? error.message : error) };
-    saveStatus_(requestId, response);
-    return jsonResponse_(response);
+    return bridgeResponse_(requestId, callbackToken, response);
   }
 }
 
@@ -202,6 +202,21 @@ function dayNameId_(value) {
   const days = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
   return days[new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay()];
 }
+function bridgeResponse_(requestId, callbackToken, response) {
+  // Return a tiny HTML page to the hidden iframe. postMessage works across origins
+  // and avoids Apps Script CORS / redirect / JSONP issues.
+  const message = {
+    source: 'sowork-google-sheet-bridge',
+    requestId: String(requestId || ''),
+    callbackToken: String(callbackToken || ''),
+    response: response || { ok: false, error: 'Respons kosong.' }
+  };
+  const safeJson = JSON.stringify(message).replace(/</g, '\\u003c');
+  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body><script>try{parent.postMessage(${safeJson},'*');}catch(e){}<\/script></body></html>`;
+  return HtmlService.createHtmlOutput(html)
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
 function jsonResponse_(object) {
   return ContentService.createTextOutput(JSON.stringify(object)).setMimeType(ContentService.MimeType.JSON);
 }

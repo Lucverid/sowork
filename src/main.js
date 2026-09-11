@@ -928,7 +928,7 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
       </div>
       <form id="google-sheet-schedule-form" class="settings-form">
         <div class="google-sheet-status ${config.googleSheetWebAppUrl ? "connected" : ""}">
-          <div><strong>${config.googleSheetWebAppUrl ? "Apps Script siap" : "Apps Script belum diatur"}</strong><span>${config.googleSheetWebAppUrl ? "Merge, warna, border, dan freeze pane dibuat langsung di Google Sheet." : "Isi Web App URL sekali. Template script sudah disertakan di project v1.6.1."}</span></div>
+          <div><strong>${config.googleSheetWebAppUrl ? "Apps Script siap" : "Apps Script belum diatur"}</strong><span>${config.googleSheetWebAppUrl ? "Merge, warna, border, dan freeze pane dibuat langsung di Google Sheet." : "Isi Web App URL sekali. Template script sudah disertakan di project v1.6.3."}</span></div>
           <span class="status-pill">${config.googleSheetWebAppUrl ? "Ready" : "Setup"}</span>
         </div>
         <label>Apps Script Web App URL

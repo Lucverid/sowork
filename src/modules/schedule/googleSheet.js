@@ -97,73 +97,73 @@ function createRequestId() {
 
 async function submitAndVerify(endpoint, payload, { timeoutMs = 25000 } = {}) {
   if (typeof document === "undefined") throw new Error("Pengiriman Google Sheet hanya tersedia di browser.");
-  submitViaHiddenForm(endpoint, payload);
 
-  const started = Date.now();
-  let lastPending = null;
-  while (Date.now() - started < timeoutMs) {
-    await delay(lastPending ? 850 : 500);
-    const status = await readStatusJsonp(endpoint, payload.requestId);
-    if (status?.pending) {
-      lastPending = status;
-      continue;
-    }
-    if (!status?.ok) throw new Error(status?.error || "Apps Script menolak permintaan.");
-    return { ...status, verified: true };
-  }
-  throw new Error("Apps Script tidak memberi konfirmasi dalam waktu yang ditentukan. Cek deployment dan izin Web App.");
+  // v1.6.3: Apps Script ContentService redirects can make CORS/JSONP unreliable.
+  // Use a hidden iframe + window.postMessage instead. The Apps Script response page
+  // runs inside that iframe and sends the verified result back to this page.
+  const callbackToken = createRequestId();
+  const messagePayload = { ...payload, callbackToken };
+  return submitViaIframeBridge(endpoint, messagePayload, { timeoutMs });
 }
 
-function submitViaHiddenForm(endpoint, payload) {
-  const frameName = `sowork-sheet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const iframe = document.createElement("iframe");
-  iframe.name = frameName;
-  iframe.style.display = "none";
-  iframe.setAttribute("aria-hidden", "true");
-  const form = document.createElement("form");
-  form.method = "POST";
-  form.action = endpoint;
-  form.target = frameName;
-  form.style.display = "none";
-  const input = document.createElement("input");
-  input.type = "hidden";
-  input.name = "payload";
-  input.value = JSON.stringify(payload);
-  form.appendChild(input);
-  document.body.appendChild(iframe);
-  document.body.appendChild(form);
-  try {
-    form.submit();
-  } catch (error) {
-    iframe.remove();
-    form.remove();
-    throw error;
-  }
-  setTimeout(() => { iframe.remove(); form.remove(); }, 45000);
-}
-
-function readStatusJsonp(endpoint, requestId) {
+function submitViaIframeBridge(endpoint, payload, { timeoutMs = 25000 } = {}) {
   return new Promise((resolve, reject) => {
-    const callback = `__soworkSheetStatus_${Date.now()}_${Math.random().toString(36).slice(2)}`.replace(/[^A-Za-z0-9_$]/g, "_");
-    const script = document.createElement("script");
-    const timer = setTimeout(() => cleanup(new Error("Tidak bisa membaca status Apps Script.")), 7000);
+    const frameName = `sowork-sheet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const iframe = document.createElement("iframe");
+    iframe.name = frameName;
+    iframe.style.display = "none";
+    iframe.setAttribute("aria-hidden", "true");
 
-    function cleanup(error, value) {
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = endpoint;
+    form.target = frameName;
+    form.style.display = "none";
+
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "payload";
+    input.value = JSON.stringify(payload);
+    form.appendChild(input);
+
+    let settled = false;
+    const cleanup = () => {
+      window.removeEventListener("message", onMessage);
+      iframe.remove();
+      form.remove();
+    };
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      try { delete globalThis[callback]; } catch (_) { globalThis[callback] = undefined; }
-      script.remove();
-      if (error) reject(error); else resolve(value);
-    }
+      cleanup();
+      if (error) reject(error); else resolve(result);
+    };
 
-    globalThis[callback] = value => cleanup(null, value);
-    script.onerror = () => cleanup(new Error("Status Apps Script tidak dapat diakses. Pastikan Web App diizinkan untuk Anyone."));
-    const url = new URL(endpoint);
-    url.searchParams.set("action", "status");
-    url.searchParams.set("requestId", requestId);
-    url.searchParams.set("callback", callback);
-    url.searchParams.set("_", String(Date.now()));
-    script.src = url.toString();
-    document.head.appendChild(script);
+    const onMessage = event => {
+      // Only accept messages emitted by the exact hidden iframe we created.
+      if (event.source !== iframe.contentWindow) return;
+      const data = event.data;
+      if (!data || data.source !== "sowork-google-sheet-bridge") return;
+      if (String(data.requestId || "") !== String(payload.requestId || "")) return;
+      if (String(data.callbackToken || "") !== String(payload.callbackToken || "")) return;
+      const response = data.response || {};
+      if (!response.ok) return finish(new Error(response.error || "Apps Script menolak permintaan."));
+      finish(null, { ...response, verified: true });
+    };
+
+    window.addEventListener("message", onMessage);
+    const timer = setTimeout(() => {
+      finish(new Error("Apps Script tidak memberi balasan terverifikasi. Pastikan deployment memakai versi Code.gs v1.6.3, Execute as Me, dan akses Anyone."));
+    }, timeoutMs);
+
+    document.body.appendChild(iframe);
+    document.body.appendChild(form);
+    try {
+      form.submit();
+    } catch (error) {
+      finish(error);
+    }
   });
 }
 
