@@ -19,8 +19,8 @@ function doGet(e) {
     return jsonpResponse_(callback, readStatus_(String(e.parameter.requestId || '')));
   }
   return callback
-    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.3' })
-    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.3' });
+    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.5' })
+    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.5' });
 }
 
 function doPost(e) {
@@ -64,8 +64,10 @@ function writeSchedule_(payload) {
     ...((payload.rules && Array.isArray(payload.rules.maleNames)) ? payload.rules.maleNames : []),
     ...((payload.rules && Array.isArray(payload.rules.femaleNames)) ? payload.rules.femaleNames : [])
   ].map(String);
+
   const crew = unique_(entries.map(x => String(x.crewName || '')).filter(Boolean));
   crew.sort((a, b) => rank_(preferred, a) - rank_(preferred, b) || a.localeCompare(b));
+
   const dates = unique_(entries.map(x => String(x.date || '')).filter(Boolean)).sort();
   const byKey = {};
   entries.forEach(x => { byKey[`${x.date}__${x.crewName}`] = x; });
@@ -74,27 +76,56 @@ function writeSchedule_(payload) {
   const row2 = ['', '', '', '', ...dates.map(dayNameId_)];
   const values = [row1, row2];
 
+  // v1.6.5: setiap crew memakai 2 baris.
+  // Baris pertama berisi data, baris kedua kosong lalu seluruh pasangan sel
+  // digabung vertikal (A3:A4, B3:B4, ... E3:E4, dst).
   crew.forEach((name, index) => {
     const gender = genderFor_(name, payload.rules);
-    const row = [index + 1, name, gender, String(payload.periodLabel || 'Jadwal')];
+    const firstRow = [index + 1, name, gender, String(payload.periodLabel || 'Jadwal')];
+
     dates.forEach(date => {
       const item = byKey[`${date}__${name}`];
-      if (!item) return row.push('');
-      if (String(item.shift) === 'Libur') return row.push('LIBUR');
-      const overtime = item.overtime ? `\nLEMBUR: ${item.overtimeType || 'Buka'}` : '';
-      row.push(`${item.role || '-'}${overtime}`);
+      if (!item) return firstRow.push('');
+      if (String(item.shift) === 'Libur') return firstRow.push('LIBUR');
+      const overtime = item.overtime ? `
+LEMBUR: ${item.overtimeType || 'Buka'}` : '';
+      firstRow.push(`${item.role || '-'}${overtime}`);
     });
-    values.push(row);
+
+    values.push(firstRow);
+    values.push(new Array(row1.length).fill(''));
   });
 
   ensureSize_(sheet, values.length, row1.length);
+
   const range = sheet.getRange(1, 1, values.length, row1.length);
   range.setValues(values);
-  range.setFontFamily('Arial').setFontSize(10).setVerticalAlignment('middle').setHorizontalAlignment('center').setWrap(true);
-  range.setBorder(true, true, true, true, true, true, SOWORK_COLORS.border, SpreadsheetApp.BorderStyle.SOLID);
+  range
+    .setFontFamily('Arial')
+    .setFontSize(10)
+    .setVerticalAlignment('middle')
+    .setHorizontalAlignment('center')
+    .setWrap(true);
+  range.setBorder(
+    true, true, true, true, true, true,
+    SOWORK_COLORS.border,
+    SpreadsheetApp.BorderStyle.SOLID
+  );
 
-  // Merge asli Google Sheets: bukan metadata clipboard.
-  for (let col = 1; col <= 4; col++) sheet.getRange(1, col, 2, 1).merge();
+  // Header 2 baris.
+  for (let col = 1; col <= 4; col++) {
+    sheet.getRange(1, col, 2, 1).merge();
+  }
+
+  // Setiap crew = 2 baris, dan SEMUA kolom digabung vertikal.
+  // Contoh crew pertama:
+  // A3:A4, B3:B4, C3:C4, D3:D4, E3:E4, F3:F4, dst.
+  crew.forEach((name, crewIndex) => {
+    const startRow = 3 + (crewIndex * 2);
+    for (let col = 1; col <= row1.length; col++) {
+      sheet.getRange(startRow, col, 2, 1).merge();
+    }
+  });
 
   // Header.
   sheet.getRange(1, 1, 2, row1.length)
@@ -102,39 +133,62 @@ function writeSchedule_(payload) {
     .setFontColor(SOWORK_COLORS.dark)
     .setFontWeight('bold');
 
-  // Body identity + shift colors.
+  // Identity + warna shift pada merged cell.
   crew.forEach((name, crewIndex) => {
-    const row = crewIndex + 3;
+    const row = 3 + (crewIndex * 2);
     const gender = genderFor_(name, payload.rules);
     const identity = gender === 'Pria' ? SOWORK_COLORS.male : SOWORK_COLORS.female;
-    sheet.getRange(row, 1, 1, 3).setBackground(identity).setFontColor(SOWORK_COLORS.dark);
+
+    for (let col = 1; col <= 3; col++) {
+      sheet.getRange(row, col, 2, 1)
+        .setBackground(identity)
+        .setFontColor(SOWORK_COLORS.dark);
+    }
+
     sheet.getRange(row, 2).setFontWeight('bold');
-    sheet.getRange(row, 4).setBackground(SOWORK_COLORS.light).setFontColor(SOWORK_COLORS.dark);
+
+    sheet.getRange(row, 4, 2, 1)
+      .setBackground(SOWORK_COLORS.light)
+      .setFontColor(SOWORK_COLORS.dark);
 
     dates.forEach((date, dateIndex) => {
       const item = byKey[`${date}__${name}`];
       if (!item) return;
-      const cell = sheet.getRange(row, dateIndex + 5);
+
+      const cell = sheet.getRange(row, dateIndex + 5, 2, 1);
       const shift = String(item.shift || '');
-      const fill = item.overtime ? SOWORK_COLORS.Lembur : (SOWORK_COLORS[shift] || SOWORK_COLORS.light);
-      const font = (shift === 'S2' || shift === 'Libur') && !item.overtime ? SOWORK_COLORS.light : SOWORK_COLORS.dark;
+      const fill = item.overtime
+        ? SOWORK_COLORS.Lembur
+        : (SOWORK_COLORS[shift] || SOWORK_COLORS.light);
+
+      const font = (shift === 'S2' || shift === 'Libur') && !item.overtime
+        ? SOWORK_COLORS.light
+        : SOWORK_COLORS.dark;
+
       cell.setBackground(fill).setFontColor(font);
     });
   });
 
-  // Layout mendekati export SoWork.
+  // Layout.
   sheet.setColumnWidth(1, 52);
   sheet.setColumnWidth(2, 145);
   sheet.setColumnWidth(3, 88);
   sheet.setColumnWidth(4, 130);
   if (dates.length) sheet.setColumnWidths(5, dates.length, 112);
+
   sheet.setRowHeight(1, 25);
   sheet.setRowHeight(2, 24);
-  if (crew.length) sheet.setRowHeights(3, crew.length, 34);
+
+  // Dua row per crew; tinggi total visual ± 42px.
+  crew.forEach((_, crewIndex) => {
+    const row = 3 + (crewIndex * 2);
+    sheet.setRowHeight(row, 21);
+    sheet.setRowHeight(row + 1, 21);
+  });
+
   sheet.setFrozenRows(2);
   sheet.setFrozenColumns(4);
 
-  // Metadata ringan agar tab mudah diaudit tanpa mengganggu tabel.
   const note = [
     `SoWork ${String(payload.metadata && payload.metadata.workspace || 'SoWork')}`,
     payload.metadata && payload.metadata.branch ? `Cabang: ${payload.metadata.branch}` : '',
@@ -144,12 +198,15 @@ function writeSchedule_(payload) {
   sheet.getRange(1, 1).setNote(note);
 
   SpreadsheetApp.flush();
+
   return {
     spreadsheetId,
     spreadsheetName: ss.getName(),
     sheetName,
     rowCount: values.length,
     columnCount: row1.length,
+    crewCount: crew.length,
+    mergedCrewRows: true,
     url: `${ss.getUrl()}#gid=${sheet.getSheetId()}`
   };
 }
@@ -203,16 +260,31 @@ function dayNameId_(value) {
   return days[new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay()];
 }
 function bridgeResponse_(requestId, callbackToken, response) {
-  // Return a tiny HTML page to the hidden iframe. postMessage works across origins
-  // and avoids Apps Script CORS / redirect / JSONP issues.
   const message = {
     source: 'sowork-google-sheet-bridge',
     requestId: String(requestId || ''),
     callbackToken: String(callbackToken || ''),
     response: response || { ok: false, error: 'Respons kosong.' }
   };
-  const safeJson = JSON.stringify(message).replace(/</g, '\\u003c');
-  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body><script>try{parent.postMessage(${safeJson},'*');}catch(e){}<\/script></body></html>`;
+
+  const safeJson = JSON.stringify(message).replace(/</g, '\u003c');
+
+  // v1.6.5: kirim konfirmasi ke halaman paling atas.
+  // Apps Script kadang membungkus output dalam iframe/redirect Google.
+  const html = `<!doctype html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<script>
+try {
+  window.top.postMessage(${safeJson}, '*');
+} catch (e) {
+  try { window.parent.postMessage(${safeJson}, '*'); } catch (_) {}
+}
+<\/script>
+</body>
+</html>`;
+
   return HtmlService.createHtmlOutput(html)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }

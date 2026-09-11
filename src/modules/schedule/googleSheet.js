@@ -98,12 +98,25 @@ function createRequestId() {
 async function submitAndVerify(endpoint, payload, { timeoutMs = 25000 } = {}) {
   if (typeof document === "undefined") throw new Error("Pengiriman Google Sheet hanya tersedia di browser.");
 
-  // v1.6.3: Apps Script ContentService redirects can make CORS/JSONP unreliable.
-  // Use a hidden iframe + window.postMessage instead. The Apps Script response page
-  // runs inside that iframe and sends the verified result back to this page.
+  // v1.6.5: tetap memakai hidden iframe POST, tetapi konfirmasi tidak lagi
+  // mengandalkan event.source === iframe.contentWindow. Apps Script dapat
+  // membungkus response di frame Google lain setelah redirect.
   const callbackToken = createRequestId();
   const messagePayload = { ...payload, callbackToken };
   return submitViaIframeBridge(endpoint, messagePayload, { timeoutMs });
+}
+
+function isTrustedAppsScriptOrigin(origin) {
+  try {
+    const url = new URL(String(origin || ""));
+    if (url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    return host === "script.google.com" ||
+      host === "script.googleusercontent.com" ||
+      host.endsWith(".googleusercontent.com");
+  } catch {
+    return false;
+  }
 }
 
 function submitViaIframeBridge(endpoint, payload, { timeoutMs = 25000 } = {}) {
@@ -141,8 +154,9 @@ function submitViaIframeBridge(endpoint, payload, { timeoutMs = 25000 } = {}) {
     };
 
     const onMessage = event => {
-      // Only accept messages emitted by the exact hidden iframe we created.
-      if (event.source !== iframe.contentWindow) return;
+      // v1.6.5: Apps Script dapat mengirim dari wrapper script.googleusercontent.com.
+      // Keamanan tetap dijaga oleh origin Google + requestId + callbackToken acak.
+      if (!isTrustedAppsScriptOrigin(event.origin)) return;
       const data = event.data;
       if (!data || data.source !== "sowork-google-sheet-bridge") return;
       if (String(data.requestId || "") !== String(payload.requestId || "")) return;
@@ -154,7 +168,7 @@ function submitViaIframeBridge(endpoint, payload, { timeoutMs = 25000 } = {}) {
 
     window.addEventListener("message", onMessage);
     const timer = setTimeout(() => {
-      finish(new Error("Apps Script tidak memberi balasan terverifikasi. Pastikan deployment memakai versi Code.gs v1.6.3, Execute as Me, dan akses Anyone."));
+      finish(new Error("Jadwal mungkin sudah terkirim, tetapi konfirmasi Apps Script tidak diterima. Pastikan Code.gs memakai bridge v1.6.5 lalu deploy New version."));
     }, timeoutMs);
 
     document.body.appendChild(iframe);
