@@ -5,7 +5,7 @@ import { DEFAULT_SCHEDULE_RULES, cleanNames, generateSchedule, normalizeRules, s
 import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
 import { sendScheduleToGoogleSheet, testGoogleSheetConnection, normalizeAppsScriptUrl, extractSpreadsheetId } from "./modules/schedule/googleSheet.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
-import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
+import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, removeDailyStockUsageDay, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
 import { watchWasteItems, watchWasteDays, saveWasteItem, archiveWasteItem, restoreWasteItem, permanentDeleteWasteItem, saveWasteDay, removeWasteDay, seedWasteReference } from "./modules/waste/waste.js";
 import { buildWasteAnalytics, wasteDashboardAlerts } from "./modules/waste/analytics.js";
@@ -2566,13 +2566,16 @@ function openDailyStockUsageEditor(initialDate) {
   const initialNote=String(dayMarker?.note || dayRows.find(x=>x.note)?.note || "");
   const dayAlreadyRecorded=Boolean(dayMarker || dayRows.length);
   modal.innerHTML=`<section class="edit-modal wide-modal usage-modal" role="dialog" aria-modal="true">
-    <div class="modal-head"><div><span class="overline">PENGGUNAAN STOK</span><h3>Pemakaian barang harian</h3><p class="muted">Isi setiap hari, termasuk 0 jika barang tidak digunakan. Simpan cepat hanya memproses barang yang berubah.</p></div><button type="button" class="modal-close">×</button></div>
+    <div class="modal-head"><div><span class="overline">PENGGUNAAN STOK</span><h3>Pemakaian barang harian</h3><p class="muted">Isi setiap hari, termasuk 0 jika barang tidak digunakan. Kalau salah tanggal, hapus data tanggal agar tanda kalender ikut hilang.</p></div><button type="button" class="modal-close">×</button></div>
     <form id="stock-usage-form" class="edit-form">
       <div class="usage-toolbar"><label>Tanggal penggunaan<input name="date" type="date" value="${escapeHtml(date)}" required/></label><label>Catatan umum<input name="note" value="${escapeHtml(initialNote)}" placeholder="Produksi normal / event / ramai..."/></label></div>
       <div class="usage-input-list">
         ${activeItems.map(item=>{const row=existing[item.id]||{};return `<div class="usage-input-row"><div><strong>${escapeHtml(item.name)}</strong><span>Stok sistem ${formatQty(item.currentQty)} ${escapeHtml(item.unit||"PCS")}</span></div><label><input name="use_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(row.qty||0)}"/><span>${escapeHtml(item.unit||"PCS")}</span></label></div>`}).join("")}
       </div>
-      <div class="modal-actions"><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan Penggunaan ${escapeHtml(formatDate(date))}</button></div>
+      <div class="modal-actions">
+        ${dayAlreadyRecorded ? `<button type="button" id="delete-stock-usage-day" class="danger">Hapus data tanggal</button>` : `<span></span>`}
+        <div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan Penggunaan ${escapeHtml(formatDate(date))}</button></div>
+      </div>
     </form>
   </section>`;
   document.body.appendChild(modal);
@@ -2582,6 +2585,34 @@ function openDailyStockUsageEditor(initialDate) {
   modal.onclick=e=>{if(e.target===modal)close();};
   const form=modal.querySelector("#stock-usage-form");
   form.elements.date.addEventListener("change",()=>openDailyStockUsageEditor(form.elements.date.value));
+
+  const deleteDayBtn=modal.querySelector("#delete-stock-usage-day");
+  if(deleteDayBtn){
+    deleteDayBtn.onclick=async()=>{
+      const filledCount=dayRows.filter(x=>Number(x.qty||0)>0).length;
+      const detail=filledCount
+        ? ` ${filledCount} pemakaian pada tanggal ini akan dihapus dan stok yang sebelumnya berkurang akan dikembalikan jika transaksi tersebut memang memengaruhi stok saat ini.`
+        : " Tanda 'sudah dicek' pada kalender akan dihapus.";
+      if(!confirm(`Hapus data penggunaan stok ${formatDate(date)}?${detail}`))return;
+      deleteDayBtn.disabled=true;
+      deleteDayBtn.textContent="Menghapus...";
+      try{
+        const result=await removeDailyStockUsageDay(date,{uid:state.user?.uid,name:state.profile?.name||state.user?.email});
+        close();
+        const restoredItems=Number(result?.restoredItems||0);
+        const removed=Number(result?.removedMovements||0);
+        showToast(restoredItems>0
+          ? `${removed} pemakaian dihapus · stok ${restoredItems} item dikembalikan.`
+          : "Data tanggal dihapus. Tanda pada kalender sudah dibersihkan.",
+          "success","Penggunaan dihapus");
+      }catch(err){
+        showToast(err?.message||friendlyError(err),"error","Gagal menghapus penggunaan");
+        deleteDayBtn.disabled=false;
+        deleteDayBtn.textContent="Hapus data tanggal";
+      }
+    };
+  }
+
   form.onsubmit=async e=>{
     e.preventDefault();
     const fd=new FormData(form);

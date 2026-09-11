@@ -255,6 +255,98 @@ export async function saveDailyStockUsage(date, rows, actor = {}) {
   return { changedItems: prepared.length, usedCount, rowCount: validRows.length };
 }
 
+
+export async function removeDailyStockUsageDay(date, actor = {}) {
+  if (!date) throw new Error("Tanggal penggunaan stok wajib dipilih.");
+
+  // Penghapusan hari bersifat lengkap: marker kalender + seluruh movement DAILY_USAGE.
+  // Jika movement tersebut dulu mengurangi stok saat ini, qty dikembalikan lagi.
+  const snap = await getDocs(collection(db, "stockMovements"));
+  const allRows = snap.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() }));
+  const markerId = `USE_DAY_${date}`;
+  const targets = allRows.filter(row => {
+    if (String(row.id || "") === markerId) return true;
+    if (String(row.date || "") !== String(date)) return false;
+    if (row.source === "DAILY_USAGE_DAY") return true;
+    return row.source === "DAILY_USAGE" || (row.type === "OUT" && String(row.id || "").startsWith(`USE_${date}_`));
+  });
+
+  // Marker bisa saja belum masuk snapshot realtime saat tombol ditekan; tetap hapus by id.
+  const targetIds = new Set(targets.map(row => String(row.id || "")));
+  if (!targetIds.has(markerId)) {
+    targets.push({ id: markerId, ref: doc(db, "stockMovements", markerId), source: "DAILY_USAGE_DAY", date, qty: 0 });
+    targetIds.add(markerId);
+  }
+
+  const usageTargets = targets.filter(row => row.source !== "DAILY_USAGE_DAY" && row.type === "OUT");
+  const restoreByItem = new Map();
+
+  for (const row of usageTargets) {
+    const itemId = String(row.itemId || "").trim();
+    const qty = Math.max(0, Number(row.qty || 0));
+    if (!itemId || qty <= 0) continue;
+
+    let affectsCurrentStock = row.affectsCurrentStock;
+    if (typeof affectsCurrentStock !== "boolean") {
+      const itemSnap = await getDoc(doc(db, "items", itemId));
+      const lastOpnameDate = itemSnap.exists() ? String(itemSnap.data()?.lastOpnameDate || "") : "";
+      affectsCurrentStock = !lastOpnameDate || String(date) > lastOpnameDate;
+    }
+    if (!affectsCurrentStock) continue;
+
+    const current = restoreByItem.get(itemId) || { qty: 0 };
+    current.qty += qty;
+    restoreByItem.set(itemId, current);
+  }
+
+  // Hitung tanggal penggunaan terakhir sebelumnya supaya metadata item tidak menunjuk
+  // ke tanggal yang baru saja dihapus.
+  const previousUsageDateByItem = new Map();
+  for (const itemId of restoreByItem.keys()) {
+    const previous = allRows
+      .filter(row => row.type === "OUT"
+        && row.source === "DAILY_USAGE"
+        && String(row.itemId || "") === itemId
+        && String(row.date || "") !== String(date))
+      .map(row => String(row.date || ""))
+      .filter(Boolean)
+      .sort()
+      .pop() || "";
+    previousUsageDateByItem.set(itemId, previous);
+  }
+
+  for (const part of chunk(targets, 350)) {
+    const batch = writeBatch(db);
+    for (const row of part) batch.delete(row.ref || doc(db, "stockMovements", row.id));
+    await batch.commit();
+  }
+
+  const restoreEntries = [...restoreByItem.entries()];
+  for (const part of chunk(restoreEntries, 180)) {
+    const batch = writeBatch(db);
+    for (const [itemId, restore] of part) {
+      batch.set(doc(db, "items", itemId), {
+        currentQty: increment(Math.max(0, Number(restore.qty || 0))),
+        lastUsageDate: previousUsageDateByItem.get(itemId) || "",
+        updatedAt: serverTimestamp(),
+        usageDeletedAt: serverTimestamp(),
+        usageDeletedByUid: String(actor.uid || ""),
+        usageDeletedByName: String(actor.name || "")
+      }, { merge: true });
+    }
+    await batch.commit();
+  }
+
+  const restoredQty = restoreEntries.reduce((sum, [, value]) => sum + Math.max(0, Number(value.qty || 0)), 0);
+  return {
+    date: String(date),
+    removedDocuments: targets.length,
+    removedMovements: usageTargets.length,
+    restoredItems: restoreEntries.length,
+    restoredQty
+  };
+}
+
 export async function saveStockOpname(date, rows, actor = {}) {
   if (!date || !rows?.length) throw new Error("Tanggal dan data SO wajib diisi.");
   const chunks = chunk(rows, 180);
