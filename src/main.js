@@ -669,39 +669,20 @@ function renderDashboard(target) {
   });
 }
 
-function normalizeScheduleRows(entries = []) {
-  return (Array.isArray(entries) ? entries : [])
-    .map(row => ({
-      ...row,
-      date: String(row?.date || "").trim(),
-      crewName: String(row?.crewName || "").trim(),
-      shift: String(row?.shift || "").trim(),
-      role: String(row?.role || "").trim()
-    }))
-    .filter(row => /^\d{4}-\d{2}-\d{2}$/.test(row.date) && row.crewName);
-}
-
 function scheduleMonthForDate(value) {
-  const key = String(value || "");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
-  const [year, month, day] = key.split("-").map(Number);
-  const date = new Date(year, month - 1, day);
-  if (day > 25) date.setMonth(date.getMonth() + 1);
+  const date = parseLocalDate(value);
+  if (!date) return null;
+  if (date.getDate() > 25) date.setMonth(date.getMonth() + 1);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function latestScheduleMonth(entries = []) {
-  const dates = normalizeScheduleRows(entries).map(x => x.date).sort();
-  return dates.length ? scheduleMonthForDate(dates[dates.length - 1]) : null;
-}
-
-function safeScheduleMonth(value, fallback = defaultScheduleMonth()) {
-  return /^\d{4}-\d{2}$/.test(String(value || "")) ? String(value) : fallback;
+  const dates = entries.map(x => String(x?.date || "")).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)).sort();
+  return dates.length ? scheduleMonthForDate(dates.at(-1)) : null;
 }
 
 function scheduleRangeKeys(monthKey, includeCarryover = true) {
-  const safe = safeScheduleMonth(monthKey);
-  const [year, month] = safe.split("-").map(Number);
+  const [year, month] = String(monthKey || defaultScheduleMonth()).split("-").map(Number);
   const start = includeCarryover ? new Date(year, month - 2, 26) : new Date(year, month - 1, 1);
   const end = new Date(year, month - 1, 25);
   return { start: localDateKey(start), end: localDateKey(end) };
@@ -709,138 +690,123 @@ function scheduleRangeKeys(monthKey, includeCarryover = true) {
 
 function schedulesForPeriod(entries, monthKey, includeCarryover = true) {
   const range = scheduleRangeKeys(monthKey, includeCarryover);
-  return normalizeScheduleRows(entries).filter(row => row.date >= range.start && row.date <= range.end);
+  return (entries || []).filter(row => {
+    const key = String(row?.date || "");
+    return key >= range.start && key <= range.end;
+  });
 }
 
 function renderSchedule(target) {
-  try {
-    renderScheduleContent(target);
-  } catch (err) {
-    console.error("Schedule page render failed:", err);
-    renderScheduleRecovery(target, err);
-  }
-}
-
-function renderScheduleContent(target) {
   const admin = isAdmin(state.profile);
   const rules = normalizeRules(state.scheduleRules || DEFAULT_SCHEDULE_RULES);
-  const validRows = normalizeScheduleRows(state.schedules);
-  const newestMonth = latestScheduleMonth(validRows);
-  const selected = safeScheduleMonth(state.scheduleMonth, newestMonth || defaultScheduleMonth());
+  const selected = state.scheduleMonth || defaultScheduleMonth();
   state.scheduleMonth = selected;
-
-  const includeCarryover = state.scheduleIncludeCarryover !== false;
+  const [selectedYear, selectedMonth] = selected.split("-").map(Number);
+  const includeCarryover = state.scheduleIncludeCarryover ?? (new Date().getDate() > 25);
   state.scheduleIncludeCarryover = includeCarryover;
-  const range = scheduleRangeKeys(selected, includeCarryover);
-  const periodSchedules = schedulesForPeriod(validRows, selected, includeCarryover);
+  const targetStart = includeCarryover ? new Date(selectedYear, selectedMonth - 2, 26) : new Date(selectedYear, selectedMonth - 1, 1);
+  const targetEnd = new Date(selectedYear, selectedMonth - 1, 25);
+  const periodSchedules = (state.schedules || []).filter(s => {
+    const d = parseLocalDate(s?.date);
+    return d && d >= targetStart && d <= targetEnd;
+  });
   const preview = state.schedulePreview;
-  const previewEntries = Array.isArray(preview?.entries) ? normalizeScheduleRows(preview.entries) : [];
-  const scheduleForGrid = previewEntries.length ? previewEntries : periodSchedules;
-  const overtimePeriod = scheduleForGrid.filter(x => Boolean(x.overtime));
-  let fairnessSummary = null;
-  if (scheduleForGrid.length) {
-    try {
-      fairnessSummary = preview?.summary || summarizeScheduleEntries(scheduleForGrid, [...rules.maleNames, ...rules.femaleNames]);
-    } catch (err) {
-      console.warn("Schedule fairness summary skipped:", err);
-    }
-  }
-  const hasOtherSchedules = !scheduleForGrid.length && validRows.length > 0 && newestMonth && newestMonth !== selected;
-  let overtimeHistoryHtml = "";
-  if (admin) {
-    try { overtimeHistoryHtml = renderOvertimeHistory(validRows); } catch (err) { console.warn("Overtime history skipped:", err); }
-  }
+  const scheduleForGrid = preview?.entries?.length ? preview.entries : periodSchedules;
+  const overtimePeriod = scheduleForGrid.filter(x => x?.overtime);
+  const fairnessSummary = scheduleForGrid.length
+    ? (preview?.summary || summarizeScheduleEntries(scheduleForGrid, [...rules.maleNames, ...rules.femaleNames]))
+    : null;
 
   target.innerHTML = `
-    <section class="page-intro schedule-page-intro">
-      <div><span class="overline">SMART SCHEDULER</span><h1>Jadwal Kerja</h1><p>Jadwal dibaca dari data valid dan tetap bisa dibuka walaupun ada record lama yang tidak lengkap.</p></div>
+    <section class="page-intro">
+      <div><span class="overline">SMART SCHEDULER</span><h1>Jadwal Kerja</h1><p>Status shift pakai indikator warna, sementara role kerja tetap terbaca jelas seperti format sheet operasional.</p></div>
       ${admin ? `<span class="access-tag">CRUD + Export</span>` : `<span class="access-tag read">Read only</span>`}
     </section>
-
-    <article class="panel schedule-browser-panel">
-      <div class="schedule-browser-main">
-        <button id="schedule-prev-month" class="secondary schedule-nav-btn" type="button" aria-label="Periode sebelumnya">‹</button>
-        <label class="schedule-period-picker"><span>Periode</span><input id="schedule-view-month" type="month" value="${escapeHtml(selected)}" /></label>
-        <button id="schedule-next-month" class="secondary schedule-nav-btn" type="button" aria-label="Periode berikutnya">›</button>
-        <button id="schedule-current-period" class="secondary compact" type="button">Periode sekarang</button>
-      </div>
-      <div class="schedule-browser-meta">
-        <strong>${escapeHtml(monthTitle(selected))}</strong>
-        <span>${escapeHtml(formatDate(range.start))} – ${escapeHtml(formatDate(range.end))}</span>
-        <label class="switch-line schedule-range-switch"><input id="carryover-toggle" type="checkbox" ${includeCarryover ? "checked" : ""} /> Periode 26 → 25</label>
-      </div>
-    </article>
-
-    ${state.scheduleError ? `<div class="validation-box warning"><strong>Sinkronisasi jadwal bermasalah</strong><span>${escapeHtml(state.scheduleError)}</span></div>` : ""}
-    ${!state.scheduleLoaded && !validRows.length ? `<article class="panel schedule-loading-panel"><div class="loading-row"><span class="loading-spinner"></span><div><strong>Memuat jadwal…</strong><small>Mengambil data realtime dari Firestore.</small></div></div></article>` : ""}
-    ${hasOtherSchedules ? `<div class="validation-box info schedule-empty-recovery"><strong>Periode ini belum punya jadwal.</strong><span>Jadwal terbaru ada di ${escapeHtml(monthTitle(newestMonth))}.</span><button id="open-latest-schedule" class="secondary compact" type="button">Buka jadwal terbaru</button></div>` : ""}
-    ${validRows.length !== (Array.isArray(state.schedules) ? state.schedules.length : 0) ? `<div class="validation-box warning"><strong>Ada data jadwal lama yang dilewati</strong><span>${Math.max(0, (state.schedules?.length || 0) - validRows.length)} record tidak punya tanggal/nama crew yang valid sehingga tidak dipakai untuk mencegah halaman crash.</span></div>` : ""}
 
     ${admin ? `
       <article class="panel scheduler-panel">
         <div class="panel-head">
-          <div><span class="overline">AUTO GENERATOR</span><h3>Generate Jadwal</h3><p class="muted small-copy">Preview mengikuti periode yang sedang dipilih.</p></div>
+          <div><span class="overline">AUTO GENERATOR</span><h3>Generate Jadwal</h3></div>
           <span class="count-pill">${includeCarryover ? "26 → 25" : "1 → 25"}</span>
         </div>
-        <div class="scheduler-top-grid scheduler-top-grid-clean">
-          <div class="scheduler-hint compact-hint"><strong>${escapeHtml(monthTitle(selected))}</strong><span>${escapeHtml(range.start)} s/d ${escapeHtml(range.end)}</span></div>
+
+        <div class="scheduler-top-grid">
+          <label>Bulan jadwal
+            <input id="schedule-month" type="month" value="${escapeHtml(selected)}" />
+          </label>
+          <label class="toggle-label">
+            <span>Periode transisi</span>
+            <span class="switch-line"><input id="carryover-toggle" type="checkbox" ${includeCarryover ? "checked" : ""} /> Sertakan 26–akhir bulan sebelumnya</span>
+          </label>
           <div class="generator-actions">
-            <button id="generate-schedule" class="primary" type="button">Preview Jadwal</button>
-            ${previewEntries.length ? `<button id="save-generated" class="secondary" type="button">Simpan Jadwal</button>` : ""}
+            <button id="generate-schedule" class="primary">Preview Jadwal</button>
+            ${preview?.entries?.length ? `<button id="save-generated" class="secondary">Simpan Jadwal</button>` : ""}
           </div>
         </div>
+
         <div class="rule-summary-grid">${ruleSummaryCards(rules)}</div>
-        ${preview ? renderPreviewMessage(preview) : `<div class="scheduler-hint"><strong>Rules aktif</strong><span>Senin tanpa Middle · Selasa–Minggu ada Middle · S2 minimal 1 pria · Jumat S1 wanita · Middle hanya Bar/Kitchen-Bar · Lembur tidak dibuat otomatis.</span></div>`}
+        ${preview ? renderPreviewMessage(preview) : `
+          <div class="scheduler-hint">
+            <strong>Rules aktif</strong>
+            <span>Senin tanpa Middle · Selasa–Minggu ada Middle · S2 minimal 1 pria · Jumat S1 wanita · Middle hanya Bar/Kitchen-Bar · Lembur tidak dibuat otomatis.</span>
+          </div>
+        `}
       </article>
 
-      <details class="panel schedule-rules-disclosure">
-        <summary><span><b>Aturan Crew & Rotasi</b><small>Edit hanya saat ada perubahan.</small></span><span>Atur</span></summary>
-        <div class="schedule-rules-body">
-          <div class="panel-head"><div><span class="overline">CREW & ROTASI</span><h3>Aturan Crew</h3></div><button id="suggest-rotation" class="text-button" type="button">Sarankan rotasi berikutnya</button></div>
-          <form id="rules-form" class="rules-form">
-            <label class="wide">Pria<input name="maleNames" value="${escapeHtml(rules.maleNames.join(", "))}" /></label>
-            <label class="wide">Wanita<input name="femaleNames" value="${escapeHtml(rules.femaleNames.join(", "))}" /></label>
-            <div class="offday-grid">${["Senin","Selasa","Rabu","Kamis","Jumat"].map(day => `<label>${day}<input name="off_${day}" value="${escapeHtml((rules.offDays[day] || []).join(", "))}" placeholder="Nama crew libur" /></label>`).join("")}</div>
-            <div class="form-foot"><span class="muted small-copy">Generate tidak pernah menambahkan lembur otomatis.</span><button class="secondary">Simpan Rules</button></div>
-          </form>
+      <article class="panel">
+        <div class="panel-head">
+          <div><span class="overline">CREW & ROTASI</span><h3>Aturan Crew</h3></div>
+          <button id="suggest-rotation" class="text-button" type="button">Sarankan rotasi berikutnya</button>
         </div>
-      </details>
-    ` : `<div class="notice"><strong>Mode Viewer</strong><span>Jadwal dan role dapat dilihat dan berpindah periode. Perubahan hanya dapat dilakukan Admin.</span></div>`}
+        <form id="rules-form" class="rules-form">
+          <label class="wide">Pria<input name="maleNames" value="${escapeHtml(rules.maleNames.join(", "))}" /></label>
+          <label class="wide">Wanita<input name="femaleNames" value="${escapeHtml(rules.femaleNames.join(", "))}" /></label>
+          <div class="offday-grid">
+            ${["Senin","Selasa","Rabu","Kamis","Jumat"].map(day => `
+              <label>${day}<input name="off_${day}" value="${escapeHtml((rules.offDays[day] || []).join(", "))}" placeholder="Nama crew libur" /></label>
+            `).join("")}
+          </div>
+          <div class="form-foot">
+            <span class="muted small-copy">Libur bisa digilir tiap periode. Generate tidak pernah menambahkan lembur otomatis.</span>
+            <button class="secondary">Simpan Rules</button>
+          </div>
+        </form>
+      </article>
+    ` : `<div class="notice"><strong>Mode Viewer</strong><span>Jadwal dan role hanya dapat dilihat. Perubahan dan export khusus Admin.</span></div>`}
 
     ${overtimePeriod.length ? renderOvertimeWarning(overtimePeriod) : ""}
 
     <article class="panel schedule-grid-panel">
       <div class="panel-head schedule-head-actions">
-        <div><span class="overline">PERIOD VIEW</span><h3>${escapeHtml(monthTitle(selected))}</h3><p class="muted small-copy">${scheduleForGrid.length ? `${scheduleForGrid.length} penempatan crew` : "Belum ada data pada periode ini"}</p></div>
+        <div><span class="overline">MONTHLY VIEW</span><h3>${escapeHtml(monthTitle(selected))}</h3></div>
         <div class="schedule-toolbar">
-          <div class="legend-inline"><span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span></div>
-          ${admin ? `<div class="schedule-export-stack"><div class="table-actions schedule-share-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="sheet-ready-schedule" class="secondary compact" title="Import XLSX sebagai sheet baru agar merge tetap utuh.">Sheet-ready (Import)</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div><small class="muted small-copy schedule-export-note">Merge tidak dijamin saat copy-paste cell. Gunakan import XLSX / copy seluruh worksheet.</small></div>` : ""}
+          <div class="legend-inline">
+            <span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span>
+          </div>
+          ${admin ? `<div class="schedule-export-stack"><div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="sheet-ready-schedule" class="secondary compact" title="Untuk mempertahankan merge, import file XLSX sebagai sheet baru.">Sheet-ready (Import)</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div><small class="muted small-copy schedule-export-note">Merge tetap utuh saat file XLSX di-import / seluruh worksheet dipindahkan. Copy-paste cell antar aplikasi tidak menjamin merge ikut.</small></div>` : ""}
         </div>
       </div>
-      ${renderScheduleMatrix(scheduleForGrid, rules, admin && !previewEntries.length)}
+      ${renderScheduleMatrix(scheduleForGrid, rules, admin && !preview?.entries?.length)}
     </article>
 
     ${admin && fairnessSummary ? renderFairnessSummary(fairnessSummary) : ""}
-    ${overtimeHistoryHtml}
+    ${admin ? renderOvertimeHistory(state.schedules || []) : ""}
   `;
 
-  const setPeriod = monthKey => {
-    if (!/^\d{4}-\d{2}$/.test(String(monthKey || ""))) return;
-    state.scheduleMonth = String(monthKey);
+  const monthInput = document.querySelector("#schedule-month");
+  if (monthInput) monthInput.onchange = () => {
+    if (!/^\d{4}-\d{2}$/.test(monthInput.value)) return;
+    state.scheduleMonth = monthInput.value;
     state.schedulePreview = null;
     renderShell();
   };
 
-  document.querySelector("#schedule-view-month")?.addEventListener("change", e => setPeriod(e.target.value));
-  document.querySelector("#schedule-prev-month")?.addEventListener("click", () => setPeriod(shiftMonthKey(selected, -1)));
-  document.querySelector("#schedule-next-month")?.addEventListener("click", () => setPeriod(shiftMonthKey(selected, 1)));
-  document.querySelector("#schedule-current-period")?.addEventListener("click", () => setPeriod(defaultScheduleMonth()));
-  document.querySelector("#open-latest-schedule")?.addEventListener("click", () => newestMonth && setPeriod(newestMonth));
-  document.querySelector("#carryover-toggle")?.addEventListener("change", e => {
-    state.scheduleIncludeCarryover = Boolean(e.target.checked);
+  const carryToggle = document.querySelector("#carryover-toggle");
+  if (carryToggle) carryToggle.onchange = () => {
+    state.scheduleIncludeCarryover = carryToggle.checked;
     state.schedulePreview = null;
     renderShell();
-  });
+  };
 
   if (!admin) return;
 
@@ -852,8 +818,12 @@ function renderScheduleContent(target) {
       maleNames: cleanNames(fd.get("maleNames")),
       femaleNames: cleanNames(fd.get("femaleNames")),
       offDays: {
-        Senin: cleanNames(fd.get("off_Senin")), Selasa: cleanNames(fd.get("off_Selasa")), Rabu: cleanNames(fd.get("off_Rabu")),
-        Kamis: cleanNames(fd.get("off_Kamis")), Jumat: cleanNames(fd.get("off_Jumat")), Sabtu: [], Minggu: []
+        Senin: cleanNames(fd.get("off_Senin")),
+        Selasa: cleanNames(fd.get("off_Selasa")),
+        Rabu: cleanNames(fd.get("off_Rabu")),
+        Kamis: cleanNames(fd.get("off_Kamis")),
+        Jumat: cleanNames(fd.get("off_Jumat")),
+        Sabtu: [], Minggu: []
       },
       version: Number(rules.version || 1)
     });
@@ -874,27 +844,25 @@ function renderScheduleContent(target) {
   });
 
   document.querySelector("#generate-schedule")?.addEventListener("click", () => {
-    const [year, month] = selected.split("-").map(Number);
-    try {
-      const result = generateSchedule({ year, month, includeCarryover, rules: state.scheduleRules });
-      state.schedulePreview = { ...result, includeCarryover };
-      renderShell();
-    } catch (err) {
-      showToast(err?.message || "Generator jadwal gagal.", "error", "Generator gagal");
-    }
+    const [year, month] = (document.querySelector("#schedule-month")?.value || selected).split("-").map(Number);
+    const carry = Boolean(document.querySelector("#carryover-toggle")?.checked);
+    state.scheduleIncludeCarryover = carry;
+    const result = generateSchedule({ year, month, includeCarryover: carry, rules: state.scheduleRules });
+    state.schedulePreview = { ...result, includeCarryover: carry };
+    renderShell();
   });
 
   const saveBtn = document.querySelector("#save-generated");
   if (saveBtn) saveBtn.onclick = async () => {
     const p = state.schedulePreview;
-    if (!Array.isArray(p?.entries) || !p.entries.length || !p.range) return;
+    if (!p?.entries?.length || !p.range) return;
     if (!confirm(`Simpan jadwal ${p.range.start} s/d ${p.range.end}? Data lama pada rentang ini akan diganti.`)) return;
     saveBtn.disabled = true;
     saveBtn.textContent = "Menyimpan...";
     try {
       await replaceScheduleRange(p.range.start, p.range.end, p.entries);
       state.schedulePreview = null;
-      showToast("Jadwal otomatis berhasil disimpan.", "success", "Jadwal tersimpan");
+      showToast("Jadwal otomatis berhasil disimpan. Klik sel untuk edit role/shift/lembur.", "success", "Jadwal tersimpan");
     } catch (err) {
       showToast(friendlyError(err), "error", "Jadwal gagal disimpan");
       saveBtn.disabled = false;
@@ -906,15 +874,26 @@ function renderScheduleContent(target) {
   document.querySelector("#import-schedule")?.addEventListener("click", () => runExcelImport("schedule"));
   document.querySelector("#sheet-ready-schedule")?.addEventListener("click", () => {
     try {
-      exportScheduleSheetReadyWorkbook({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected), filename: `SoWork-Jadwal-SheetReady-${selected}.xlsx` });
-      showToast("Sheet-ready dibuat. Import XLSX sebagai sheet baru agar merge tetap utuh.", "success", "Sheet-ready siap");
+      exportScheduleSheetReadyWorkbook({
+        entries: scheduleForGrid,
+        rules,
+        periodLabel: monthTitle(selected),
+        filename: `SoWork-Jadwal-SheetReady-${selected}.xlsx`
+      });
+      showToast("File Sheet-ready dibuat. Di Google Sheets gunakan File → Import → Upload → Insert new sheet(s) agar merge tetap utuh.", "success", "Sheet-ready siap");
     } catch (err) {
       showToast(err?.message || "Export Sheet-ready gagal.", "error", "Export gagal");
     }
   });
   document.querySelector("#export-schedule")?.addEventListener("click", () => {
     try {
-      exportScheduleWorkbook({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected), filename: `SoWork-Jadwal-${selected}.xlsx` });
+      exportScheduleWorkbook({
+        entries: scheduleForGrid,
+        rules,
+        periodLabel: monthTitle(selected),
+        filename: `SoWork-Jadwal-${selected}.xlsx`
+      });
+      showToast("Export jadwal lengkap berhasil dibuat.", "success", "Export siap");
     } catch (err) {
       showToast(err?.message || "Export gagal.", "error", "Export gagal");
     }
@@ -922,25 +901,10 @@ function renderScheduleContent(target) {
 
   document.querySelectorAll("[data-edit-schedule]").forEach(btn => {
     btn.onclick = () => {
-      const item = validRows.find(x => x.id === btn.dataset.editSchedule);
+      const item = (state.schedules || []).find(x => x.id === btn.dataset.editSchedule);
       if (item) openScheduleEditor(item, rules, selected);
     };
   });
-}
-
-function renderScheduleRecovery(target, err) {
-  const rows = normalizeScheduleRows(state.schedules);
-  const newestMonth = latestScheduleMonth(rows) || defaultScheduleMonth();
-  const fallbackRows = schedulesForPeriod(rows, newestMonth, true);
-  const message = err?.message || "Terjadi error saat menggambar halaman jadwal.";
-  target.innerHTML = `
-    <section class="page-intro"><div><span class="overline">SCHEDULE RECOVERY</span><h1>Jadwal Kerja</h1><p>SoWork mengaktifkan mode pemulihan agar halaman tidak blank.</p></div><span class="access-tag read">SAFE MODE</span></section>
-    <div class="validation-box warning"><strong>Renderer utama gagal, data tetap aman.</strong><span>${escapeHtml(message)}</span></div>
-    <article class="panel">
-      <div class="panel-head"><div><span class="overline">LATEST VALID DATA</span><h3>${escapeHtml(monthTitle(newestMonth))}</h3></div><button id="schedule-retry" class="secondary compact" type="button">Coba lagi</button></div>
-      ${fallbackRows.length ? `<div class="schedule-matrix-wrap"><table class="schedule-matrix"><thead><tr><th>Tanggal</th><th>Crew</th><th>Shift</th><th>Role</th></tr></thead><tbody>${fallbackRows.map(row => `<tr><td>${escapeHtml(formatDate(row.date))}</td><td><strong>${escapeHtml(row.crewName)}</strong></td><td>${escapeHtml(row.shift || "-")}</td><td>${escapeHtml(row.role || "-")}</td></tr>`).join("")}</tbody></table></div>` : emptyState("Belum ada data jadwal valid untuk ditampilkan.")}
-    </article>`;
-  document.querySelector("#schedule-retry")?.addEventListener("click", () => renderShell());
 }
 
 function renderOvertimeWarning(entries) {
