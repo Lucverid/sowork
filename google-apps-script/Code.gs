@@ -19,8 +19,8 @@ function doGet(e) {
     return jsonpResponse_(callback, readStatus_(String(e.parameter.requestId || '')));
   }
   return callback
-    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.5' })
-    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.5' });
+    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.7' })
+    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.7' });
 }
 
 function doPost(e) {
@@ -72,33 +72,101 @@ function writeSchedule_(payload) {
   const byKey = {};
   entries.forEach(x => { byKey[`${x.date}__${x.crewName}`] = x; });
 
-  const row1 = ['No', 'Nama Crew', 'Gender', 'Periode', ...dates.map(shortDateId_)];
-  const row2 = ['', '', '', '', ...dates.map(dayNameId_)];
-  const values = [row1, row2];
+  // v1.6.7: role dirangkum dinamis agar role baru otomatis ikut direkap.
+  const roleNames = unique_(entries
+    .filter(x => String(x.shift || '') !== 'Libur')
+    .map(x => normalizeRole_(x.role))
+    .filter(Boolean));
+  roleNames.sort((a, b) => roleRank_(a) - roleRank_(b) || a.localeCompare(b, 'id'));
 
-  // v1.6.5: setiap crew memakai 2 baris.
-  // Baris pertama berisi data, baris kedua kosong lalu seluruh pasangan sel
-  // digabung vertikal (A3:A4, B3:B4, ... E3:E4, dst).
+  const summaryHeaders = ['Total Kerja', 'S1', 'S2', 'Middle', 'Libur', ...roleNames.map(role => `Role ${role}`)];
+  const dateStartCol = 5;
+  const summaryStartCol = dateStartCol + dates.length;
+  const totalCols = 4 + dates.length + summaryHeaders.length;
+
+  const row1 = [
+    'No', 'Nama Crew', 'Gender', 'Periode',
+    ...dates.map(shortDateId_),
+    ...summaryHeaders
+  ];
+  const row2 = [
+    '', '', '', '',
+    ...dates.map(dayNameId_),
+    ...summaryHeaders.map(() => '')
+  ];
+  const values = [row1, row2];
+  const crewStats = {};
+
+  // Setiap crew memakai 2 baris agar semua cell jadwal + rekap bisa merge vertikal.
   crew.forEach((name, index) => {
     const gender = genderFor_(name, payload.rules);
+    const stats = makeCrewStats_(roleNames);
     const firstRow = [index + 1, name, gender, String(payload.periodLabel || 'Jadwal')];
 
     dates.forEach(date => {
       const item = byKey[`${date}__${name}`];
-      if (!item) return firstRow.push('');
-      if (String(item.shift) === 'Libur') return firstRow.push('LIBUR');
-      const overtime = item.overtime ? `
-LEMBUR: ${item.overtimeType || 'Buka'}` : '';
+      if (!item) {
+        firstRow.push('');
+        return;
+      }
+
+      const shift = normalizeShift_(item.shift);
+      if (shift === 'Libur') {
+        stats.Libur += 1;
+        firstRow.push('LIBUR');
+        return;
+      }
+
+      if (shift === 'S1') stats.S1 += 1;
+      else if (shift === 'S2') stats.S2 += 1;
+      else if (shift === 'Middle') stats.Middle += 1;
+
+      // Semua shift kerja selain Libur dihitung sebagai jadwal kerja.
+      stats.totalKerja += 1;
+
+      const role = normalizeRole_(item.role);
+      if (role && Object.prototype.hasOwnProperty.call(stats.roles, role)) {
+        stats.roles[role] += 1;
+      }
+
+      const overtime = item.overtime ? `\nLEMBUR: ${item.overtimeType || 'Buka'}` : '';
       firstRow.push(`${item.role || '-'}${overtime}`);
     });
 
+    firstRow.push(
+      stats.totalKerja,
+      stats.S1,
+      stats.S2,
+      stats.Middle,
+      stats.Libur,
+      ...roleNames.map(role => stats.roles[role] || 0)
+    );
+
+    crewStats[name] = stats;
     values.push(firstRow);
-    values.push(new Array(row1.length).fill(''));
+    values.push(new Array(totalCols).fill(''));
   });
 
-  ensureSize_(sheet, values.length, row1.length);
+  // Rekap seluruh crew di bagian bawah tabel.
+  const totals = makeCrewStats_(roleNames);
+  crew.forEach(name => addCrewStats_(totals, crewStats[name], roleNames));
 
-  const range = sheet.getRange(1, 1, values.length, row1.length);
+  const totalRowIndex = values.length + 1; // 1-based Sheet row setelah values ditulis.
+  const totalRow = new Array(totalCols).fill('');
+  totalRow[0] = 'TOTAL SEMUA CREW';
+  totalRow[summaryStartCol - 1] = totals.totalKerja;
+  totalRow[summaryStartCol] = totals.S1;
+  totalRow[summaryStartCol + 1] = totals.S2;
+  totalRow[summaryStartCol + 2] = totals.Middle;
+  totalRow[summaryStartCol + 3] = totals.Libur;
+  roleNames.forEach((role, idx) => {
+    totalRow[summaryStartCol + 4 + idx] = totals.roles[role] || 0;
+  });
+  values.push(totalRow);
+
+  ensureSize_(sheet, values.length, totalCols);
+
+  const range = sheet.getRange(1, 1, values.length, totalCols);
   range.setValues(values);
   range
     .setFontFamily('Arial')
@@ -112,28 +180,43 @@ LEMBUR: ${item.overtimeType || 'Buka'}` : '';
     SpreadsheetApp.BorderStyle.SOLID
   );
 
-  // Header 2 baris.
+  // Header identitas + summary memakai merge 2 baris.
   for (let col = 1; col <= 4; col++) {
     sheet.getRange(1, col, 2, 1).merge();
   }
+  for (let col = summaryStartCol; col <= totalCols; col++) {
+    sheet.getRange(1, col, 2, 1).merge();
+  }
 
-  // Setiap crew = 2 baris, dan SEMUA kolom digabung vertikal.
-  // Contoh crew pertama:
-  // A3:A4, B3:B4, C3:C4, D3:D4, E3:E4, F3:F4, dst.
+  // Setiap crew = 2 baris, seluruh kolom digabung vertikal.
   crew.forEach((name, crewIndex) => {
     const startRow = 3 + (crewIndex * 2);
-    for (let col = 1; col <= row1.length; col++) {
+    for (let col = 1; col <= totalCols; col++) {
       sheet.getRange(startRow, col, 2, 1).merge();
     }
   });
 
-  // Header.
-  sheet.getRange(1, 1, 2, row1.length)
+  // Baris total: label digabung dari A sampai kolom terakhir sebelum rekap.
+  const totalLabelEndCol = Math.max(1, summaryStartCol - 1);
+  if (totalLabelEndCol > 1) {
+    sheet.getRange(totalRowIndex, 1, 1, totalLabelEndCol).merge();
+  }
+
+  // Header utama.
+  sheet.getRange(1, 1, 2, totalCols)
     .setBackground(SOWORK_COLORS.header)
     .setFontColor(SOWORK_COLORS.dark)
     .setFontWeight('bold');
 
-  // Identity + warna shift pada merged cell.
+  // Beda tipis antara area jadwal dan area rekap.
+  if (summaryHeaders.length) {
+    sheet.getRange(1, summaryStartCol, 2, summaryHeaders.length)
+      .setBackground('#FFF2CC')
+      .setFontColor(SOWORK_COLORS.dark)
+      .setFontWeight('bold');
+  }
+
+  // Identity + warna shift + rekap per crew.
   crew.forEach((name, crewIndex) => {
     const row = 3 + (crewIndex * 2);
     const gender = genderFor_(name, payload.rules);
@@ -146,7 +229,6 @@ LEMBUR: ${item.overtimeType || 'Buka'}` : '';
     }
 
     sheet.getRange(row, 2).setFontWeight('bold');
-
     sheet.getRange(row, 4, 2, 1)
       .setBackground(SOWORK_COLORS.light)
       .setFontColor(SOWORK_COLORS.dark);
@@ -155,36 +237,62 @@ LEMBUR: ${item.overtimeType || 'Buka'}` : '';
       const item = byKey[`${date}__${name}`];
       if (!item) return;
 
-      const cell = sheet.getRange(row, dateIndex + 5, 2, 1);
-      const shift = String(item.shift || '');
+      const cell = sheet.getRange(row, dateIndex + dateStartCol, 2, 1);
+      const shift = normalizeShift_(item.shift);
       const fill = item.overtime
         ? SOWORK_COLORS.Lembur
         : (SOWORK_COLORS[shift] || SOWORK_COLORS.light);
-
       const font = (shift === 'S2' || shift === 'Libur') && !item.overtime
         ? SOWORK_COLORS.light
         : SOWORK_COLORS.dark;
 
       cell.setBackground(fill).setFontColor(font);
     });
+
+    // Ringkasan shift diberi warna yang sama dengan legend jadwal.
+    sheet.getRange(row, summaryStartCol, 2, 1).setBackground('#E2F0D9').setFontWeight('bold');
+    sheet.getRange(row, summaryStartCol + 1, 2, 1).setBackground(SOWORK_COLORS.S1).setFontColor(SOWORK_COLORS.dark);
+    sheet.getRange(row, summaryStartCol + 2, 2, 1).setBackground(SOWORK_COLORS.S2).setFontColor(SOWORK_COLORS.light);
+    sheet.getRange(row, summaryStartCol + 3, 2, 1).setBackground(SOWORK_COLORS.Middle).setFontColor(SOWORK_COLORS.dark);
+    sheet.getRange(row, summaryStartCol + 4, 2, 1).setBackground(SOWORK_COLORS.Libur).setFontColor(SOWORK_COLORS.light);
+
+    if (roleNames.length) {
+      sheet.getRange(row, summaryStartCol + 5, 2, roleNames.length)
+        .setBackground('#F3F4F6')
+        .setFontColor(SOWORK_COLORS.dark);
+    }
   });
+
+  // Total semua crew.
+  sheet.getRange(totalRowIndex, 1, 1, totalCols)
+    .setFontWeight('bold')
+    .setBackground('#D9EAD3')
+    .setFontColor(SOWORK_COLORS.dark);
 
   // Layout.
   sheet.setColumnWidth(1, 52);
   sheet.setColumnWidth(2, 145);
   sheet.setColumnWidth(3, 88);
   sheet.setColumnWidth(4, 130);
-  if (dates.length) sheet.setColumnWidths(5, dates.length, 112);
+  if (dates.length) sheet.setColumnWidths(dateStartCol, dates.length, 112);
+
+  // Rekap dibuat lebih ringkas daripada kolom tanggal.
+  sheet.setColumnWidth(summaryStartCol, 92);
+  sheet.setColumnWidth(summaryStartCol + 1, 56);
+  sheet.setColumnWidth(summaryStartCol + 2, 56);
+  sheet.setColumnWidth(summaryStartCol + 3, 72);
+  sheet.setColumnWidth(summaryStartCol + 4, 62);
+  if (roleNames.length) sheet.setColumnWidths(summaryStartCol + 5, roleNames.length, 92);
 
   sheet.setRowHeight(1, 25);
   sheet.setRowHeight(2, 24);
 
-  // Dua row per crew; tinggi total visual ± 42px.
   crew.forEach((_, crewIndex) => {
     const row = 3 + (crewIndex * 2);
     sheet.setRowHeight(row, 21);
     sheet.setRowHeight(row + 1, 21);
   });
+  sheet.setRowHeight(totalRowIndex, 28);
 
   sheet.setFrozenRows(2);
   sheet.setFrozenColumns(4);
@@ -193,7 +301,8 @@ LEMBUR: ${item.overtimeType || 'Buka'}` : '';
     `SoWork ${String(payload.metadata && payload.metadata.workspace || 'SoWork')}`,
     payload.metadata && payload.metadata.branch ? `Cabang: ${payload.metadata.branch}` : '',
     payload.metadata && payload.metadata.sentBy ? `Dikirim oleh: ${payload.metadata.sentBy}` : '',
-    payload.metadata && payload.metadata.sentAt ? `Sync: ${payload.metadata.sentAt}` : ''
+    payload.metadata && payload.metadata.sentAt ? `Sync: ${payload.metadata.sentAt}` : '',
+    `Rekap: total kerja, S1, S2, Middle, Libur, dan ${roleNames.length} role`
   ].filter(Boolean).join(' | ');
   sheet.getRange(1, 1).setNote(note);
 
@@ -204,11 +313,58 @@ LEMBUR: ${item.overtimeType || 'Buka'}` : '';
     spreadsheetName: ss.getName(),
     sheetName,
     rowCount: values.length,
-    columnCount: row1.length,
+    columnCount: totalCols,
     crewCount: crew.length,
     mergedCrewRows: true,
+    summaryEnabled: true,
+    roleSummaryColumns: roleNames,
     url: `${ss.getUrl()}#gid=${sheet.getSheetId()}`
   };
+}
+
+function normalizeShift_(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 's1' || raw === 'shift 1' || raw === 'shift1') return 'S1';
+  if (raw === 's2' || raw === 'shift 2' || raw === 'shift2') return 'S2';
+  if (raw === 'middle' || raw === 'mid') return 'Middle';
+  if (raw === 'libur' || raw === 'off') return 'Libur';
+  return String(value || '').trim();
+}
+
+function normalizeRole_(value) {
+  const raw = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!raw || raw === '-') return '';
+  const lower = raw.toLowerCase();
+  if (lower === 'kasir' || lower === 'cashier') return 'Kasir';
+  if (lower === 'bar') return 'Bar';
+  if (lower === 'kitchen' || lower === 'dapur') return 'Kitchen';
+  if (/^kitchen\s*[-/]\s*bar$/i.test(raw) || /^bar\s*[-/]\s*kitchen$/i.test(raw)) return 'Kitchen - Bar';
+  return raw;
+}
+
+function roleRank_(role) {
+  const order = ['Kasir', 'Bar', 'Kitchen', 'Kitchen - Bar'];
+  const idx = order.indexOf(role);
+  return idx < 0 ? 999 : idx;
+}
+
+function makeCrewStats_(roleNames) {
+  const roles = {};
+  roleNames.forEach(role => { roles[role] = 0; });
+  return { totalKerja: 0, S1: 0, S2: 0, Middle: 0, Libur: 0, roles };
+}
+
+function addCrewStats_(target, source, roleNames) {
+  if (!source) return target;
+  target.totalKerja += Number(source.totalKerja || 0);
+  target.S1 += Number(source.S1 || 0);
+  target.S2 += Number(source.S2 || 0);
+  target.Middle += Number(source.Middle || 0);
+  target.Libur += Number(source.Libur || 0);
+  roleNames.forEach(role => {
+    target.roles[role] = Number(target.roles[role] || 0) + Number(source.roles && source.roles[role] || 0);
+  });
+  return target;
 }
 
 function parsePayload_(e) {

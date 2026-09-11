@@ -1,24 +1,22 @@
-SoWork v1.6.6 — Auth Recovery
+SoWork Apps Script v1.6.7 — Rekap Jadwal
 
-Base: source yang sedang dideploy (v1.6.4 + Apps Script/merge fix v1.6.5).
+Tambahan di Google Sheet:
+- Total Kerja per crew (semua jadwal selain Libur)
+- Total S1 per crew
+- Total S2 per crew
+- Total Middle per crew
+- Total Libur per crew
+- Total setiap role per crew (dinamis: Kasir, Bar, Kitchen, Kitchen - Bar, dan role lain jika ada)
+- Baris TOTAL SEMUA CREW di bagian bawah
+- Merge 2-row per crew tetap dipertahankan
+- Fix callback Apps Script v1.6.5 tetap dipertahankan
 
-Perubahan:
-- Firebase login memakai browserLocalPersistence secara eksplisit.
-- auth/network-request-failed otomatis dicoba ulang maksimal 3 kali.
-- Tombol login dikunci selama proses agar tidak mengirim request ganda.
-- Status retry tampil di halaman login.
-- Error network dibuat lebih jelas.
-- Apps Script v1.6.5 dan merge 2-row tidak diubah.
+Cara pasang:
+1. Google Apps Script -> Code.gs -> Ctrl+A -> paste isi google-apps-script/Code.gs
+2. Save
+3. Deploy -> Manage deployments -> Edit -> New version -> Deploy
+4. Execute as: Me, Who has access: Anyone
+5. Kirim ulang jadwal dari SoWork. Tab yang sama akan dibersihkan dan dibuat ulang dengan rekap.
 
-Upload ke GitHub sesuai path:
-1. src/auth/auth.js
-2. src/main.js
-3. package.json
-4. package-lock.json
-
-Setelah commit, tunggu GitHub Actions selesai lalu Ctrl+F5.
-
-Catatan:
-Jika jaringan/DNS/VPN/ISP benar-benar memblokir endpoint Firebase Auth,
-retry dari aplikasi tidak bisa menembus blokir eksternal. Patch ini fokus pada
-transient network failure dan persistence browser.
+Opsional agar source repo sinkron:
+replace google-apps-script/Code.gs di GitHub main dengan file ini. Frontend tidak perlu diubah.
