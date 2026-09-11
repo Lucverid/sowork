@@ -783,7 +783,7 @@ function renderSchedule(target) {
         <div><span class="overline">PERIOD VIEW</span><h3>${escapeHtml(monthTitle(selected))}</h3><p class="muted small-copy">${scheduleForGrid.length ? `${scheduleForGrid.length} penempatan crew` : "Belum ada data pada periode ini"}</p></div>
         <div class="schedule-toolbar">
           <div class="legend-inline"><span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span></div>
-          ${admin ? `<div class="table-actions schedule-share-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="sheet-ready-schedule" class="secondary compact" title="Import file XLSX ini sebagai sheet baru agar merge tetap utuh.">Sheet-ready</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div>` : ""}
+          ${admin ? `<div class="schedule-export-stack"><div class="table-actions schedule-share-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="sheet-ready-schedule" class="secondary compact" title="Merge hanya terjaga lewat import/copy worksheet, bukan copy-paste cell.">Sheet-ready (Import)</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div><small class="muted small-copy schedule-export-note">Butuh merge tetap utuh? Pakai Sheet-ready → Google Sheets: File → Import → Upload → Insert new sheet(s). Jangan copy-paste cell.</small></div>` : ""}
         </div>
       </div>
       ${renderScheduleMatrix(scheduleForGrid, rules, admin && !preview?.entries?.length)}
@@ -864,7 +864,7 @@ function renderSchedule(target) {
   document.querySelector("#sheet-ready-schedule")?.addEventListener("click", () => {
     try {
       exportScheduleSheetReadyWorkbook({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected), filename: `SoWork-Jadwal-SheetReady-${selected}.xlsx` });
-      showToast("Sheet-ready dibuat. Import XLSX sebagai sheet baru agar merge tetap utuh.", "success", "Sheet-ready siap");
+      showToast("Sheet-ready dibuat. Google Sheets: File → Import → Upload → Insert new sheet(s). Kalau mau pindah ke spreadsheet lain, copy seluruh tab/sheet. Copy-paste cell tidak bisa mempertahankan merge secara konsisten.", "success", "Sheet-ready siap");
     } catch (err) { showToast(err?.message || "Export Sheet-ready gagal.", "error", "Export gagal"); }
   });
   document.querySelector("#export-schedule")?.addEventListener("click", () => {
@@ -1821,19 +1821,25 @@ function renderStockOpname(target) {
     .filter(x => x.active !== false)
     .slice()
     .sort((a,b) => String(a.name).localeCompare(String(b.name), "id"));
-  const existing = Object.fromEntries(
-    state.stockOpnames.filter(x => x.date === date).map(x => [x.itemId, x])
-  );
-  const reconciliationRows = buildStockReconciliation(allItems, state.stockOpnames, state.stockMovements, date);
+  const selectedOpnameRows = state.stockOpnames.filter(x => String(x.date || "") === String(date));
+  const existing = Object.fromEntries(allItems.map(item => {
+    const exact = selectedOpnameRows.find(row => String(row.itemId || "") === String(item.id || ""));
+    const byName = exact || selectedOpnameRows.find(row =>
+      normalizeSearchText(row.itemName || row.name || "") === normalizeSearchText(item.name || "")
+    );
+    return byName ? [item.id, byName] : null;
+  }).filter(Boolean));
+
+  // Rekonsiliasi memakai seluruh master + snapshot tanggal terpilih. Snapshot histori
+  // yang item-nya sudah diarsipkan/berganti ID tetap ikut dihitung di summary.
+  const reconciliationRows = buildStockReconciliation(state.stockItems, state.stockOpnames, state.stockMovements, date);
   const reconciliationByItem = Object.fromEntries(reconciliationRows.map(x => [x.id, x]));
-  // Gunakan hasil rekonsiliasi yang dihitung ulang untuk tanggal terpilih.
-  // Ini membuat histori SO lama (sebelum field reconciliationStatus disimpan)
-  // tetap menampilkan Sesuai / Kurang / Lebih dengan benar.
   const savedRecon = reconciliationRows.filter(x => x.physicalQty != null);
   const shortageCount = savedRecon.filter(x => x.reconciliationStatus === "Selisih Kurang").length;
   const overCount = savedRecon.filter(x => x.reconciliationStatus === "Selisih Lebih").length;
   const matchedCount = savedRecon.filter(x => x.reconciliationStatus === "Sesuai").length;
   const savedCount = allItems.filter(item => Boolean(existing[item.id])).length;
+  const historicalSavedCount = savedRecon.length;
 
   target.innerHTML = `
     <section class="page-intro stock-opname-intro opname-intro-compact">
@@ -1879,7 +1885,7 @@ function renderStockOpname(target) {
         <div>
           <span class="overline">SO TERPILIH</span>
           <strong>${escapeHtml(formatDate(date))}</strong>
-          <small>${savedCount ? `${savedCount}/${allItems.length} item sudah tersimpan` : "Belum ada SO tersimpan pada tanggal ini"}</small>
+          <small>${savedCount ? `${savedCount}/${allItems.length} item aktif sudah tersimpan` : historicalSavedCount ? `${historicalSavedCount} snapshot histori tersimpan` : "Belum ada SO tersimpan pada tanggal ini"}</small>
         </div>
         <div class="opname-selected-actions-pro">
           ${savedCount ? `<button id="delete-opname-day" type="button" class="text-danger-button">Hapus SO tanggal ini</button>` : ""}
@@ -1910,7 +1916,7 @@ function renderStockOpname(target) {
       <div><span>Sesuai</span><strong>${matchedCount}</strong></div>
       <div class="${shortageCount ? "is-alert" : ""}"><span>Kurang</span><strong>${shortageCount}</strong></div>
       <div><span>Lebih</span><strong>${overCount}</strong></div>
-      <div><span>Tersimpan</span><strong>${savedCount}</strong></div>
+      <div><span>Tersimpan</span><strong>${historicalSavedCount}</strong></div>
     </div>
 
     <form id="opname-form" class="opname-form-modern">

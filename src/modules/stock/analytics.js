@@ -194,9 +194,51 @@ function estimateDailyUsage(history, receipts, explicitUsage = []) {
   };
 }
 
+function normalizeStockIdentity(value) {
+  return String(value || "")
+    .trim()
+    .toLocaleLowerCase("id-ID")
+    .replace(/\s+/g, " ");
+}
+
+function opnameMatchesItem(row, item) {
+  if (!row || !item) return false;
+  const rowId = String(row.itemId || "").trim();
+  const itemId = String(item.id || "").trim();
+  if (rowId && itemId && rowId === itemId) return true;
+  const rowName = normalizeStockIdentity(row.itemName || row.name);
+  const itemName = normalizeStockIdentity(item.name);
+  return Boolean(rowName && itemName && rowName === itemName);
+}
+
+function movementMatchesItem(row, item) {
+  if (!row || !item) return false;
+  const rowId = String(row.itemId || "").trim();
+  const itemId = String(item.id || "").trim();
+  if (rowId && itemId && rowId === itemId) return true;
+  const rowName = normalizeStockIdentity(row.itemName || row.name);
+  const itemName = normalizeStockIdentity(item.name);
+  return Boolean(rowName && itemName && rowName === itemName);
+}
+
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeReconciliationStatus(value) {
+  const raw = normalizeStockIdentity(value);
+  if (!raw) return "";
+  if (raw === "sesuai" || raw === "match" || raw === "matched") return "Sesuai";
+  if (raw.includes("kurang") || raw.includes("short")) return "Selisih Kurang";
+  if (raw.includes("lebih") || raw.includes("over")) return "Selisih Lebih";
+  return "";
+}
+
 export function calculateTheoreticalStock(item, date, opnames = [], movements = []) {
   const history = opnames
-    .filter(x => x.itemId === item.id && String(x.date || "") < String(date || ""))
+    .filter(x => opnameMatchesItem(x, item) && String(x.date || "") < String(date || ""))
     .slice()
     .sort((a,b) => String(a.date).localeCompare(String(b.date)));
   const previous = history.at(-1) || null;
@@ -212,7 +254,7 @@ export function calculateTheoreticalStock(item, date, opnames = [], movements = 
   }
 
   const between = movements.filter(m =>
-    m.itemId === item.id &&
+    movementMatchesItem(m, item) &&
     String(m.date || "") > String(previous.date || "") &&
     String(m.date || "") <= String(date || "")
   );
@@ -229,27 +271,51 @@ export function calculateTheoreticalStock(item, date, opnames = [], movements = 
 
 export function buildStockReconciliation(items = [], opnames = [], movements = [], date) {
   if (!date) return [];
-  const currentByItem = Object.fromEntries(opnames.filter(x => x.date === date).map(x => [x.itemId, x]));
-  return items.filter(x => x.active !== false || currentByItem[x.id]).map(item => {
-    const current = currentByItem[item.id] || null;
+
+  // Data histori lama kadang item-nya sudah diarsipkan/berganti id. Jangan hanya
+  // bergantung pada master barang aktif: snapshot pada tanggal terpilih tetap harus
+  // ikut dihitung agar Sesuai / Kurang / Lebih tidak berubah menjadi 0/0/0.
+  const dayRows = (opnames || []).filter(x => String(x.date || "") === String(date));
+  const sourceItems = (items || []).slice();
+  const work = [];
+  const consumed = new Set();
+
+  for (const item of sourceItems) {
+    let currentIndex = dayRows.findIndex((row, index) => !consumed.has(index) && String(row.itemId || "") && String(row.itemId || "") === String(item.id || ""));
+    if (currentIndex < 0) currentIndex = dayRows.findIndex((row, index) => !consumed.has(index) && opnameMatchesItem(row, item));
+    const current = currentIndex >= 0 ? dayRows[currentIndex] : null;
+    if (currentIndex >= 0) consumed.add(currentIndex);
+    if (item.active !== false || current) work.push({ item, current });
+  }
+
+  // Snapshot orphan/legacy tetap direkonsiliasi walau master item-nya sudah tidak ada.
+  dayRows.forEach((current, index) => {
+    if (consumed.has(index)) return;
+    const name = String(current.itemName || current.name || current.itemId || "Item histori");
+    work.push({
+      current,
+      item: {
+        id: String(current.itemId || `legacy-${index}`),
+        name,
+        category: "Histori",
+        unit: String(current.unit || "PCS"),
+        active: true,
+        currentQty: Number(current.totalQty ?? 0)
+      }
+    });
+  });
+
+  return work.map(({ item, current }) => {
     const theoretical = calculateTheoreticalStock(item, date, opnames, movements);
-
-    const optionalNumber = value => {
-      if (value === null || value === undefined || value === "") return null;
-      const number = Number(value);
-      return Number.isFinite(number) ? number : null;
-    };
-
     const storedTotal = optionalNumber(current?.totalQty);
     const primaryQty = optionalNumber(current?.primaryQty) ?? 0;
     const secondaryQty = optionalNumber(current?.secondaryQty) ?? 0;
     const physicalQty = current ? Math.max(0, storedTotal ?? (primaryQty + secondaryQty)) : null;
     const storedSystemQty = optionalNumber(current?.systemQtyBeforeOpname);
     const storedVarianceQty = optionalNumber(current?.varianceQty);
+    const storedStatus = normalizeReconciliationStatus(current?.reconciliationStatus || current?.status);
 
-    // Histori lama belum selalu menyimpan systemQtyBeforeOpname / status rekonsiliasi.
-    // Jika variance lama tersedia, rekonstruksi stok sistem. Jika tidak, hitung ulang
-    // dari SO sebelumnya + barang masuk - penggunaan sampai tanggal yang dipilih.
+    // Prioritas sumber sistem: nilai yang disimpan > variance lama > ledger histori.
     const systemQty = storedSystemQty != null
       ? storedSystemQty
       : physicalQty != null && storedVarianceQty != null
@@ -262,21 +328,36 @@ export function buildStockReconciliation(items = [], opnames = [], movements = [
       ? null
       : systemQty <= 0 ? (physicalQty === 0 ? 100 : 0) : Math.max(0, 100 - (Math.abs(varianceQty) / systemQty * 100));
     const tolerance = Math.max(0.01, Math.abs(systemQty) * 0.0025);
-    const status = physicalQty == null
+    const numericStatus = physicalQty == null
       ? "Belum SO"
       : Math.abs(varianceQty) <= tolerance
         ? "Sesuai"
         : varianceQty < 0 ? "Selisih Kurang" : "Selisih Lebih";
 
+    // Untuk snapshot lama yang belum menyimpan baseline angka, gunakan status lama
+    // bila tersedia. Jika tidak ada, fallback ke rekonstruksi ledger/nilai sistem.
+    const hasNumericHistoricalBasis = storedSystemQty != null || storedVarianceQty != null || Boolean(theoretical.previousOpnameDate);
+    const status = physicalQty == null
+      ? "Belum SO"
+      : (!hasNumericHistoricalBasis && storedStatus ? storedStatus : numericStatus);
+
     return {
       ...item,
+      snapshotId: current?.id || "",
+      snapshotItemId: current?.itemId || item.id,
       physicalQty,
       systemQty,
       varianceQty,
       variancePct,
       accuracyPct,
-      // Selalu normalisasi dari angka. Field status versi lama kadang kosong/berbeda label.
       reconciliationStatus: status,
+      reconciliationSource: storedSystemQty != null
+        ? "stored-system"
+        : storedVarianceQty != null
+          ? "stored-variance"
+          : storedStatus && !hasNumericHistoricalBasis
+            ? "stored-status"
+            : theoretical.source,
       previousOpnameDate: current?.previousOpnameDate || theoretical.previousOpnameDate,
       incomingSincePrevious: Number(current?.incomingSincePrevious ?? theoretical.incoming ?? 0),
       usageSincePrevious: Number(current?.usageSincePrevious ?? theoretical.usage ?? 0)
