@@ -8,7 +8,10 @@ export const DEFAULT_APP_SETTINGS = {
   defaultSecondaryLocation: "Gudang 2",
   currency: "IDR",
   timezone: "Asia/Jakarta",
-  reportAutoFillSchedule: true
+  reportAutoFillSchedule: true,
+  googleSheetWebAppUrl: "",
+  googleSheetSpreadsheetUrl: "",
+  googleSheetSecret: ""
 };
 
 export function watchAppSettings(callback, onError) {
@@ -26,6 +29,9 @@ export async function saveAppSettings(settings) {
     currency: String(settings.currency || "IDR").trim(),
     timezone: String(settings.timezone || "Asia/Jakarta").trim(),
     reportAutoFillSchedule: settings.reportAutoFillSchedule !== false,
+    googleSheetWebAppUrl: String(settings.googleSheetWebAppUrl || "").trim(),
+    googleSheetSpreadsheetUrl: String(settings.googleSheetSpreadsheetUrl || "").trim(),
+    googleSheetSecret: String(settings.googleSheetSecret || "").trim(),
     updatedAt: serverTimestamp()
   }, { merge: true });
 }

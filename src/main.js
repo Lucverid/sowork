@@ -2,7 +2,8 @@ import "./style.css";
 import { getUserProfile, isAdmin, login, logout, observeAuth, registerViewer } from "./auth/auth.js";
 import { watchSchedules, saveSchedule, removeSchedule, watchScheduleRules, saveScheduleRules, replaceScheduleRange } from "./modules/schedule/schedule.js";
 import { DEFAULT_SCHEDULE_RULES, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries } from "./modules/schedule/generator.js";
-import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook, copyScheduleToClipboard } from "./modules/schedule/export.js";
+import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
+import { sendScheduleToGoogleSheet, normalizeAppsScriptUrl, extractSpreadsheetId } from "./modules/schedule/googleSheet.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
 import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
@@ -779,7 +780,7 @@ function renderSchedule(target) {
           <div class="legend-inline">
             <span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span>
           </div>
-          ${admin ? `<div class="schedule-export-stack"><div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="copy-schedule-sheet" class="secondary compact" title="Salin tabel jadwal rich HTML untuk ditempel langsung ke Google Sheets.">Copy ke Sheet</button><button id="sheet-ready-schedule" class="secondary compact" title="Untuk mempertahankan merge secara pasti, import file XLSX sebagai sheet baru.">Sheet-ready</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div><small class="muted small-copy schedule-export-note">Copy ke Sheet memakai rich table dengan header merge. Sheet-ready tetap tersedia untuk merge XLSX yang pasti.</small></div>` : ""}
+          ${admin ? `<div class="schedule-export-stack"><div class="table-actions"><button id="add-schedule" class="secondary compact">+ Tambah</button><button id="import-schedule" class="secondary compact">Import Excel</button><button id="send-schedule-sheet" class="primary compact" title="Kirim jadwal langsung ke Google Sheets dengan merge asli.">Kirim ke Google Sheet</button><button id="sheet-ready-schedule" class="secondary compact" title="Alternatif offline: import file XLSX sebagai sheet baru.">Sheet-ready</button><button id="export-schedule" class="secondary compact">Export lengkap</button></div><small class="muted small-copy schedule-export-note">Kirim ke Google Sheet membuat merge langsung di spreadsheet lewat Apps Script, bukan clipboard.</small></div>` : ""}
         </div>
       </div>
       ${renderScheduleMatrix(scheduleForGrid, rules, admin && !preview?.entries?.length)}
@@ -868,17 +869,8 @@ function renderSchedule(target) {
 
   document.querySelector("#add-schedule")?.addEventListener("click", () => openScheduleEditor(null, rules, selected));
   document.querySelector("#import-schedule")?.addEventListener("click", () => runExcelImport("schedule"));
-  document.querySelector("#copy-schedule-sheet")?.addEventListener("click", async () => {
-    try {
-      const result = await copyScheduleToClipboard({
-        entries: scheduleForGrid,
-        rules,
-        periodLabel: monthTitle(selected)
-      });
-      showToast(result?.message || "Jadwal tersalin. Tempel dengan Ctrl+V di Google Sheets.", "success", "Copy ke Sheet siap");
-    } catch (err) {
-      showToast(err?.message || "Copy ke Sheet gagal. Gunakan Sheet-ready.", "error", "Copy gagal");
-    }
+  document.querySelector("#send-schedule-sheet")?.addEventListener("click", () => {
+    openGoogleSheetScheduleModal({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected), selectedMonth: selected });
   });
   document.querySelector("#sheet-ready-schedule")?.addEventListener("click", () => {
     try {
@@ -912,6 +904,125 @@ function renderSchedule(target) {
       const item = (state.schedules || []).find(x => x.id === btn.dataset.editSchedule);
       if (item) openScheduleEditor(item, rules, selected);
     };
+  });
+}
+
+
+function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadwal", selectedMonth = "" }) {
+  if (!entries.length) {
+    showToast("Tidak ada jadwal pada periode ini untuk dikirim.", "error", "Google Sheet");
+    return;
+  }
+
+  document.querySelector("#google-sheet-schedule-modal")?.remove();
+  const config = { ...DEFAULT_APP_SETTINGS, ...(state.appSettings || {}) };
+  const defaultSheetName = `Jadwal ${periodLabel}`.slice(0, 90);
+  const modal = document.createElement("div");
+  modal.id = "google-sheet-schedule-modal";
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="edit-modal google-sheet-modal">
+      <div class="modal-head">
+        <div><span class="overline">GOOGLE SHEETS</span><h3>Kirim Jadwal Langsung</h3></div>
+        <button class="modal-close" type="button">×</button>
+      </div>
+      <form id="google-sheet-schedule-form" class="settings-form">
+        <div class="google-sheet-status ${config.googleSheetWebAppUrl ? "connected" : ""}">
+          <div><strong>${config.googleSheetWebAppUrl ? "Apps Script siap" : "Apps Script belum diatur"}</strong><span>${config.googleSheetWebAppUrl ? "Merge, warna, border, dan freeze pane dibuat langsung di Google Sheet." : "Isi Web App URL sekali. Template script sudah disertakan di project v1.6.1."}</span></div>
+          <span class="status-pill">${config.googleSheetWebAppUrl ? "Ready" : "Setup"}</span>
+        </div>
+        <label>Apps Script Web App URL
+          <input name="webAppUrl" value="${escapeHtml(config.googleSheetWebAppUrl || "")}" placeholder="https://script.google.com/macros/s/.../exec" required />
+        </label>
+        <label>Secret Token
+          <input name="secret" value="${escapeHtml(config.googleSheetSecret || "")}" placeholder="Samakan dengan SOWORK_SECRET di Apps Script" autocomplete="off" required />
+        </label>
+        <label>Spreadsheet tujuan
+          <input name="spreadsheetUrl" value="${escapeHtml(config.googleSheetSpreadsheetUrl || "")}" placeholder="https://docs.google.com/spreadsheets/d/.../edit" required />
+        </label>
+        <label>Nama tab
+          <input name="sheetName" value="${escapeHtml(defaultSheetName)}" maxlength="90" required />
+        </label>
+        <div class="inline-rule google-sheet-rule"><strong>Yang dilakukan:</strong> SoWork membuat/menimpa tab ini, merge A1:A2 sampai D1:D2, mempertahankan warna shift, border, ukuran kolom, wrap text, serta freeze 2 baris + 4 kolom.</div>
+        <details class="google-sheet-setup"><summary>Setup pertama kali</summary><div><span>1. Buka script.google.com → New project.</span><span>2. Paste <code>google-apps-script/Code.gs</code>.</span><span>3. Script Properties → buat <code>SOWORK_SECRET</code>.</span><span>4. Deploy sebagai Web app: Execute as Me, access Anyone.</span><span>5. Copy URL <code>/exec</code>, lalu samakan Secret Token di sini.</span></div></details>
+        <div class="form-foot google-sheet-actions">
+          <span class="muted small-copy">Jika nama tab sudah ada, isi tab tersebut akan diganti.</span>
+          <button type="button" class="secondary" id="save-google-sheet-config">Simpan koneksi</button>
+          <button type="submit" class="primary" id="send-google-sheet-now">Kirim sekarang</button>
+        </div>
+      </form>
+    </section>`;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  modal.querySelector(".modal-close")?.addEventListener("click", close);
+  modal.addEventListener("click", e => { if (e.target === modal) close(); });
+  const form = modal.querySelector("#google-sheet-schedule-form");
+
+  const persistConfig = async () => {
+    const fd = new FormData(form);
+    const webAppUrl = normalizeAppsScriptUrl(fd.get("webAppUrl"));
+    const spreadsheetUrl = String(fd.get("spreadsheetUrl") || "").trim();
+    const secret = String(fd.get("secret") || "").trim();
+    if (!webAppUrl) throw new Error("Apps Script Web App URL belum valid.");
+    if (!extractSpreadsheetId(spreadsheetUrl)) throw new Error("URL Google Spreadsheet belum valid.");
+    if (!secret) throw new Error("Secret Token wajib diisi.");
+    const next = {
+      ...state.appSettings,
+      googleSheetWebAppUrl: webAppUrl,
+      googleSheetSpreadsheetUrl: spreadsheetUrl,
+      googleSheetSecret: secret
+    };
+    await saveAppSettings(next);
+    state.appSettings = { ...DEFAULT_APP_SETTINGS, ...next };
+    return { webAppUrl, spreadsheetUrl, secret, sheetName: String(fd.get("sheetName") || defaultSheetName).trim() || defaultSheetName };
+  };
+
+  modal.querySelector("#save-google-sheet-config")?.addEventListener("click", async () => {
+    const btn = modal.querySelector("#save-google-sheet-config");
+    btn.disabled = true;
+    try {
+      await persistConfig();
+      showToast("Koneksi Google Sheet berhasil disimpan.", "success", "Google Sheet siap");
+    } catch (err) {
+      showToast(err?.message || "Koneksi Google Sheet gagal disimpan.", "error", "Setup gagal");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  form?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const btn = modal.querySelector("#send-google-sheet-now");
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.textContent = "Mengirim...";
+    try {
+      const cfg = await persistConfig();
+      const result = await sendScheduleToGoogleSheet({
+        ...cfg,
+        entries,
+        rules,
+        periodLabel,
+        metadata: {
+          workspace: state.appSettings?.outletName || "SoWork",
+          branch: state.appSettings?.branchName || "Operations Hub",
+          month: selectedMonth,
+          sentBy: state.profile?.name || state.user?.email || "Admin"
+        }
+      });
+      if (result?.verified === false) {
+        showToast("Permintaan sudah dikirim lewat fallback browser. Cek tab Google Sheet untuk memastikan hasilnya.", "success", "Jadwal dikirim");
+      } else {
+        showToast(`Jadwal berhasil dikirim ke tab “${result?.sheetName || cfg.sheetName}” dengan merge asli.`, "success", "Google Sheet diperbarui");
+      }
+      close();
+    } catch (err) {
+      showToast(err?.message || "Gagal mengirim jadwal ke Google Sheet.", "error", "Google Sheet gagal");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldLabel;
+    }
   });
 }
 
@@ -3423,6 +3534,15 @@ function renderSettings(target) {
       </article>
 
       <article class="panel">
+        <div class="panel-head"><div><span class="overline">GOOGLE SHEETS</span><h3>Direct Schedule Sync</h3></div><span class="status-pill ${s.googleSheetWebAppUrl ? "connected" : ""}">${s.googleSheetWebAppUrl ? "Ready" : "Setup"}</span></div>
+        <p class="muted small-copy">Dipakai oleh tombol “Kirim ke Google Sheet” di halaman Jadwal. Merge dibuat langsung oleh Apps Script, jadi tidak bergantung clipboard.</p>
+        <div class="settings-readonly-row"><span>Web App</span><strong>${s.googleSheetWebAppUrl ? "Terhubung" : "Belum diatur"}</strong></div>
+        <div class="settings-readonly-row"><span>Spreadsheet default</span><strong>${s.googleSheetSpreadsheetUrl ? "Tersimpan" : "Belum diatur"}</strong></div>
+        <div class="settings-readonly-row"><span>Secret</span><strong>${s.googleSheetSecret ? "Tersimpan" : "Belum diatur"}</strong></div>
+        <small class="muted small-copy">Konfigurasi bisa diisi langsung saat menekan tombol Kirim ke Google Sheet.</small>
+      </article>
+
+      <article class="panel">
         <div class="panel-head"><div><span class="overline">BOT & ALERT</span><h3>Telegram Notification Center</h3></div></div>
         <div class="settings-readonly-row"><span>Telegram</span><strong>${state.telegramWorkerStatus?.paired || state.stockSettings?.telegramChatId ? `Terhubung${state.telegramWorkerStatus?.recipientCount ? ` (${state.telegramWorkerStatus.recipientCount} penerima)` : ""}` : "Belum dipair"}</strong></div>
         <div class="settings-readonly-row"><span>Alert otomatis</span><strong>${state.stockSettings?.telegramEnabled ? "Aktif (Cloudflare Free)" : "Nonaktif"}</strong></div>
@@ -3439,7 +3559,7 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.5.3 Data Feedback + CRUD</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.6.1 Direct Google Sheet</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>
@@ -3457,7 +3577,10 @@ function renderSettings(target) {
         defaultSecondaryLocation: fd.get("defaultSecondaryLocation"),
         currency: fd.get("currency"),
         timezone: fd.get("timezone"),
-        reportAutoFillSchedule: fd.get("reportAutoFillSchedule") === "on"
+        reportAutoFillSchedule: fd.get("reportAutoFillSchedule") === "on",
+        googleSheetWebAppUrl: state.appSettings?.googleSheetWebAppUrl || "",
+        googleSheetSpreadsheetUrl: state.appSettings?.googleSheetSpreadsheetUrl || "",
+        googleSheetSecret: state.appSettings?.googleSheetSecret || ""
       });
       showToast("Settings berhasil disimpan.", "success", "Settings tersimpan");
     } catch (err) {

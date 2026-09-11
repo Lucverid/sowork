@@ -3434,3 +3434,23 @@ input, select { min-height: 40px; padding: 8px 11px; border-radius: 10px; }
 .schedule-export-stack{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:min(100%,680px)}
 .schedule-export-note{display:block;text-align:right;max-width:620px;line-height:1.35}
 @media (max-width:760px){.schedule-export-stack{align-items:stretch;width:100%}.schedule-export-note{text-align:left}.schedule-share-actions{width:100%}}
+
+/* SoWork v1.6.1 — Direct Google Sheet */
+.google-sheet-modal { max-width: 680px; }
+.google-sheet-status { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 16px; border:1px solid var(--line, #e3e8ee); border-radius:16px; background:var(--surface-soft, #f7f9fb); }
+.google-sheet-status > div { display:grid; gap:3px; }
+.google-sheet-status span { font-size:12px; color:var(--muted, #748091); }
+.google-sheet-status.connected { border-color:rgba(34, 197, 94, .28); background:rgba(34, 197, 94, .06); }
+.status-pill { display:inline-flex; align-items:center; min-height:28px; padding:0 10px; border-radius:999px; background:#eef2f6; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; white-space:nowrap; }
+.status-pill.connected, .google-sheet-status.connected .status-pill { background:rgba(34, 197, 94, .12); color:#15803d; }
+.google-sheet-rule { margin-top:2px; }
+.google-sheet-setup { border:1px solid var(--line, #e3e8ee); border-radius:14px; padding:11px 13px; background:var(--surface-soft, #f8fafc); }
+.google-sheet-setup summary { cursor:pointer; font-weight:700; }
+.google-sheet-setup > div { display:grid; gap:5px; margin-top:10px; color:var(--muted, #748091); font-size:12px; }
+.google-sheet-setup code { font-size:11px; }
+.google-sheet-actions { align-items:center; }
+@media (max-width: 720px) {
+  .google-sheet-status { align-items:flex-start; }
+  .google-sheet-actions { align-items:stretch; }
+  .google-sheet-actions button { width:100%; }
+}
