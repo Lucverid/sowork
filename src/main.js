@@ -720,6 +720,7 @@ function scheduleCrewRuleRowHtml(crew, index) {
         <option value="Wanita" ${row.gender === "Wanita" ? "selected" : ""}>Wanita</option>
       </select>
       <label class="crew-active-toggle"><input name="crew_active_${index}" type="checkbox" ${row.active !== false ? "checked" : ""}/><span>Aktif</span></label>
+      <button class="danger compact crew-remove-rule" type="button" data-remove-crew="${index}" title="Hapus crew dari rules">Hapus</button>
     </div>`;
 }
 
@@ -940,6 +941,41 @@ function renderSchedule(target) {
     const nextIndex = Math.max(-1, ...[...list.querySelectorAll("[data-crew-rule-row]")].map(row => Number(row.dataset.crewRuleRow || 0))) + 1;
     list.insertAdjacentHTML("beforeend", scheduleCrewRuleRowHtml({ name: "", gender: "Pria", active: true }, nextIndex));
     list.querySelector(`[data-crew-rule-row="${nextIndex}"] input`)?.focus();
+  });
+
+  document.querySelector("#schedule-crew-rule-list")?.addEventListener("click", event => {
+    const removeButton = event.target.closest("[data-remove-crew]");
+    if (!removeButton) return;
+
+    const list = document.querySelector("#schedule-crew-rule-list");
+    const row = removeButton.closest("[data-crew-rule-row]");
+    if (!list || !row) return;
+
+    const rows = [...list.querySelectorAll("[data-crew-rule-row]")];
+    if (rows.length <= 1) {
+      showToast("Minimal sisakan satu baris crew. Kalau crew sedang tidak bekerja, gunakan Nonaktif.", "warning", "Crew tidak dihapus");
+      return;
+    }
+
+    const index = row.dataset.crewRuleRow;
+    const name = String(rulesForm?.elements.namedItem(`crew_name_${index}`)?.value || "").trim();
+    const label = name || "crew ini";
+    if (name && !confirm(`Hapus ${label} dari rules jadwal? Histori jadwal lama tetap tersimpan dan tidak akan ikut terhapus.`)) return;
+
+    row.remove();
+
+    // Bersihkan referensi libur agar crew yang dihapus tidak menjadi ghost rule / error validator.
+    if (name && rulesForm) {
+      for (const day of ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]) {
+        const input = rulesForm.elements.namedItem(`off_${day}`);
+        if (!input) continue;
+        const nextNames = cleanNames(input.value).filter(existing => existing !== name);
+        input.value = nextNames.join(", ");
+      }
+    }
+
+    state.schedulePreview = null;
+    showToast(`${label} dihapus dari rules. Tekan Simpan Rules untuk menyimpan perubahan.`, "info", "Crew dihapus");
   });
 
   document.querySelectorAll("[data-schedule-preset]").forEach(btn => {

@@ -3470,10 +3470,11 @@ input, select { min-height: 40px; padding: 8px 11px; border-radius: 10px; }
 .rule-editor-heading strong { font-size:14px; }
 .rule-editor-heading span { color:var(--muted, #64748b); font-size:12px; }
 .schedule-crew-rule-list { display:grid; gap:8px; }
-.schedule-crew-rule-row { display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(110px,.7fr) minmax(90px,.5fr); gap:8px; align-items:center; }
+.schedule-crew-rule-row { display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(110px,.7fr) minmax(90px,.5fr) 78px; gap:8px; align-items:center; }
 .schedule-crew-rule-row input, .schedule-crew-rule-row select { width:100%; }
 .crew-active-toggle { display:flex !important; flex-direction:row !important; align-items:center; justify-content:center; gap:8px; min-height:42px; border:1px solid var(--border, #e2e8f0); border-radius:10px; background:#fff; padding:0 10px; }
 .crew-active-toggle input { width:auto; }
+.crew-remove-rule { min-height:42px; width:100%; }
 .schedule-rules-table-wrap { overflow:auto; border:1px solid var(--border, #e2e8f0); border-radius:12px; background:#fff; }
 .schedule-rules-table { width:100%; border-collapse:collapse; min-width:1040px; }
 .schedule-rules-table th, .schedule-rules-table td { padding:8px; border-bottom:1px solid var(--border, #e2e8f0); text-align:left; vertical-align:middle; }
@@ -3504,7 +3505,7 @@ input, select { min-height: 40px; padding: 8px 11px; border-radius: 10px; }
 
 @media (max-width: 900px) {
   .schedule-role-rules, .receipt-common-grid { grid-template-columns:1fr; }
-  .schedule-crew-rule-row { grid-template-columns:1fr 120px 90px; }
+  .schedule-crew-rule-row { grid-template-columns:1fr 120px 90px 78px; }
   .receipt-batch-row { grid-template-columns:1fr 1fr; align-items:end; }
   .receipt-item-select, .receipt-row-total { grid-column:1 / -1; }
   .receipt-remove-row { width:44px; }
@@ -3513,6 +3514,7 @@ input, select { min-height: 40px; padding: 8px 11px; border-radius: 10px; }
 @media (max-width: 620px) {
   .schedule-crew-rule-row { grid-template-columns:1fr 1fr; }
   .schedule-crew-rule-row > input { grid-column:1 / -1; }
+  .crew-remove-rule { width:auto; }
   .rule-editor-heading, .receipt-batch-head { align-items:flex-start; flex-direction:column; }
   .receipt-batch-row { grid-template-columns:1fr; }
   .receipt-item-select, .receipt-row-total { grid-column:auto; }

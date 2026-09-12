@@ -1,18 +1,19 @@
-SoWork v1.7.0 — Stability & Stock Cleanup
+SoWork v1.7.2 — Crew Delete
 
-Fokus update:
-- Tambah "Hapus data tanggal" di Pemakaian Barang Harian.
-- Menghapus marker kalender, jadi label "terisi" / "sudah dicek" benar-benar hilang.
-- Menghapus seluruh DAILY_USAGE pada tanggal itu.
-- Stok otomatis dikembalikan hanya jika transaksi tersebut sebelumnya memang mengurangi stok berjalan.
-- Aman untuk tanggal yang sudah diubah semua menjadi 0: hanya marker yang dibersihkan.
-- lastUsageDate dikoreksi ke histori penggunaan sebelumnya.
+Yang baru:
+- Setiap crew di Rules Jadwal sekarang punya tombol Hapus.
+- Hapus hanya mengeluarkan crew dari rules/generator.
+- Histori jadwal lama crew tersebut TIDAK dihapus.
+- Nama crew otomatis dibersihkan dari Crew Libur Senin–Minggu.
+- Minimal satu baris crew tetap harus ada.
+- Setelah menghapus, tekan Simpan Rules agar perubahan permanen.
 
-Upload/replace ke GitHub:
-1. src/main.js
-2. src/modules/stock/stock.js
-3. package.json
-4. package-lock.json
-5. V170_STABILITY_STOCK_CLEANUP.md (opsional, dokumentasi)
-
-Apps Script Google Sheet v1.6.8 TIDAK perlu diubah.
+Cara update:
+1. Replace file berikut di project SoWork:
+   - src/main.js
+   - src/style.css
+   - package.json
+   - package-lock.json
+2. Commit + push ke main.
+3. GitHub Pages akan auto-deploy.
+4. Cloudflare Worker dan Apps Script tidak perlu deploy ulang untuk patch ini.
