@@ -12,6 +12,7 @@ import { buildWasteAnalytics, wasteDashboardAlerts } from "./modules/waste/analy
 import { exportWasteWorkbook } from "./modules/waste/export.js";
 import { watchPersonalReports, savePersonalReport, removePersonalReport } from "./modules/reports/reports.js";
 import { DEFAULT_APP_SETTINGS, watchAppSettings, saveAppSettings, updateProfileName } from "./modules/settings/settings.js";
+import { cleanupBackupSnapshots, createBackupSnapshot, ensureAutomaticBackup, getBackupPolicy, listBackupSnapshots, restoreBackupSnapshot, saveBackupPolicy, testFirebaseConnection } from "./modules/system/stability.js";
 import {
   chooseExcelFile, exportAllWorkbook, exportCalculatorWorkbook, exportChecklistWorkbook, exportDashboardWorkbook,
   exportOrderPlannerWorkbook, exportReportsWorkbook, exportStockOpnameWorkbook, exportStockWorkbook, importFeatureWorkbook
@@ -55,6 +56,16 @@ let state = {
   reportSearch: "",
   appSettings: { ...DEFAULT_APP_SETTINGS },
   telegramWorkerStatus: null,
+  systemHealth: null,
+  systemHealthLoading: false,
+  systemHealthLoaded: false,
+  backupPolicy: null,
+  backupSnapshots: [],
+  backupCenterLoading: false,
+  backupCenterLoaded: false,
+  backupDataReady: { rules: false, stock: false, waste: false, app: false, stockSettings: false },
+  autoBackupTimer: null,
+  autoBackupChecked: false,
   cloudflareSyncTimer: null,
   cloudflareSyncBusy: false,
   cloudflareSyncQueued: false,
@@ -73,6 +84,8 @@ function clearSubscriptions() {
   }
   clearTimeout(state.cloudflareSyncTimer);
   state.cloudflareSyncTimer = null;
+  clearTimeout(state.autoBackupTimer);
+  state.autoBackupTimer = null;
   if (state.cloudflareSyncWatchdog) {
     clearInterval(state.cloudflareSyncWatchdog);
     state.cloudflareSyncWatchdog = null;
@@ -3865,6 +3878,23 @@ function openStockImportChoice() {
 function renderSettings(target) {
   if (!isAdmin(state.profile)) return renderPlaceholder(target);
   const s = { ...DEFAULT_APP_SETTINGS, ...(state.appSettings || {}) };
+  const health = state.systemHealth || {};
+  const policy = state.backupPolicy || {
+    autoBackupEnabled: true,
+    weeklyEnabled: true,
+    monthlyEnabled: true,
+    retentionWeekly: 4,
+    retentionMonthly: 3,
+    retentionManual: 5
+  };
+  const backups = Array.isArray(state.backupSnapshots) ? state.backupSnapshots : [];
+
+  const healthRow = (label, item, fallback = "Belum dicek") => {
+    const status = item?.status || "idle";
+    const latency = Number.isFinite(Number(item?.latencyMs)) ? `${Number(item.latencyMs)} ms` : "";
+    const text = item?.label || fallback;
+    return `<div class="health-row"><span class="health-dot ${escapeHtml(status)}"></span><div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(text)}</small></div><b>${escapeHtml(latency)}</b></div>`;
+  };
 
   target.innerHTML = `
     <section class="page-intro">
@@ -3898,6 +3928,44 @@ function renderSettings(target) {
         </form>
       </article>
 
+      <article class="panel stability-wide-panel">
+        <div class="panel-head"><div><span class="overline">SYSTEM HEALTH</span><h3>Status layanan SoWork</h3><p class="muted small-copy">Cek jalur utama tanpa menebak apakah masalahnya ada di Firebase, Telegram, atau Apps Script.</p></div><button id="health-recheck" class="secondary compact" ${state.systemHealthLoading ? "disabled" : ""}>${state.systemHealthLoading ? "Mengecek..." : "Test ulang semua"}</button></div>
+        <div class="health-grid">
+          ${healthRow("Firebase", health.firebase, state.systemHealthLoading ? "Mengecek koneksi..." : "Belum dicek")}
+          ${healthRow("Telegram Worker", health.telegram, state.systemHealthLoading ? "Mengecek worker..." : "Belum dicek")}
+          ${healthRow("Apps Script", health.appsScript, state.systemHealthLoading ? "Mengecek Apps Script..." : "Belum dicek")}
+          ${healthRow("Browser", { status: navigator.onLine === false ? "offline" : "online", label: navigator.onLine === false ? "Offline" : "Online" })}
+        </div>
+        <div class="health-footer"><span>Last Cloudflare Sync</span><strong>${escapeHtml(health.lastSyncLabel || state.telegramWorkerStatus?.snapshotUpdatedAt || "Belum ada data sync")}</strong></div>
+      </article>
+
+      <article class="panel stability-wide-panel">
+        <div class="panel-head"><div><span class="overline">BACKUP & RECOVERY</span><h3>Snapshot konfigurasi penting</h3><p class="muted small-copy">Menyimpan rules jadwal, stock master, waste master, dan setting aman. Transaksi harian tidak diduplikasi.</p></div><span class="status-pill ${policy.autoBackupEnabled !== false ? "connected" : ""}">${policy.autoBackupEnabled !== false ? "AUTO ON" : "AUTO OFF"}</span></div>
+        <form id="backup-policy-form" class="backup-policy-form">
+          <label class="check-line simple"><input name="autoBackupEnabled" type="checkbox" ${policy.autoBackupEnabled !== false ? "checked" : ""}/><span>Auto Backup</span></label>
+          <label class="check-line simple"><input name="weeklyEnabled" type="checkbox" ${policy.weeklyEnabled !== false ? "checked" : ""}/><span>Mingguan · simpan ${Number(policy.retentionWeekly || 4)} snapshot</span></label>
+          <label class="check-line simple"><input name="monthlyEnabled" type="checkbox" ${policy.monthlyEnabled !== false ? "checked" : ""}/><span>Bulanan · simpan ${Number(policy.retentionMonthly || 3)} snapshot</span></label>
+          <button class="secondary compact">Simpan kebijakan</button>
+        </form>
+        <div class="backup-summary-grid">
+          <div><span>Backup terakhir</span><strong>${backups[0] ? formatBackupDate(backups[0].createdAtIso) : "Belum ada"}</strong></div>
+          <div><span>Total tersimpan</span><strong>${backups.length}</strong></div>
+          <div><span>Mode restore</span><strong>Merge aman</strong></div>
+        </div>
+        <div class="settings-shortcut-actions backup-actions">
+          <button id="backup-now" class="primary" ${state.backupCenterLoading ? "disabled" : ""}>Backup sekarang</button>
+          <button id="backup-refresh" class="secondary" ${state.backupCenterLoading ? "disabled" : ""}>Refresh daftar</button>
+        </div>
+        <div class="backup-list">
+          ${state.backupCenterLoading && !backups.length ? `<div class="backup-empty">Memuat backup...</div>` : backups.length ? backups.slice(0, 12).map(item => `
+            <div class="backup-row">
+              <div><strong>${escapeHtml(backupTypeLabel(item.backupType))}</strong><small>${escapeHtml(formatBackupDate(item.createdAtIso))} · v${escapeHtml(item.appVersion || "-")} · ${Number(item.counts?.stockItems || 0)} stock · ${Number(item.counts?.wasteItems || 0)} waste</small></div>
+              <div class="backup-row-actions"><button type="button" class="secondary compact" data-backup-download="${escapeHtml(item.id)}">JSON</button><button type="button" class="secondary compact" data-backup-preview="${escapeHtml(item.id)}">Preview</button></div>
+            </div>`).join("") : `<div class="backup-empty">Belum ada snapshot. Backup otomatis akan dibuat saat sudah jatuh tempo.</div>`}
+        </div>
+        <small class="muted small-copy">Restore tidak menghapus master baru yang dibuat setelah backup, serta tidak menimpa secret Apps Script atau pairing Telegram.</small>
+      </article>
+
       <article class="panel">
         <div class="panel-head"><div><span class="overline">GOOGLE SHEETS</span><h3>Direct Schedule Sync</h3></div><span class="status-pill ${s.googleSheetWebAppUrl ? "connected" : ""}">${s.googleSheetWebAppUrl ? "Ready" : "Setup"}</span></div>
         <p class="muted small-copy">Dipakai oleh tombol “Kirim ke Google Sheet” di halaman Jadwal. Merge dibuat langsung oleh Apps Script, jadi tidak bergantung clipboard.</p>
@@ -3924,12 +3992,15 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.6.6 Auth Recovery</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.7.3 Stability Pack</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>
     </div>
   `;
+
+  if (!state.backupCenterLoaded && !state.backupCenterLoading) setTimeout(() => refreshBackupCenter().catch(() => {}), 0);
+  if (!state.systemHealthLoaded && !state.systemHealthLoading) setTimeout(() => runSystemHealthChecks().catch(() => {}), 0);
 
   document.querySelector("#app-settings-form")?.addEventListener("submit", async e => {
     e.preventDefault();
@@ -3966,8 +4037,248 @@ function renderSettings(target) {
     }
   });
 
+  document.querySelector("#health-recheck")?.addEventListener("click", () => runSystemHealthChecks(true));
+  document.querySelector("#backup-refresh")?.addEventListener("click", () => refreshBackupCenter(true));
+  document.querySelector("#backup-now")?.addEventListener("click", () => runManualBackup());
+
+  document.querySelector("#backup-policy-form")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    try {
+      state.backupPolicy = await saveBackupPolicy({
+        ...(state.backupPolicy || {}),
+        autoBackupEnabled: Boolean(form.elements.namedItem("autoBackupEnabled")?.checked),
+        weeklyEnabled: Boolean(form.elements.namedItem("weeklyEnabled")?.checked),
+        monthlyEnabled: Boolean(form.elements.namedItem("monthlyEnabled")?.checked)
+      });
+      state.autoBackupChecked = false;
+      showToast("Kebijakan backup tersimpan.", "success", "Backup diperbarui");
+      scheduleAutoBackupCheck(500);
+      scheduleRender(["settings"]);
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Gagal menyimpan backup");
+    }
+  });
+
+  document.querySelectorAll("[data-backup-preview]").forEach(btn => {
+    btn.addEventListener("click", () => openBackupPreview(btn.dataset.backupPreview));
+  });
+  document.querySelectorAll("[data-backup-download]").forEach(btn => {
+    btn.addEventListener("click", () => downloadBackupSnapshot(btn.dataset.backupDownload));
+  });
+
   document.querySelector("#open-stock-settings")?.addEventListener("click", () => openStockSettingsEditor());
   document.querySelector("#open-data-hub")?.addEventListener("click", () => { state.page = "data"; renderShell(); });
+}
+
+function buildBackupContext() {
+  return {
+    scheduleRules: state.scheduleRules || {},
+    stockItems: state.stockItems || [],
+    wasteItems: state.wasteItems || [],
+    appSettings: state.appSettings || {},
+    stockSettings: state.stockSettings || {}
+  };
+}
+
+function backupTypeLabel(type) {
+  if (type === "weekly") return "Mingguan";
+  if (type === "monthly") return "Bulanan";
+  return "Manual";
+}
+
+function formatBackupDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("id-ID", {
+    day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+  }).format(date);
+}
+
+async function refreshBackupCenter(forceRender = false) {
+  if (!isAdmin(state.profile) || state.backupCenterLoading) return;
+  state.backupCenterLoading = true;
+  if (forceRender) scheduleRender(["settings"]);
+  try {
+    const [policy, backups] = await Promise.all([getBackupPolicy(), listBackupSnapshots()]);
+    state.backupPolicy = policy;
+    state.backupSnapshots = backups;
+    state.backupCenterLoaded = true;
+  } catch (err) {
+    console.warn("Backup center:", err);
+    if (forceRender) showToast(err?.message || friendlyError(err), "error", "Backup gagal dimuat");
+  } finally {
+    state.backupCenterLoading = false;
+    scheduleRender(["settings"]);
+  }
+}
+
+async function runManualBackup() {
+  if (!isAdmin(state.profile) || state.backupCenterLoading) return;
+  if (!backupDataReady()) return showToast("Tunggu data utama selesai dimuat dulu, lalu coba lagi.", "warning", "Backup belum siap");
+  state.backupCenterLoading = true;
+  scheduleRender(["settings"]);
+  try {
+    const created = await createBackupSnapshot(buildBackupContext(), {
+      type: "manual",
+      actorName: state.profile?.name || state.user?.email || "Admin"
+    });
+    const policy = state.backupPolicy || await getBackupPolicy();
+    await cleanupBackupSnapshots(policy);
+    state.backupCenterLoaded = false;
+    state.backupCenterLoading = false;
+    await refreshBackupCenter();
+    showToast(`Snapshot ${formatBackupDate(created.createdAtIso)} berhasil dibuat.`, "success", "Backup selesai");
+  } catch (err) {
+    showToast(err?.message || friendlyError(err), "error", "Backup gagal");
+  } finally {
+    state.backupCenterLoading = false;
+    scheduleRender(["settings"]);
+  }
+}
+
+function backupDataReady() {
+  const ready = state.backupDataReady || {};
+  return ["rules", "stock", "waste", "app", "stockSettings"].every(key => ready[key] === true);
+}
+
+function scheduleAutoBackupCheck(delay = 3000) {
+  if (!isAdmin(state.profile) || state.autoBackupChecked || !backupDataReady()) return;
+  clearTimeout(state.autoBackupTimer);
+  state.autoBackupTimer = setTimeout(() => {
+    state.autoBackupTimer = null;
+    runAutomaticBackupCheck().catch(err => console.warn("Auto backup:", err));
+  }, Math.max(300, Number(delay) || 3000));
+}
+
+async function runAutomaticBackupCheck() {
+  if (!isAdmin(state.profile) || state.autoBackupChecked) return;
+  try {
+    const result = await ensureAutomaticBackup(buildBackupContext(), {
+      actorName: state.profile?.name || state.user?.email || "Admin"
+    });
+    state.backupPolicy = result.policy || state.backupPolicy;
+    state.autoBackupChecked = true;
+    if (result.created) {
+      state.backupCenterLoaded = false;
+      await refreshBackupCenter();
+      showToast(`${backupTypeLabel(result.created.backupType)} otomatis berhasil dibuat.`, "success", "Auto Backup");
+    }
+  } catch (err) {
+    state.autoBackupChecked = true;
+    console.warn("Auto backup gagal:", err);
+  }
+}
+
+async function runSystemHealthChecks(showFeedback = false) {
+  if (!isAdmin(state.profile) || state.systemHealthLoading) return;
+  state.systemHealthLoading = true;
+  if (showFeedback) scheduleRender(["settings"]);
+
+  const timed = async fn => {
+    const started = performance.now();
+    try {
+      const result = await fn();
+      return { status: "online", label: "Online", latencyMs: Math.round(performance.now() - started), result };
+    } catch (error) {
+      return { status: "offline", label: error?.message || "Tidak terjangkau", latencyMs: Math.round(performance.now() - started), error };
+    }
+  };
+
+  const firebasePromise = timed(async () => testFirebaseConnection());
+  const workerUrl = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
+  const telegramPromise = workerUrl
+    ? timed(() => getTelegramWorkerStatus(workerUrl))
+    : Promise.resolve({ status: "setup", label: "Worker belum dikonfigurasi" });
+
+  const hasSheet = Boolean(
+    state.appSettings?.googleSheetWebAppUrl &&
+    state.appSettings?.googleSheetSpreadsheetUrl &&
+    state.appSettings?.googleSheetSecret
+  );
+  const sheetPromise = hasSheet
+    ? timed(() => testGoogleSheetConnection({
+        webAppUrl: state.appSettings.googleSheetWebAppUrl,
+        spreadsheetUrl: state.appSettings.googleSheetSpreadsheetUrl,
+        secret: state.appSettings.googleSheetSecret
+      }))
+    : Promise.resolve({ status: "setup", label: "Apps Script belum lengkap" });
+
+  const [firebase, telegram, appsScript] = await Promise.all([firebasePromise, telegramPromise, sheetPromise]);
+  if (telegram?.result) state.telegramWorkerStatus = telegram.result;
+  const lastSyncRaw = telegram?.result?.snapshotUpdatedAt || state.telegramWorkerStatus?.snapshotUpdatedAt || "";
+
+  state.systemHealth = {
+    checkedAt: new Date().toISOString(),
+    firebase: firebase.status === "online" ? { ...firebase, label: "Online" } : firebase,
+    telegram: telegram.status === "online" ? { ...telegram, label: telegram.result?.paired ? `Online · ${Number(telegram.result?.recipientCount || 1)} penerima` : "Online · belum dipair" } : telegram,
+    appsScript: appsScript.status === "online" ? { ...appsScript, label: "Online · koneksi terverifikasi" } : appsScript,
+    lastSyncLabel: lastSyncRaw ? formatBackupDate(lastSyncRaw) : "Belum ada snapshot Cloudflare"
+  };
+  state.systemHealthLoaded = true;
+  state.systemHealthLoading = false;
+  scheduleRender(["settings"]);
+  if (showFeedback) {
+    const failed = [firebase, telegram, appsScript].filter(x => x.status === "offline").length;
+    showToast(failed ? `${failed} layanan bermasalah. Lihat detail di System Health.` : "Layanan utama berhasil dicek.", failed ? "warning" : "success", "System Health");
+  }
+}
+
+function downloadBackupSnapshot(id) {
+  const item = state.backupSnapshots.find(row => row.id === id);
+  if (!item) return showToast("Snapshot tidak ditemukan. Refresh daftar backup.", "warning", "Backup tidak ditemukan");
+  const safeName = `SoWork-backup-${item.backupType || "manual"}-${String(item.createdAtIso || "backup").slice(0, 10)}.json`;
+  const blob = new Blob([JSON.stringify(item, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = safeName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function openBackupPreview(id) {
+  const item = state.backupSnapshots.find(row => row.id === id);
+  if (!item) return showToast("Snapshot tidak ditemukan. Refresh daftar backup.", "warning", "Backup tidak ditemukan");
+  const counts = item.counts || {};
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<section class="edit-modal backup-preview-modal" role="dialog" aria-modal="true">
+    <div class="modal-head"><div><span class="overline">BACKUP PREVIEW</span><h3>${escapeHtml(backupTypeLabel(item.backupType))} · ${escapeHtml(formatBackupDate(item.createdAtIso))}</h3><p class="muted">Restore memakai mode merge aman: data master baru tidak dihapus dan credential sensitif tidak ditimpa.</p></div><button type="button" class="modal-close">×</button></div>
+    <div class="backup-preview-grid">
+      <div><span>Crew / Rules</span><strong>${Number(counts.crew || 0)}</strong></div>
+      <div><span>Stock Master</span><strong>${Number(counts.stockItems || 0)}</strong></div>
+      <div><span>Waste Master</span><strong>${Number(counts.wasteItems || 0)}</strong></div>
+      <div><span>Versi</span><strong>v${escapeHtml(item.appVersion || "-")}</strong></div>
+    </div>
+    <div class="inline-rule"><strong>Aman dipulihkan:</strong> Schedule Rules, daftar crew, stock master, waste master, identitas workspace, dan alert settings non-sensitif.</div>
+    <div class="inline-rule"><strong>Tidak disentuh:</strong> transaksi stok harian, histori jadwal, waste harian, secret Apps Script, pairing Telegram, Chat ID, dan nomor WhatsApp.</div>
+    <div class="modal-actions"><button type="button" class="secondary" id="backup-download-preview">Download JSON</button><div><button type="button" class="secondary modal-cancel">Batal</button><button type="button" class="danger" id="backup-restore-confirm">Restore snapshot</button></div></div>
+  </section>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.querySelector(".modal-close").onclick = close;
+  modal.querySelector(".modal-cancel").onclick = close;
+  modal.onclick = e => { if (e.target === modal) close(); };
+  modal.querySelector("#backup-download-preview").onclick = () => downloadBackupSnapshot(id);
+  modal.querySelector("#backup-restore-confirm").onclick = async () => {
+    if (!confirm(`Restore snapshot ${formatBackupDate(item.createdAtIso)}?\n\nData master saat ini tidak akan dihapus; nilai yang ada di snapshot akan dipulihkan/di-merge.`)) return;
+    const button = modal.querySelector("#backup-restore-confirm");
+    button.disabled = true;
+    button.textContent = "Memulihkan...";
+    try {
+      const result = await restoreBackupSnapshot(item);
+      close();
+      showToast(`Restore selesai · ${Number(result.stockItems || 0)} stock · ${Number(result.wasteItems || 0)} waste.`, "success", "Recovery berhasil");
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Restore gagal");
+      button.disabled = false;
+      button.textContent = "Restore snapshot";
+    }
+  };
 }
 
 function formatMonthKey(value) {
@@ -4094,6 +4405,8 @@ async function refreshTelegramWorkerStatus({ persistConnection = false } = {}) {
 
 function startRealtime() {
   clearSubscriptions();
+  state.autoBackupChecked = false;
+  state.backupDataReady = { rules: false, stock: false, waste: false, app: false, stockSettings: false };
 
   state.unsubs.push(
     watchSchedules(
@@ -4120,6 +4433,8 @@ function startRealtime() {
     watchScheduleRules(
       rules => {
         if (rules) state.scheduleRules = normalizeRules(rules);
+        state.backupDataReady.rules = true;
+        scheduleAutoBackupCheck();
         scheduleRender(["schedule","checklist"]);
       },
       err => console.error("Schedule rules listener:", err)
@@ -4130,7 +4445,7 @@ function startRealtime() {
     startCloudflareSyncWatchdog();
     state.unsubs.push(
       watchStockItems(
-        rows => { state.stockItems = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","stock","opname","order"]); },
+        rows => { state.stockItems = rows; state.backupDataReady.stock = true; scheduleCloudflareSync(); scheduleAutoBackupCheck(); scheduleRender(["dashboard","stock","opname","order"]); },
         err => console.error("Stock items listener:", err)
       )
     );
@@ -4150,7 +4465,9 @@ function startRealtime() {
       watchStockSettings(
         settings => {
           state.stockSettings = settings || state.stockSettings;
+          state.backupDataReady.stockSettings = true;
           scheduleCloudflareSync(500);
+          scheduleAutoBackupCheck();
           if (normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "") && !state.telegramWorkerStatus) {
             refreshTelegramWorkerStatus().then(() => scheduleRender(["settings"])).catch(() => {});
           }
@@ -4161,7 +4478,7 @@ function startRealtime() {
     );
     state.unsubs.push(
       watchWasteItems(
-        rows => { state.wasteItems = rows; scheduleCloudflareSync(); scheduleRender(["dashboard","waste"]); },
+        rows => { state.wasteItems = rows; state.backupDataReady.waste = true; scheduleCloudflareSync(); scheduleAutoBackupCheck(); scheduleRender(["dashboard","waste"]); },
         err => console.error("Waste items listener:", err)
       )
     );
@@ -4179,7 +4496,7 @@ function startRealtime() {
     );
     state.unsubs.push(
       watchAppSettings(
-        settings => { state.appSettings = settings || state.appSettings; scheduleRender(); },
+        settings => { state.appSettings = settings || state.appSettings; state.backupDataReady.app = true; scheduleAutoBackupCheck(); scheduleRender(); },
         err => console.error("App settings listener:", err)
       )
     );
