@@ -28,9 +28,6 @@ export async function saveSchedule(entry) {
   const role = shift === "Libur" ? "" : String(entry.role || "").trim();
   const overtime = Boolean(entry.overtime) && shift !== "Libur";
 
-  if (shift === "Middle" && role.toLowerCase().includes("kasir")) {
-    throw new Error("Middle tidak boleh mendapat role Kasir. Gunakan Bar atau Kitchen - Bar.");
-  }
 
   await setDoc(doc(db, "schedules", id), {
     date: entry.date,

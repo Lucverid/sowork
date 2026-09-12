@@ -58,6 +58,7 @@ export function watchStockSettings(callback, onError) {
       telegramNotifyWasteRiskDay: true,
       telegramNotifyDailyCheck: true,
       telegramNotifyOpsReminder: true,
+      telegramNotifyStockReceipt: true,
       telegramOpsReminderHour: 20,
       defaultLeadTimeDays: 2,
       defaultTargetCoverageDays: 7
@@ -149,6 +150,109 @@ export async function saveStockReceipt(entry) {
   return movementId;
 }
 
+
+
+export async function saveStockReceiptBatch({
+  date,
+  destination = "Gudang Utama",
+  supplier = "",
+  note = "",
+  rows = [],
+  actor = {},
+  batchId = ""
+} = {}) {
+  const safeDate = String(date || "").trim();
+  if (!safeDate) throw new Error("Tanggal barang masuk wajib diisi.");
+  if (!Array.isArray(rows) || !rows.length) throw new Error("Tambahkan minimal 1 barang masuk.");
+
+  const normalized = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const itemId = String(row?.itemId || "").trim();
+    if (!itemId) continue;
+    if (seen.has(itemId)) throw new Error(`${row?.itemName || itemId}: barang yang sama tidak boleh dua kali dalam satu kiriman.`);
+    seen.add(itemId);
+
+    const cartonSize = Math.max(0, Number(row?.cartonSize || 0));
+    const cartons = Math.max(0, Number(row?.cartons || 0));
+    const looseQty = Math.max(0, Number(row?.looseQty || 0));
+    const qty = cartons > 0 && cartonSize > 0 ? (cartons * cartonSize) + looseQty : looseQty;
+    if (!(qty > 0)) throw new Error(`${row?.itemName || itemId}: jumlah barang masuk harus lebih dari 0.`);
+
+    normalized.push({
+      itemId,
+      itemName: String(row?.itemName || ""),
+      unit: String(row?.unit || "PCS"),
+      cartonSize,
+      cartons,
+      looseQty,
+      qty,
+      lastOpnameDate: String(row?.lastOpnameDate || "")
+    });
+  }
+
+  if (!normalized.length) throw new Error("Tidak ada barang masuk yang valid.");
+  const safeBatchId = String(batchId || `INB_${safeDate}_${crypto.randomUUID()}`).replace(/[^a-zA-Z0-9_-]+/g, "-");
+  const safeSupplier = String(supplier || "").trim();
+  const safeNote = String(note || "").trim();
+  const safeDestination = String(destination || "Gudang Utama").trim() || "Gudang Utama";
+
+  // 2 writes per item (movement + item). Potong batch supaya aman di bawah limit Firestore 500 operasi.
+  for (let start = 0; start < normalized.length; start += 180) {
+    const part = normalized.slice(start, start + 180);
+    const batch = writeBatch(db);
+    part.forEach((row, localIndex) => {
+      const index = start + localIndex + 1;
+      const movementId = `${safeBatchId}_${String(index).padStart(3, "0")}_${row.itemId}`;
+      const movementRef = doc(db, "stockMovements", movementId);
+      const itemRef = doc(db, "items", row.itemId);
+      const affectsCurrentStock = !row.lastOpnameDate || safeDate > row.lastOpnameDate;
+
+      batch.set(movementRef, {
+        batchId: safeBatchId,
+        batchIndex: index,
+        batchSize: normalized.length,
+        itemId: row.itemId,
+        itemName: row.itemName,
+        type: "IN",
+        source: "STOCK_RECEIPT_BATCH",
+        date: safeDate,
+        qty: row.qty,
+        cartons: row.cartons,
+        looseQty: row.looseQty,
+        cartonSize: row.cartonSize,
+        unit: row.unit,
+        destination: safeDestination,
+        supplier: safeSupplier,
+        note: safeNote,
+        affectsCurrentStock,
+        createdAt: serverTimestamp(),
+        createdByUid: String(actor?.uid || ""),
+        createdByName: String(actor?.name || "")
+      });
+
+      batch.set(itemRef, affectsCurrentStock ? {
+        currentQty: increment(row.qty),
+        lastDeliveryDate: safeDate,
+        updatedAt: serverTimestamp()
+      } : {
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    });
+    await batch.commit();
+  }
+
+  return {
+    batchId: safeBatchId,
+    date: safeDate,
+    destination: safeDestination,
+    supplier: safeSupplier,
+    note: safeNote,
+    itemCount: normalized.length,
+    totalQty: normalized.reduce((sum, row) => sum + row.qty, 0),
+    rows: normalized
+  };
+}
 
 export async function saveDailyStockUsage(date, rows, actor = {}) {
   if (!date || !Array.isArray(rows) || !rows.length) throw new Error("Tanggal dan penggunaan stok wajib diisi.");
@@ -441,6 +545,7 @@ export async function saveStockSettings(settings) {
     telegramNotifyWasteRiskDay: settings.telegramNotifyWasteRiskDay !== false,
     telegramNotifyDailyCheck: settings.telegramNotifyDailyCheck !== false,
     telegramNotifyOpsReminder: settings.telegramNotifyOpsReminder !== false,
+    telegramNotifyStockReceipt: settings.telegramNotifyStockReceipt !== false,
     telegramOpsReminderHour: [18, 20].includes(Number(settings.telegramOpsReminderHour)) ? Number(settings.telegramOpsReminderHour) : 20,
     defaultLeadTimeDays: Math.max(0, Number(settings.defaultLeadTimeDays || 2)),
     defaultTargetCoverageDays: Math.max(1, Number(settings.defaultTargetCoverageDays || 7)),

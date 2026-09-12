@@ -1,11 +1,11 @@
 import "./style.css";
 import { getUserProfile, isAdmin, login, logout, observeAuth, registerViewer } from "./auth/auth.js";
 import { watchSchedules, saveSchedule, removeSchedule, watchScheduleRules, saveScheduleRules, replaceScheduleRange } from "./modules/schedule/schedule.js";
-import { DEFAULT_SCHEDULE_RULES, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries } from "./modules/schedule/generator.js";
+import { DEFAULT_SCHEDULE_RULES, SCHEDULE_PRESETS, applySchedulePreset, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries, validateRules } from "./modules/schedule/generator.js";
 import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
 import { sendScheduleToGoogleSheet, testGoogleSheetConnection, normalizeAppsScriptUrl, extractSpreadsheetId } from "./modules/schedule/googleSheet.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
-import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveDailyStockUsage, removeDailyStockUsageDay, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
+import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveStockReceiptBatch, saveDailyStockUsage, removeDailyStockUsageDay, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
 import { watchWasteItems, watchWasteDays, saveWasteItem, archiveWasteItem, restoreWasteItem, permanentDeleteWasteItem, saveWasteDay, removeWasteDay, seedWasteReference } from "./modules/waste/waste.js";
 import { buildWasteAnalytics, wasteDashboardAlerts } from "./modules/waste/analytics.js";
@@ -16,7 +16,7 @@ import {
   chooseExcelFile, exportAllWorkbook, exportCalculatorWorkbook, exportChecklistWorkbook, exportDashboardWorkbook,
   exportOrderPlannerWorkbook, exportReportsWorkbook, exportStockOpnameWorkbook, exportStockWorkbook, importFeatureWorkbook
 } from "./modules/datahub/datahub.js";
-import { getTelegramWorkerStatus, normalizeWorkerUrl, sendTelegramTest, setupTelegramWebhook, syncTelegramSnapshot, unpairTelegram } from "./modules/telegram/cloudflare.js";
+import { getTelegramWorkerStatus, normalizeWorkerUrl, sendTelegramStockReceiptBatch, sendTelegramTest, setupTelegramWebhook, syncTelegramSnapshot, unpairTelegram } from "./modules/telegram/cloudflare.js";
 
 const app = document.querySelector("#app");
 
@@ -37,7 +37,7 @@ let state = {
   stockItems: [],
   stockMovements: [],
   stockOpnames: [],
-  stockSettings: { whatsappNumber: "", autoWhatsappEnabled: false, notifyCriticalOnly: true, notifyLowStock: false, whatsappTemplateName: "stock_alert_sowork", whatsappTemplateLanguage: "id", telegramEnabled: false, cloudflareWorkerUrl: "", telegramChatId: "", telegramAllowedUserId: "", telegramPairCode: "", telegramWhatsappNumber: "", telegramNotifyLowStock: true, telegramNotifyOrderDue: true, telegramNotifyWasteHigh: true, telegramNotifyWasteRiskDay: true, telegramNotifyDailyCheck: true, telegramNotifyOpsReminder: true, telegramOpsReminderHour: 20, defaultLeadTimeDays: 2, defaultTargetCoverageDays: 7 },
+  stockSettings: { whatsappNumber: "", autoWhatsappEnabled: false, notifyCriticalOnly: true, notifyLowStock: false, whatsappTemplateName: "stock_alert_sowork", whatsappTemplateLanguage: "id", telegramEnabled: false, cloudflareWorkerUrl: "", telegramChatId: "", telegramAllowedUserId: "", telegramPairCode: "", telegramWhatsappNumber: "", telegramNotifyLowStock: true, telegramNotifyOrderDue: true, telegramNotifyWasteHigh: true, telegramNotifyWasteRiskDay: true, telegramNotifyDailyCheck: true, telegramNotifyOpsReminder: true, telegramNotifyStockReceipt: true, telegramOpsReminderHour: 20, defaultLeadTimeDays: 2, defaultTargetCoverageDays: 7 },
   stockSearch: "",
   stockStatusFilter: "Semua",
   opnameDate: null,
@@ -710,9 +710,83 @@ function schedulesForPeriod(entries, monthKey, includeCarryover = true) {
   });
 }
 
+function scheduleCrewRuleRowHtml(crew, index) {
+  const row = crew || { name: "", gender: "Pria", active: true };
+  return `
+    <div class="schedule-crew-rule-row" data-crew-rule-row="${index}">
+      <input name="crew_name_${index}" value="${escapeHtml(row.name || "")}" placeholder="Nama crew" />
+      <select name="crew_gender_${index}">
+        <option value="Pria" ${row.gender === "Pria" ? "selected" : ""}>Pria</option>
+        <option value="Wanita" ${row.gender === "Wanita" ? "selected" : ""}>Wanita</option>
+      </select>
+      <label class="crew-active-toggle"><input name="crew_active_${index}" type="checkbox" ${row.active !== false ? "checked" : ""}/><span>Aktif</span></label>
+    </div>`;
+}
+
+function scheduleGenderRuleOptions(value) {
+  return [
+    ["Any", "Bebas"],
+    ["Pria", "Pria saja"],
+    ["Wanita", "Wanita saja"]
+  ].map(([key, label]) => `<option value="${key}" ${value === key ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function scheduleRuleValidationHtml(validation) {
+  if (validation.errors?.length) {
+    return `<div class="schedule-rule-validation error"><strong>⚠ Rules belum valid</strong>${validation.errors.slice(0, 8).map(x => `<span>${escapeHtml(x)}</span>`).join("")}${validation.errors.length > 8 ? `<span>+${validation.errors.length - 8} error lainnya</span>` : ""}</div>`;
+  }
+  if (validation.warnings?.length) {
+    return `<div class="schedule-rule-validation warning"><strong>Rules bisa dipakai, ada catatan</strong>${validation.warnings.slice(0, 5).map(x => `<span>${escapeHtml(x)}</span>`).join("")}</div>`;
+  }
+  return `<div class="schedule-rule-validation success"><strong>✓ Rules siap dipakai</strong><span>Formasi, libur, gender constraint, dan crew aktif konsisten.</span></div>`;
+}
+
+function readScheduleRulesForm(form, previousRules) {
+  const fd = new FormData(form);
+  const crew = [...form.querySelectorAll("[data-crew-rule-row]")].map(row => {
+    const index = row.dataset.crewRuleRow;
+    return {
+      name: String(fd.get(`crew_name_${index}`) || "").trim(),
+      gender: String(fd.get(`crew_gender_${index}`) || "Pria"),
+      active: Boolean(form.elements.namedItem(`crew_active_${index}`)?.checked)
+    };
+  }).filter(row => row.name);
+
+  const offDays = {};
+  const formations = {};
+  const dayConstraints = {};
+  for (const day of ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]) {
+    offDays[day] = cleanNames(fd.get(`off_${day}`));
+    formations[day] = {
+      S1: Number(fd.get(`formation_${day}_S1`) || 0),
+      Middle: Number(fd.get(`formation_${day}_Middle`) || 0),
+      S2: Number(fd.get(`formation_${day}_S2`) || 0)
+    };
+    dayConstraints[day] = {
+      minMaleS2: Number(fd.get(`constraint_${day}_minMaleS2`) || 0),
+      s1Gender: String(fd.get(`constraint_${day}_s1Gender`) || "Any"),
+      middleGender: String(fd.get(`constraint_${day}_middleGender`) || "Any")
+    };
+  }
+
+  return normalizeRules({
+    crew,
+    offDays,
+    formations,
+    dayConstraints,
+    rolesByShift: {
+      S1: cleanNames(fd.get("roles_S1")),
+      Middle: cleanNames(fd.get("roles_Middle")),
+      S2: cleanNames(fd.get("roles_S2"))
+    },
+    version: Number(previousRules?.version || 2) + 1
+  });
+}
+
 function renderSchedule(target) {
   const admin = isAdmin(state.profile);
   const rules = normalizeRules(state.scheduleRules || DEFAULT_SCHEDULE_RULES);
+  const rulesValidation = validateRules(rules);
   const selected = state.scheduleMonth || defaultScheduleMonth();
   state.scheduleMonth = selected;
   const [selectedYear, selectedMonth] = selected.split("-").map(Number);
@@ -728,20 +802,21 @@ function renderSchedule(target) {
   const scheduleForGrid = preview?.entries?.length ? preview.entries : periodSchedules;
   const overtimePeriod = scheduleForGrid.filter(x => x?.overtime);
   const fairnessSummary = scheduleForGrid.length
-    ? (preview?.summary || summarizeScheduleEntries(scheduleForGrid, [...rules.maleNames, ...rules.femaleNames]))
+    ? (preview?.summary || summarizeScheduleEntries(scheduleForGrid, (rules.crew || []).filter(x => x.active !== false).map(x => x.name)))
     : null;
+  const activeCrew = rules.crew.filter(x => x.active !== false);
 
   target.innerHTML = `
     <section class="page-intro">
-      <div><span class="overline">SMART SCHEDULER</span><h1>Jadwal Kerja</h1><p>Status shift pakai indikator warna, sementara role kerja tetap terbaca jelas seperti format sheet operasional.</p></div>
-      ${admin ? `<span class="access-tag">CRUD + Export</span>` : `<span class="access-tag read">Read only</span>`}
+      <div><span class="overline">SMART SCHEDULER</span><h1>Jadwal Kerja</h1><p>Jumlah crew, formasi harian, gender constraint, libur, dan role sekarang sepenuhnya dikontrol Admin.</p></div>
+      ${admin ? `<span class="access-tag">FLEX RULES</span>` : `<span class="access-tag read">Read only</span>`}
     </section>
 
     ${admin ? `
       <article class="panel scheduler-panel">
         <div class="panel-head">
           <div><span class="overline">KONTROL JADWAL</span><h3>Generate Jadwal</h3></div>
-          <span class="count-pill">${includeCarryover ? "26 → 25" : "1 → 25"}</span>
+          <span class="count-pill">${activeCrew.length} crew aktif · ${includeCarryover ? "26 → 25" : "1 → 25"}</span>
         </div>
 
         <div class="scheduler-top-grid">
@@ -753,36 +828,71 @@ function renderSchedule(target) {
             <span class="switch-line"><input id="carryover-toggle" type="checkbox" ${includeCarryover ? "checked" : ""} /> Sertakan 26–akhir bulan sebelumnya</span>
           </label>
           <div class="generator-actions">
-            <button id="generate-schedule" class="primary">Preview Jadwal</button>
+            <button id="generate-schedule" class="primary">Preview + Validasi</button>
             ${preview?.entries?.length ? `<button id="save-generated" class="secondary">Simpan Jadwal</button>` : ""}
           </div>
         </div>
 
         <div class="rule-summary-grid">${ruleSummaryCards(rules)}</div>
-        ${preview ? renderPreviewMessage(preview) : `
-          <div class="scheduler-hint">
-            <strong>Rules aktif</strong>
-            <span>Senin tanpa Middle · Selasa–Minggu ada Middle · S2 minimal 1 pria · Jumat S1 wanita · Middle hanya Bar/Kitchen-Bar · Lembur tidak dibuat otomatis.</span>
-          </div>
-        `}
+        ${preview ? renderPreviewMessage(preview) : scheduleRuleValidationHtml(rulesValidation)}
       </article>
 
-      <article class="panel">
+      <article class="panel schedule-rules-panel">
         <div class="panel-head">
-          <div><span class="overline">CREW & ROTASI</span><h3>Aturan Crew</h3></div>
-          <button id="suggest-rotation" class="text-button" type="button">Sarankan rotasi berikutnya</button>
+          <div><span class="overline">ADMIN RULE ENGINE</span><h3>Crew & Rules Generator</h3><p class="muted small-copy">Crew nonaktif tidak ikut generate tetapi histori jadwal lama tetap tersimpan.</p></div>
+          <button id="suggest-rotation" class="text-button" type="button">Putar libur</button>
         </div>
-        <form id="rules-form" class="rules-form">
-          <label class="wide">Pria<input name="maleNames" value="${escapeHtml(rules.maleNames.join(", "))}" /></label>
-          <label class="wide">Wanita<input name="femaleNames" value="${escapeHtml(rules.femaleNames.join(", "))}" /></label>
-          <div class="offday-grid">
-            ${["Senin","Selasa","Rabu","Kamis","Jumat"].map(day => `
-              <label>${day}<input name="off_${day}" value="${escapeHtml((rules.offDays[day] || []).join(", "))}" placeholder="Nama crew libur" /></label>
-            `).join("")}
-          </div>
+
+        <div class="schedule-preset-row">
+          <span>Preset:</span>
+          ${Object.entries(SCHEDULE_PRESETS).map(([key, preset]) => `<button type="button" class="secondary compact schedule-preset-btn" data-schedule-preset="${key}">${escapeHtml(preset.label)}</button>`).join("")}
+        </div>
+
+        <form id="rules-form" class="rules-form flexible-rules-form">
+          <section class="rule-editor-section">
+            <div class="rule-editor-heading"><div><strong>Crew</strong><span>Aktif/nonaktif, nama, dan gender bisa diubah kapan saja.</span></div><button id="add-rule-crew" class="secondary compact" type="button">+ Crew</button></div>
+            <div id="schedule-crew-rule-list" class="schedule-crew-rule-list">
+              ${rules.crew.map((crew, index) => scheduleCrewRuleRowHtml(crew, index)).join("")}
+            </div>
+          </section>
+
+          <section class="rule-editor-section">
+            <div class="rule-editor-heading"><div><strong>Formasi & constraint per hari</strong><span>Jumlah shift harus sama dengan crew aktif dikurangi crew libur pada hari tersebut.</span></div></div>
+            <div class="schedule-rules-table-wrap">
+              <table class="schedule-rules-table">
+                <thead><tr><th>Hari</th><th>S1</th><th>Middle</th><th>S2</th><th>Min pria S2</th><th>Gender S1</th><th>Gender Middle</th><th>Crew libur</th></tr></thead>
+                <tbody>
+                  ${["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"].map(day => {
+                    const f = rules.formations[day];
+                    const c = rules.dayConstraints[day];
+                    return `<tr>
+                      <td><strong>${day}</strong></td>
+                      <td><input name="formation_${day}_S1" type="number" min="0" max="20" value="${f.S1}" /></td>
+                      <td><input name="formation_${day}_Middle" type="number" min="0" max="20" value="${f.Middle}" /></td>
+                      <td><input name="formation_${day}_S2" type="number" min="0" max="20" value="${f.S2}" /></td>
+                      <td><input name="constraint_${day}_minMaleS2" type="number" min="0" max="20" value="${c.minMaleS2}" /></td>
+                      <td><select name="constraint_${day}_s1Gender">${scheduleGenderRuleOptions(c.s1Gender)}</select></td>
+                      <td><select name="constraint_${day}_middleGender">${scheduleGenderRuleOptions(c.middleGender)}</select></td>
+                      <td><input name="off_${day}" value="${escapeHtml((rules.offDays[day] || []).join(", "))}" placeholder="Nama, Nama" /></td>
+                    </tr>`;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="rule-editor-section">
+            <div class="rule-editor-heading"><div><strong>Role per shift</strong><span>Pisahkan dengan koma. Generator membagi role seadil mungkin.</span></div></div>
+            <div class="edit-grid schedule-role-rules">
+              <label>Role S1<input name="roles_S1" value="${escapeHtml((rules.rolesByShift.S1 || []).join(", "))}" /></label>
+              <label>Role Middle<input name="roles_Middle" value="${escapeHtml((rules.rolesByShift.Middle || []).join(", "))}" /></label>
+              <label>Role S2<input name="roles_S2" value="${escapeHtml((rules.rolesByShift.S2 || []).join(", "))}" /></label>
+            </div>
+          </section>
+
           <div class="form-foot">
-            <span class="muted small-copy">Libur bisa digilir tiap periode. Generate tidak pernah menambahkan lembur otomatis.</span>
-            <button class="secondary">Simpan Rules</button>
+            <span class="muted small-copy">Rules boleh disimpan walau belum valid. Preview akan menolak generate sampai semua kebutuhan crew konsisten.</span>
+            <button class="primary">Simpan Rules</button>
           </div>
         </form>
       </article>
@@ -825,34 +935,43 @@ function renderSchedule(target) {
   if (!admin) return;
 
   const rulesForm = document.querySelector("#rules-form");
+  document.querySelector("#add-rule-crew")?.addEventListener("click", () => {
+    const list = document.querySelector("#schedule-crew-rule-list");
+    const nextIndex = Math.max(-1, ...[...list.querySelectorAll("[data-crew-rule-row]")].map(row => Number(row.dataset.crewRuleRow || 0))) + 1;
+    list.insertAdjacentHTML("beforeend", scheduleCrewRuleRowHtml({ name: "", gender: "Pria", active: true }, nextIndex));
+    list.querySelector(`[data-crew-rule-row="${nextIndex}"] input`)?.focus();
+  });
+
+  document.querySelectorAll("[data-schedule-preset]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      let current = rules;
+      try { if (rulesForm) current = readScheduleRulesForm(rulesForm, rules); } catch (_) {}
+      state.scheduleRules = applySchedulePreset(current, btn.dataset.schedulePreset);
+      state.schedulePreview = null;
+      renderShell();
+      showToast(`Preset “${SCHEDULE_PRESETS[btn.dataset.schedulePreset]?.label || "Rules"}” diterapkan. Cek libur lalu Simpan Rules.`, "info", "Preset diterapkan");
+    });
+  });
+
   if (rulesForm) rulesForm.onsubmit = async e => {
     e.preventDefault();
-    const fd = new FormData(rulesForm);
-    const nextRules = normalizeRules({
-      maleNames: cleanNames(fd.get("maleNames")),
-      femaleNames: cleanNames(fd.get("femaleNames")),
-      offDays: {
-        Senin: cleanNames(fd.get("off_Senin")),
-        Selasa: cleanNames(fd.get("off_Selasa")),
-        Rabu: cleanNames(fd.get("off_Rabu")),
-        Kamis: cleanNames(fd.get("off_Kamis")),
-        Jumat: cleanNames(fd.get("off_Jumat")),
-        Sabtu: [], Minggu: []
-      },
-      version: Number(rules.version || 1)
-    });
+    const nextRules = readScheduleRulesForm(rulesForm, rules);
+    const validation = validateRules(nextRules);
     try {
       await saveScheduleRules(nextRules);
       state.scheduleRules = nextRules;
       state.schedulePreview = null;
-      showToast("Rules jadwal berhasil disimpan.", "success", "Jadwal tersimpan");
+      showToast(validation.errors.length ? `Rules tersimpan, tetapi masih ada ${validation.errors.length} error. Preview akan ditahan sampai valid.` : "Rules jadwal berhasil disimpan.", validation.errors.length ? "warning" : "success", "Rules jadwal tersimpan");
+      renderShell();
     } catch (err) {
       showToast(err?.message || friendlyError(err), "error", "Rules jadwal gagal disimpan");
     }
   };
 
   document.querySelector("#suggest-rotation")?.addEventListener("click", () => {
-    state.scheduleRules = suggestNextOffRotation(rules);
+    let current = rules;
+    try { if (rulesForm) current = readScheduleRulesForm(rulesForm, rules); } catch (_) {}
+    state.scheduleRules = suggestNextOffRotation(current);
     state.schedulePreview = null;
     renderShell();
   });
@@ -861,7 +980,15 @@ function renderSchedule(target) {
     const [year, month] = (document.querySelector("#schedule-month")?.value || selected).split("-").map(Number);
     const carry = Boolean(document.querySelector("#carryover-toggle")?.checked);
     state.scheduleIncludeCarryover = carry;
-    const result = generateSchedule({ year, month, includeCarryover: carry, rules: state.scheduleRules });
+    let currentRules = state.scheduleRules;
+    try {
+      if (rulesForm) currentRules = readScheduleRulesForm(rulesForm, rules);
+      state.scheduleRules = currentRules;
+    } catch (err) {
+      showToast(err?.message || "Rules tidak bisa dibaca.", "error", "Preview gagal");
+      return;
+    }
+    const result = generateSchedule({ year, month, includeCarryover: carry, rules: currentRules });
     state.schedulePreview = { ...result, includeCarryover: carry };
     renderShell();
   });
@@ -874,9 +1001,10 @@ function renderSchedule(target) {
     saveBtn.disabled = true;
     saveBtn.textContent = "Menyimpan...";
     try {
+      await saveScheduleRules(state.scheduleRules);
       await replaceScheduleRange(p.range.start, p.range.end, p.entries);
       state.schedulePreview = null;
-      showToast("Jadwal otomatis berhasil disimpan. Klik sel untuk edit role/shift/lembur.", "success", "Jadwal tersimpan");
+      showToast("Jadwal otomatis berhasil disimpan. Rules yang dipakai ikut disimpan.", "success", "Jadwal tersimpan");
     } catch (err) {
       showToast(friendlyError(err), "error", "Jadwal gagal disimpan");
       saveBtn.disabled = false;
@@ -891,29 +1019,15 @@ function renderSchedule(target) {
   });
   document.querySelector("#sheet-ready-schedule")?.addEventListener("click", () => {
     try {
-      exportScheduleSheetReadyWorkbook({
-        entries: scheduleForGrid,
-        rules,
-        periodLabel: monthTitle(selected),
-        filename: `SoWork-Jadwal-SheetReady-${selected}.xlsx`
-      });
+      exportScheduleSheetReadyWorkbook({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected), filename: `SoWork-Jadwal-SheetReady-${selected}.xlsx` });
       showToast("File Sheet-ready dibuat. Di Google Sheets gunakan File → Import → Upload → Insert new sheet(s) agar merge tetap utuh.", "success", "Sheet-ready siap");
-    } catch (err) {
-      showToast(err?.message || "Export Sheet-ready gagal.", "error", "Export gagal");
-    }
+    } catch (err) { showToast(err?.message || "Export Sheet-ready gagal.", "error", "Export gagal"); }
   });
   document.querySelector("#export-schedule")?.addEventListener("click", () => {
     try {
-      exportScheduleWorkbook({
-        entries: scheduleForGrid,
-        rules,
-        periodLabel: monthTitle(selected),
-        filename: `SoWork-Jadwal-${selected}.xlsx`
-      });
+      exportScheduleWorkbook({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected), filename: `SoWork-Jadwal-${selected}.xlsx` });
       showToast("Export jadwal lengkap berhasil dibuat.", "success", "Export siap");
-    } catch (err) {
-      showToast(err?.message || "Export gagal.", "error", "Export gagal");
-    }
+    } catch (err) { showToast(err?.message || "Export gagal.", "error", "Export gagal"); }
   });
 
   document.querySelectorAll("[data-edit-schedule]").forEach(btn => {
@@ -923,7 +1037,6 @@ function renderSchedule(target) {
     };
   });
 }
-
 
 function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadwal", selectedMonth = "" }) {
   if (!entries.length) {
@@ -1071,10 +1184,14 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
 }
 
 function ruleSummaryCards(rules) {
+  const active = (rules.crew || []).filter(x => x.active !== false);
+  const needs = Object.values(rules.formations || {}).map(f => Number(f.S1 || 0) + Number(f.Middle || 0) + Number(f.S2 || 0));
+  const minNeed = needs.length ? Math.min(...needs) : 0;
+  const maxNeed = needs.length ? Math.max(...needs) : 0;
   return `
-    <div><span>Pria</span><strong>${escapeHtml(rules.maleNames.join(", "))}</strong></div>
-    <div><span>Wanita</span><strong>${escapeHtml(rules.femaleNames.join(", "))}</strong></div>
-    <div><span>Libur Jumat</span><strong>${escapeHtml((rules.offDays.Jumat || []).join(", ") || "-")}</strong></div>
+    <div><span>Crew aktif</span><strong>${active.length} / ${(rules.crew || []).length}</strong></div>
+    <div><span>Gender aktif</span><strong>${active.filter(x => x.gender === "Pria").length} pria · ${active.filter(x => x.gender === "Wanita").length} wanita</strong></div>
+    <div><span>Kebutuhan/hari</span><strong>${minNeed === maxNeed ? minNeed : `${minNeed}–${maxNeed}`} orang</strong></div>
   `;
 }
 
@@ -1162,7 +1279,8 @@ function renderOvertimeHistory(allSchedules) {
 
 function openScheduleEditor(item, rules, selectedMonth) {
   document.querySelector("#schedule-editor-modal")?.remove();
-  const crew = [...rules.maleNames, ...rules.femaleNames];
+  const activeCrew = (rules.crew || []).filter(x => x.active !== false).map(x => x.name);
+  const crew = item?.crewName && !activeCrew.includes(item.crewName) ? [...activeCrew, item.crewName] : activeCrew;
   const [year, month] = selectedMonth.split("-").map(Number);
   const fallbackDate = `${year}-${String(month).padStart(2, "0")}-01`;
   const current = item || {
@@ -1170,7 +1288,7 @@ function openScheduleEditor(item, rules, selectedMonth) {
     date: fallbackDate,
     crewName: crew[0] || "",
     shift: "S1",
-    role: "Kasir",
+    role: rules.rolesByShift?.S1?.[0] || "",
     notes: "",
     overtime: false,
     overtimeType: "Buka",
@@ -1198,7 +1316,7 @@ function openScheduleEditor(item, rules, selectedMonth) {
             <label>Catatan lembur<input id="overtime-note" name="overtimeNote" value="${escapeHtml(current.overtimeNote || "")}" placeholder="Kenapa lembur / menggantikan siapa" /></label>
           </div>
         </div>
-        <div id="middle-rule-note" class="inline-rule hidden">Middle tidak boleh Kasir. Role hanya Bar atau Kitchen - Bar.</div>
+        <div id="middle-rule-note" class="inline-rule hidden"></div>
         <div class="modal-actions">
           ${item?.id ? `<button type="button" id="delete-schedule" class="danger">Hapus Jadwal</button>` : `<span></span>`}
           <div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan</button></div>
@@ -1218,11 +1336,17 @@ function openScheduleEditor(item, rules, selectedMonth) {
 
   const refreshRoleOptions = () => {
     const shift = shiftSelect.value;
-    const options = shift === "Middle" ? ["Bar", "Kitchen - Bar"] : shift === "Libur" ? [""] : ["Kasir", "Bar", "Kitchen - Bar"];
-    const desired = current.role || options[0] || "";
+    const options = shift === "Libur" ? [""] : cleanNames(rules.rolesByShift?.[shift] || []);
+    if (shift !== "Libur" && current.role && !options.includes(current.role)) options.push(current.role);
+    const desired = options.includes(current.role) ? current.role : (options[0] || "");
     roleSelect.innerHTML = options.map(role => `<option value="${escapeHtml(role)}" ${role === desired ? "selected" : ""}>${escapeHtml(role || "Tidak ada role")}</option>`).join("");
     roleSelect.disabled = shift === "Libur";
-    middleNote.classList.toggle("hidden", shift !== "Middle");
+    if (shift === "Middle") {
+      middleNote.textContent = `Role Middle mengikuti Rules Admin: ${(rules.rolesByShift?.Middle || []).join(", ") || "belum diatur"}.`;
+      middleNote.classList.remove("hidden");
+    } else {
+      middleNote.classList.add("hidden");
+    }
     if (shift === "Libur") {
       overtimeCheck.checked = false;
       overtimeCheck.disabled = true;
@@ -1249,11 +1373,11 @@ function openScheduleEditor(item, rules, selectedMonth) {
     e.preventDefault();
     const fd = new FormData(form);
     const shift = fd.get("shift");
-    const role = shift === "Libur" ? "" : fd.get("role");
-    if (shift === "Middle" && role === "Kasir") return alert("Middle tidak boleh Kasir.");
+    const role = shift === "Libur" ? "" : String(fd.get("role") || "");
+    if (shift !== "Libur" && !role) return alert(`Role untuk ${shift} belum diatur di Rules Admin.`);
     if (overtimeCheck.checked && !String(fd.get("overtimeNote") || "").trim()) return alert("Catatan lembur wajib diisi.");
     const crewName = fd.get("crewName");
-    const gender = rules.maleNames.includes(crewName) ? "Pria" : "Wanita";
+    const gender = rules.crew?.find(x => x.name === crewName)?.gender || item?.gender || "";
     try {
       await saveSchedule({
         id: item?.id || undefined,
@@ -1287,12 +1411,12 @@ function openScheduleEditor(item, rules, selectedMonth) {
     }
   });
 }
-
 function renderFairnessSummary(summary) {
   const shiftScore = Number(summary.fairnessScore || 0);
   const roleScore = Number(summary.roleFairnessScore ?? 0);
   const totalScore = Number(summary.overallFairnessScore ?? Math.round((shiftScore + roleScore) / 2));
   const roleByName = Object.fromEntries((summary.roleRows || []).map(r => [r.name, r]));
+  const roleNames = cleanNames(summary.roleNames?.length ? summary.roleNames : (summary.roleRows || []).flatMap(row => Object.keys(row).filter(key => key !== "name")));
   return `
     <article class="panel fairness-panel">
       <div class="panel-head">
@@ -1305,20 +1429,19 @@ function renderFairnessSummary(summary) {
       </div>
       <div class="fairness-table-wrap">
         <table class="fairness-table">
-          <thead><tr><th>Crew</th><th>S1</th><th>Mid</th><th>S2</th><th>Libur</th><th>Kasir</th><th>Bar</th><th>Kitchen-Bar</th></tr></thead>
+          <thead><tr><th>Crew</th><th>S1</th><th>Mid</th><th>S2</th><th>Libur</th>${roleNames.map(role => `<th>${escapeHtml(role)}</th>`).join("")}</tr></thead>
           <tbody>
             ${summary.rows.map(r => {
               const role = roleByName[r.name] || {};
-              return `<tr><td><strong>${escapeHtml(r.name)}</strong></td><td>${r.S1}</td><td>${r.Middle}</td><td>${r.S2}</td><td>${r.Libur}</td><td>${role.Kasir || 0}</td><td>${role.Bar || 0}</td><td>${role["Kitchen - Bar"] || 0}</td></tr>`;
+              return `<tr><td><strong>${escapeHtml(r.name)}</strong></td><td>${r.S1}</td><td>${r.Middle}</td><td>${r.S2}</td><td>${r.Libur}</td>${roleNames.map(name => `<td>${Number(role[name] || 0)}</td>`).join("")}</tr>`;
             }).join("")}
           </tbody>
         </table>
       </div>
-      <p class="matrix-tip">Generator menekan pengulangan role pada orang yang sama. Middle tetap hanya Bar / Kitchen-Bar dan tidak pernah Kasir.</p>
+      <p class="matrix-tip">Generator menyeimbangkan shift dan role berdasarkan rules Admin. Crew nonaktif tidak ikut perhitungan periode baru.</p>
     </article>
   `;
 }
-
 function defaultScheduleMonth() {
   const now = new Date();
   if (now.getDate() > 25) now.setMonth(now.getMonth() + 1);
@@ -1361,7 +1484,7 @@ function renderChecklist(target) {
   const completionMap = Object.fromEntries(state.checklistCompletions.filter(x => x.date === selectedDate).map(x => [x.templateId, x]));
   const completedCount = assignments.filter(x => completionMap[x.id]?.completed).length;
   const pct = assignments.length ? Math.round((completedCount / assignments.length) * 100) : 0;
-  const crew = [...rules.maleNames, ...rules.femaleNames];
+  const crew = (rules.crew || []).filter(x => x.active !== false).map(x => x.name);
 
   const group = shift => assignments.filter(x => x.shift === shift);
   const sections = [
@@ -2486,72 +2609,168 @@ function openStockItemEditor(rawItem) {
 function openStockReceiptEditor() {
   if (!state.stockItems.length) return alert("Master barang masih kosong.");
   document.querySelector("#stock-receipt-modal")?.remove();
-  const activeItems = state.stockItems.filter(x => x.active !== false).sort((a,b) => a.name.localeCompare(b.name,"id"));
+  const activeItems = state.stockItems.filter(x => x.active !== false).sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""), "id"));
   const modal = document.createElement("div");
   modal.id = "stock-receipt-modal";
   modal.className = "modal-backdrop";
   modal.innerHTML = `
-    <section class="edit-modal" role="dialog" aria-modal="true">
-      <div class="modal-head"><div><span class="overline">BARANG MASUK</span><h3>Catat Kiriman Stock</h3></div><button type="button" class="modal-close">×</button></div>
+    <section class="edit-modal wide-modal stock-receipt-batch-modal" role="dialog" aria-modal="true">
+      <div class="modal-head"><div><span class="overline">BARANG MASUK BATCH</span><h3>Catat Semua Barang Datang</h3><p class="muted">Masukkan seluruh barang dalam satu kiriman. Setelah tersimpan, Telegram mengirim satu ringkasan untuk seluruh batch.</p></div><button type="button" class="modal-close">×</button></div>
       <form id="stock-receipt-form" class="edit-form">
-        <label>Barang<select name="itemId">${activeItems.map(x => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name)}</option>`).join("")}</select></label>
-        <div id="receipt-conversion" class="conversion-card"></div>
-        <div class="edit-grid">
+        <div class="edit-grid receipt-common-grid">
           <label>Tanggal diterima<input name="date" type="date" value="${localDateKey(new Date())}" required /></label>
-          <label>Jumlah Karton<input name="cartons" type="number" min="0" step="1" value="0" /></label>
-          <label>Jumlah Lepas<input name="looseQty" type="number" min="0" step="0.01" value="0" /></label>
           <label>Masuk ke<select name="destination"><option>Gudang Utama</option><option>Gudang 2</option><option>Kitchen</option><option>Bar</option><option>Gudang Istirahat</option></select></label>
           <label>Supplier / Pengirim<input name="supplier" placeholder="Opsional" /></label>
+          <label>Catatan<input name="note" placeholder="No. surat jalan / catatan kiriman..." /></label>
         </div>
-        <label>Catatan<input name="note" placeholder="No. surat jalan / catatan kiriman..." /></label>
-        <div class="modal-actions"><span></span><div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan Barang Masuk</button></div></div>
+
+        <div class="receipt-batch-head"><div><strong>Daftar barang</strong><span>Setiap barang hanya boleh satu kali dalam batch.</span></div><button id="add-receipt-row" type="button" class="secondary compact">+ Tambah Barang</button></div>
+        <div id="receipt-batch-rows" class="receipt-batch-rows"></div>
+        <div id="receipt-batch-summary" class="receipt-batch-summary">Belum ada jumlah barang.</div>
+
+        <div class="modal-actions"><span class="muted small-copy">Stok tetap tersimpan walau Telegram sedang offline.</span><div><button type="button" class="secondary modal-cancel">Batal</button><button id="save-stock-receipt-batch" class="primary">Simpan Semua</button></div></div>
       </form>
     </section>`;
   document.body.appendChild(modal);
+
   const form = modal.querySelector("#stock-receipt-form");
+  const rowsBox = modal.querySelector("#receipt-batch-rows");
+  const summaryBox = modal.querySelector("#receipt-batch-summary");
+  let rowCounter = 0;
+
+  const itemOptions = selectedId => activeItems.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === selectedId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
+
+  const addRow = (selectedId = "") => {
+    const index = rowCounter++;
+    const defaultId = selectedId || activeItems[index % activeItems.length]?.id || activeItems[0]?.id || "";
+    rowsBox.insertAdjacentHTML("beforeend", `
+      <div class="receipt-batch-row" data-receipt-row="${index}">
+        <label class="receipt-item-select">Barang<select name="receipt_item_${index}">${itemOptions(defaultId)}</select></label>
+        <label>Karton<input name="receipt_cartons_${index}" type="number" min="0" step="1" value="0" /></label>
+        <label>Jumlah lepas<input name="receipt_loose_${index}" type="number" min="0" step="0.01" value="0" /></label>
+        <div class="receipt-row-total" data-receipt-total>0</div>
+        <button type="button" class="danger compact receipt-remove-row" title="Hapus baris">×</button>
+      </div>`);
+    refreshReceiptRows();
+  };
+
+  const refreshReceiptRows = () => {
+    let filled = 0;
+    let totalQty = 0;
+    [...rowsBox.querySelectorAll("[data-receipt-row]")].forEach(row => {
+      const index = row.dataset.receiptRow;
+      const itemId = row.querySelector(`[name="receipt_item_${index}"]`)?.value;
+      const item = activeItems.find(x => x.id === itemId);
+      const cartonsInput = row.querySelector(`[name="receipt_cartons_${index}"]`);
+      const looseInput = row.querySelector(`[name="receipt_loose_${index}"]`);
+      const cartons = Number(cartonsInput?.value || 0);
+      const loose = Number(looseInput?.value || 0);
+      const size = Number(item?.cartonSize || 0);
+      if (cartonsInput) cartonsInput.disabled = !(size > 0);
+      const qty = qtyFromCartonInput(cartons, loose, size);
+      const total = row.querySelector("[data-receipt-total]");
+      if (total) total.innerHTML = item ? `<strong>${formatQty(qty)} ${escapeHtml(item.unit || "PCS")}</strong><small>${size > 0 ? `1 karton = ${formatQty(size)} ${escapeHtml(item.unit || "PCS")}` : "Tanpa konversi karton"}</small>` : "-";
+      if (qty > 0) { filled += 1; totalQty += qty; }
+    });
+    summaryBox.innerHTML = `<strong>${filled} barang siap disimpan</strong><span>Total kuantitas lintas unit: ${formatQty(totalQty)} · Telegram akan dikirim sebagai 1 pesan ringkasan.</span>`;
+  };
+
   const close = () => modal.remove();
   modal.querySelector(".modal-close").onclick = close;
   modal.querySelector(".modal-cancel").onclick = close;
   modal.onclick = e => { if (e.target === modal) close(); };
+  modal.querySelector("#add-receipt-row").onclick = () => addRow();
+  rowsBox.addEventListener("input", refreshReceiptRows);
+  rowsBox.addEventListener("change", refreshReceiptRows);
+  rowsBox.addEventListener("click", e => {
+    const remove = e.target.closest(".receipt-remove-row");
+    if (!remove) return;
+    const row = remove.closest("[data-receipt-row]");
+    if (rowsBox.querySelectorAll("[data-receipt-row]").length <= 1) {
+      row.querySelectorAll('input[type="number"]').forEach(input => input.value = "0");
+      refreshReceiptRows();
+      return;
+    }
+    row.remove();
+    refreshReceiptRows();
+  });
 
-  const refreshConversion = () => {
-    const item = state.stockItems.find(x => x.id === form.elements.itemId.value);
-    if (!item) return;
-    const size = Number(item.cartonSize || 0);
-    const cartons = Number(form.elements.cartons.value || 0);
-    const loose = Number(form.elements.looseQty.value || 0);
-    const total = qtyFromCartonInput(cartons, loose, size);
-    form.elements.cartons.disabled = !(size > 0);
-    const box = modal.querySelector("#receipt-conversion");
-    box.innerHTML = size > 0
-      ? `<strong>1 karton = ${formatQty(size)} ${escapeHtml(item.unit)}</strong><span>${formatQty(cartons)} karton + ${formatQty(loose)} ${escapeHtml(item.unit)} = <b>${formatQty(total)} ${escapeHtml(item.unit)}</b></span>`
-      : `<strong>${escapeHtml(item.name)}</strong><span>Barang ini belum punya konversi karton. Isi jumlah pada “Jumlah Lepas”.</span>`;
-  };
-  form.elements.itemId.addEventListener("change", refreshConversion);
-  form.elements.cartons.addEventListener("input", refreshConversion);
-  form.elements.looseQty.addEventListener("input", refreshConversion);
-  refreshConversion();
+  addRow(activeItems[0]?.id || "");
 
   form.onsubmit = async e => {
     e.preventDefault();
     const fd = new FormData(form);
-    const item = state.stockItems.find(x => x.id === fd.get("itemId"));
-    if (!item) return;
-    const totalQty = qtyFromCartonInput(fd.get("cartons"), fd.get("looseQty"), item.cartonSize);
-    if (!(totalQty > 0)) return alert("Jumlah barang masuk harus lebih dari 0.");
-    try {
-      await saveStockReceipt({
-        itemId: item.id, itemName: item.name, unit: item.unit, cartonSize: item.cartonSize,
-        date: fd.get("date"), cartons: fd.get("cartons"), looseQty: fd.get("looseQty"), destination: fd.get("destination"),
-        supplier: fd.get("supplier"), note: fd.get("note"),
-        createdByUid: state.user?.uid, createdByName: state.profile?.name || state.user?.email
+    const selectedRows = [];
+    const usedIds = new Set();
+
+    for (const row of rowsBox.querySelectorAll("[data-receipt-row]")) {
+      const index = row.dataset.receiptRow;
+      const itemId = String(fd.get(`receipt_item_${index}`) || "");
+      const item = activeItems.find(x => x.id === itemId);
+      if (!item) continue;
+      const cartons = Number(fd.get(`receipt_cartons_${index}`) || 0);
+      const looseQty = Number(fd.get(`receipt_loose_${index}`) || 0);
+      const qty = qtyFromCartonInput(cartons, looseQty, item.cartonSize);
+      if (!(qty > 0)) continue;
+      if (usedIds.has(item.id)) return showToast(`${item.name} dipilih lebih dari sekali. Gabungkan jumlahnya dalam satu baris.`, "warning", "Barang duplikat");
+      usedIds.add(item.id);
+      selectedRows.push({
+        itemId: item.id,
+        itemName: item.name,
+        unit: item.unit,
+        cartonSize: item.cartonSize,
+        cartons,
+        looseQty,
+        qty,
+        lastOpnameDate: item.lastOpnameDate || ""
       });
-      showToast(`${item.name} berhasil dicatat sebagai barang masuk.`, "success", "Barang masuk tersimpan");
+    }
+
+    if (!selectedRows.length) return showToast("Isi jumlah minimal satu barang.", "warning", "Barang masuk masih kosong");
+
+    const submit = modal.querySelector("#save-stock-receipt-batch");
+    const oldLabel = submit.textContent;
+    submit.disabled = true;
+    submit.textContent = `Menyimpan ${selectedRows.length} barang...`;
+
+    try {
+      const result = await saveStockReceiptBatch({
+        date: fd.get("date"),
+        destination: fd.get("destination"),
+        supplier: fd.get("supplier"),
+        note: fd.get("note"),
+        rows: selectedRows,
+        actor: { uid: state.user?.uid, name: state.profile?.name || state.user?.email || "Admin" }
+      });
+
+      showToast(`${result.itemCount} barang berhasil dicatat dalam satu kiriman.`, "success", "Barang masuk tersimpan");
+      scheduleCloudflareSync(0);
+
+      const workerUrl = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
+      if (state.stockSettings?.telegramEnabled === true && state.stockSettings?.telegramNotifyStockReceipt !== false && workerUrl) {
+        try {
+          const delivery = await sendTelegramStockReceiptBatch(workerUrl, {
+            batchId: result.batchId,
+            date: result.date,
+            destination: result.destination,
+            supplier: result.supplier,
+            note: result.note,
+            rows: result.rows,
+            createdByName: state.profile?.name || state.user?.email || "Admin"
+          });
+          if (!delivery?.skipped) showToast(`Ringkasan barang masuk dikirim ke ${Number(delivery?.sent || 0)} penerima Telegram.`, "success", "Telegram terkirim");
+        } catch (telegramError) {
+          showToast(`Stock sudah tersimpan, tapi Telegram gagal: ${telegramError?.message || telegramError}`, "warning", "Telegram belum terkirim");
+        }
+      }
       close();
-    } catch (err) { showToast(err?.message || friendlyError(err), "error", "Barang masuk gagal disimpan"); }
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Barang masuk gagal disimpan");
+      submit.disabled = false;
+      submit.textContent = oldLabel;
+    }
   };
 }
-
 function openDailyStockUsageEditor(initialDate) {
   const date = initialDate || state.stockUsageDate || localDateKey(new Date());
   state.stockUsageDate = date;
@@ -2701,6 +2920,7 @@ function openStockSettingsEditor() {
           <label class="check-line simple"><input name="telegramNotifyWasteRiskDay" type="checkbox" ${s.telegramNotifyWasteRiskDay !== false ? "checked" : ""}/><span>Reminder hari rawan Waste (06:30 WIB)</span></label>
           <label class="check-line simple"><input name="telegramNotifyDailyCheck" type="checkbox" ${s.telegramNotifyDailyCheck !== false ? "checked" : ""}/><span>Ingatkan Daily Check yang belum selesai</span></label>
           <label class="check-line simple"><input name="telegramNotifyOpsReminder" type="checkbox" ${s.telegramNotifyOpsReminder !== false ? "checked" : ""}/><span>Ingatkan cek Stock + Waste malam</span></label>
+          <label class="check-line simple"><input name="telegramNotifyStockReceipt" type="checkbox" ${s.telegramNotifyStockReceipt !== false ? "checked" : ""}/><span>Notif ringkasan Barang Masuk</span></label>
         </div>
         <label class="telegram-time-setting">Jam reminder operasional
           <select name="telegramOpsReminderHour">
@@ -2801,6 +3021,7 @@ function openStockSettingsEditor() {
       telegramNotifyWasteRiskDay: Boolean(form.elements.namedItem("telegramNotifyWasteRiskDay")?.checked),
       telegramNotifyDailyCheck: Boolean(form.elements.namedItem("telegramNotifyDailyCheck")?.checked),
       telegramNotifyOpsReminder: Boolean(form.elements.namedItem("telegramNotifyOpsReminder")?.checked),
+      telegramNotifyStockReceipt: Boolean(form.elements.namedItem("telegramNotifyStockReceipt")?.checked),
       telegramOpsReminderHour: [18, 20].includes(Number(fd.get("telegramOpsReminderHour"))) ? Number(fd.get("telegramOpsReminderHour")) : 20,
       defaultLeadTimeDays: Number(fd.get("defaultLeadTimeDays") || 2),
       defaultTargetCoverageDays: Number(fd.get("defaultTargetCoverageDays") || 7)

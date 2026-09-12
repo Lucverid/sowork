@@ -32,6 +32,9 @@ export default {
         if (url.pathname === "/api/test" && request.method === "POST") {
           return cors(await apiTest(env));
         }
+        if (url.pathname === "/api/stock-receipt-batch" && request.method === "POST") {
+          return cors(await apiStockReceiptBatch(request, env));
+        }
         if (url.pathname === "/api/unpair" && request.method === "POST") {
           const removed = await clearTelegramConnections(env);
           return cors(json({ ok: true, removed }));
@@ -122,6 +125,70 @@ async function apiTest(env) {
   );
   if (!delivery.sent) return json({ ok: false, error: "Pesan test gagal dikirim ke semua penerima Telegram.", delivery }, 502);
   return json({ ok: true, ...delivery });
+}
+
+
+async function apiStockReceiptBatch(request, env) {
+  const payload = await request.json().catch(() => null);
+  if (!payload || typeof payload !== "object") return json({ ok: false, error: "Payload barang masuk tidak valid." }, 400);
+
+  const snapshot = await getSnapshot(env);
+  const settings = snapshot?.settings || {};
+  if (settings.telegramEnabled !== true) {
+    return json({ ok: true, skipped: true, reason: "Telegram nonaktif." });
+  }
+  if (settings.telegramNotifyStockReceipt === false) {
+    return json({ ok: true, skipped: true, reason: "Notif Barang Masuk dimatikan." });
+  }
+
+  const rows = Array.isArray(payload.rows) ? payload.rows.filter(row => row && row.itemName) : [];
+  if (!rows.length) return json({ ok: false, error: "Daftar barang masuk kosong." }, 400);
+
+  const batchId = safeKey(String(payload.batchId || `stock_receipt_${payload.date || new Date().toISOString()}`));
+  const text = buildStockReceiptBatchMessage({ ...payload, rows });
+  const sent = await sendAlertOnce(env, `receipt_${batchId}`, "stock-receipt", text, settings);
+  if (!sent) {
+    const exists = await env.DB.prepare("SELECT event_key FROM notification_events WHERE event_key = ?")
+      .bind(safeKey(`receipt_${batchId}`)).first();
+    if (exists) return json({ ok: true, duplicate: true, sent: 0 });
+    return json({ ok: false, error: "Telegram belum dipair atau pesan gagal dikirim." }, 409);
+  }
+
+  const connections = await getConnections(env);
+  return json({ ok: true, sent: connections.length, batchId });
+}
+
+function buildStockReceiptBatchMessage(payload) {
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const date = String(payload.date || "");
+  const supplier = String(payload.supplier || "").trim();
+  const destination = String(payload.destination || "").trim();
+  const actor = String(payload.createdByName || payload.actorName || "Admin").trim();
+  const note = String(payload.note || "").trim();
+  const lines = [
+    "📦 BARANG MASUK SOWORK",
+    "",
+    `${rows.length} jenis barang diterima${date ? ` · ${dateShort(date)}` : ""}`,
+    ""
+  ];
+
+  rows.slice(0, 40).forEach(row => {
+    const qty = fmt(Number(row.qty || 0));
+    const unit = String(row.unit || "unit");
+    const carton = Number(row.cartons || 0);
+    const loose = Number(row.looseQty || 0);
+    let detail = `${qty} ${unit}`;
+    if (carton > 0) detail += ` (${fmt(carton)} karton${loose > 0 ? ` + ${fmt(loose)} ${unit}` : ""})`;
+    lines.push(`• ${String(row.itemName || "Barang")}: ${detail}`);
+  });
+  if (rows.length > 40) lines.push(`• +${rows.length - 40} item lainnya`);
+
+  lines.push("");
+  if (supplier) lines.push(`Supplier: ${supplier}`);
+  if (destination) lines.push(`Tujuan: ${destination}`);
+  if (actor) lines.push(`Diinput oleh: ${actor}`);
+  if (note) lines.push(`Catatan: ${note}`);
+  return lines.join("\n");
 }
 
 async function telegramWebhook(request, env) {
@@ -368,6 +435,7 @@ function cleanSettings(s) {
     telegramNotifyWasteRiskDay: s.telegramNotifyWasteRiskDay !== false,
     telegramNotifyDailyCheck: s.telegramNotifyDailyCheck !== false,
     telegramNotifyOpsReminder: s.telegramNotifyOpsReminder !== false,
+    telegramNotifyStockReceipt: s.telegramNotifyStockReceipt !== false,
     telegramOpsReminderHour: [18, 20].includes(Number(s.telegramOpsReminderHour)) ? Number(s.telegramOpsReminderHour) : 20,
     defaultLeadTimeDays: Math.max(0, Number(s.defaultLeadTimeDays || 2)),
     defaultTargetCoverageDays: Math.max(1, Number(s.defaultTargetCoverageDays || 7))

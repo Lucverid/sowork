@@ -1,21 +1,6 @@
-export const DEFAULT_SCHEDULE_RULES = {
-  maleNames: ["Agis", "Ruhimat", "Tegar"],
-  femaleNames: ["Nabila", "Mirya", "Cahya"],
-  offDays: {
-    Senin: ["Tegar", "Nabila"],
-    Selasa: ["Ruhimat"],
-    Rabu: ["Mirya"],
-    Kamis: ["Cahya"],
-    Jumat: ["Agis"],
-    Sabtu: [],
-    Minggu: []
-  },
-  version: 1
-};
+export const DAY_NAMES = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 
-const DAY_NAMES = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-
-const FORMATIONS = {
+const DEFAULT_FORMATIONS = {
   Senin: { S1: 2, Middle: 0, S2: 2 },
   Selasa: { S1: 2, Middle: 1, S2: 2 },
   Rabu: { S1: 2, Middle: 1, S2: 2 },
@@ -25,29 +10,185 @@ const FORMATIONS = {
   Minggu: { S1: 2, Middle: 1, S2: 3 }
 };
 
+const DEFAULT_DAY_CONSTRAINTS = {
+  Senin: { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" },
+  Selasa: { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" },
+  Rabu: { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" },
+  Kamis: { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" },
+  Jumat: { minMaleS2: 1, s1Gender: "Wanita", middleGender: "Wanita" },
+  Sabtu: { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" },
+  Minggu: { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" }
+};
+
+export const DEFAULT_SCHEDULE_RULES = {
+  crew: [
+    { name: "Agis", gender: "Pria", active: true },
+    { name: "Ruhimat", gender: "Pria", active: true },
+    { name: "Tegar", gender: "Pria", active: true },
+    { name: "Nabila", gender: "Wanita", active: true },
+    { name: "Mirya", gender: "Wanita", active: true },
+    { name: "Cahya", gender: "Wanita", active: true }
+  ],
+  offDays: {
+    Senin: ["Tegar", "Nabila"],
+    Selasa: ["Ruhimat"],
+    Rabu: ["Mirya"],
+    Kamis: ["Cahya"],
+    Jumat: ["Agis"],
+    Sabtu: [],
+    Minggu: []
+  },
+  formations: DEFAULT_FORMATIONS,
+  dayConstraints: DEFAULT_DAY_CONSTRAINTS,
+  rolesByShift: {
+    S1: ["Kasir", "Bar", "Kitchen - Bar"],
+    Middle: ["Bar", "Kitchen - Bar"],
+    S2: ["Kasir", "Bar", "Kitchen - Bar"]
+  },
+  version: 2
+};
+
+export const SCHEDULE_PRESETS = {
+  normal6: {
+    label: "Normal 6 Crew",
+    formations: DEFAULT_FORMATIONS,
+    dayConstraints: DEFAULT_DAY_CONSTRAINTS
+  },
+  crew5: {
+    label: "5 Crew",
+    formations: {
+      Senin: { S1: 2, Middle: 0, S2: 2 },
+      Selasa: { S1: 2, Middle: 0, S2: 2 },
+      Rabu: { S1: 2, Middle: 0, S2: 2 },
+      Kamis: { S1: 2, Middle: 0, S2: 2 },
+      Jumat: { S1: 2, Middle: 0, S2: 2 },
+      Sabtu: { S1: 2, Middle: 1, S2: 2 },
+      Minggu: { S1: 2, Middle: 1, S2: 2 }
+    },
+    dayConstraints: Object.fromEntries(DAY_NAMES.map(day => [day, { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" }]))
+  },
+  crew4: {
+    label: "Minimal 4 Crew",
+    formations: Object.fromEntries(DAY_NAMES.map(day => [day, { S1: 2, Middle: 0, S2: 2 }])),
+    dayConstraints: Object.fromEntries(DAY_NAMES.map(day => [day, { minMaleS2: 1, s1Gender: "Any", middleGender: "Any" }]))
+  },
+  busyWeekend: {
+    label: "Ramai Weekend",
+    formations: {
+      ...DEFAULT_FORMATIONS,
+      Sabtu: { S1: 2, Middle: 1, S2: 3 },
+      Minggu: { S1: 2, Middle: 1, S2: 3 }
+    },
+    dayConstraints: DEFAULT_DAY_CONSTRAINTS
+  }
+};
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-export function normalizeRules(input = {}) {
-  const base = clone(DEFAULT_SCHEDULE_RULES);
-  const maleNames = Array.isArray(input.maleNames) ? input.maleNames : base.maleNames;
-  const femaleNames = Array.isArray(input.femaleNames) ? input.femaleNames : base.femaleNames;
-  const offDays = { ...base.offDays, ...(input.offDays || {}) };
-  for (const day of DAY_NAMES) {
-    if (!Array.isArray(offDays[day])) offDays[day] = [];
-  }
-  return {
-    maleNames: cleanNames(maleNames),
-    femaleNames: cleanNames(femaleNames),
-    offDays,
-    version: Number(input.version || 1)
-  };
+function normalizeGender(value) {
+  return String(value || "").toLowerCase() === "wanita" ? "Wanita" : "Pria";
+}
+
+function normalizeGenderConstraint(value) {
+  const raw = String(value || "Any");
+  return raw === "Pria" || raw === "Wanita" ? raw : "Any";
+}
+
+function int0(value) {
+  return Math.max(0, Math.floor(Number(value || 0)));
 }
 
 export function cleanNames(value) {
   const arr = Array.isArray(value) ? value : String(value || "").split(",");
   return [...new Set(arr.map(x => String(x).trim()).filter(Boolean))];
+}
+
+export function normalizeRules(input = {}) {
+  const base = clone(DEFAULT_SCHEDULE_RULES);
+
+  let crewInput = Array.isArray(input.crew) ? input.crew : null;
+  if (!crewInput) {
+    const maleNames = Array.isArray(input.maleNames) ? input.maleNames : base.crew.filter(x => x.gender === "Pria").map(x => x.name);
+    const femaleNames = Array.isArray(input.femaleNames) ? input.femaleNames : base.crew.filter(x => x.gender === "Wanita").map(x => x.name);
+    crewInput = [
+      ...cleanNames(maleNames).map(name => ({ name, gender: "Pria", active: true })),
+      ...cleanNames(femaleNames).map(name => ({ name, gender: "Wanita", active: true }))
+    ];
+  }
+
+  const crew = [];
+  for (const row of crewInput) {
+    const name = String(row?.name || "").trim();
+    if (!name) continue;
+    crew.push({
+      name,
+      gender: normalizeGender(row?.gender),
+      active: row?.active !== false
+    });
+  }
+
+  const offDays = {};
+  for (const day of DAY_NAMES) {
+    offDays[day] = cleanNames(input?.offDays?.[day] ?? base.offDays[day] ?? []);
+  }
+
+  const formations = {};
+  for (const day of DAY_NAMES) {
+    const src = input?.formations?.[day] || base.formations[day] || {};
+    formations[day] = {
+      S1: int0(src.S1),
+      Middle: int0(src.Middle),
+      S2: int0(src.S2)
+    };
+  }
+
+  const dayConstraints = {};
+  for (const day of DAY_NAMES) {
+    const src = input?.dayConstraints?.[day] || base.dayConstraints[day] || {};
+    dayConstraints[day] = {
+      minMaleS2: int0(src.minMaleS2),
+      s1Gender: normalizeGenderConstraint(src.s1Gender),
+      middleGender: normalizeGenderConstraint(src.middleGender)
+    };
+  }
+
+  const rolesByShift = {};
+  for (const shift of ["S1", "Middle", "S2"]) {
+    const fallback = base.rolesByShift[shift] || [];
+    rolesByShift[shift] = cleanNames(input?.rolesByShift?.[shift] ?? fallback);
+  }
+
+  const activeCrew = crew.filter(x => x.active !== false);
+  // maleNames/femaleNames menyimpan seluruh master crew agar export histori lama
+  // tetap membaca gender dengan benar walau crew sudah dinonaktifkan.
+  const maleNames = crew.filter(x => x.gender === "Pria").map(x => x.name);
+  const femaleNames = crew.filter(x => x.gender === "Wanita").map(x => x.name);
+
+  return {
+    crew,
+    maleNames,
+    femaleNames,
+    activeNames: activeCrew.map(x => x.name),
+    offDays,
+    formations,
+    dayConstraints,
+    rolesByShift,
+    version: Math.max(2, Number(input.version || 2))
+  };
+}
+
+export function applySchedulePreset(rulesInput, presetId) {
+  const rules = normalizeRules(rulesInput);
+  const preset = SCHEDULE_PRESETS[presetId];
+  if (!preset) return rules;
+  return normalizeRules({
+    ...rules,
+    formations: clone(preset.formations),
+    dayConstraints: clone(preset.dayConstraints),
+    version: Number(rules.version || 2) + 1
+  });
 }
 
 export function periodForMonth(year, month, includeCarryover = false) {
@@ -64,33 +205,61 @@ export function validateRules(rulesInput) {
   const rules = normalizeRules(rulesInput);
   const errors = [];
   const warnings = [];
-  const all = [...rules.maleNames, ...rules.femaleNames];
-  const duplicates = all.filter((name, i) => all.indexOf(name) !== i);
+  const allNames = rules.crew.map(x => x.name);
+  const activeCrew = rules.crew.filter(x => x.active !== false);
+  const activeNames = activeCrew.map(x => x.name);
 
+  const duplicates = allNames.filter((name, i) => allNames.indexOf(name) !== i);
   if (duplicates.length) errors.push(`Nama crew duplikat: ${[...new Set(duplicates)].join(", ")}.`);
-  if (all.length !== 6) warnings.push(`Formasi sekarang dirancang untuk 6 crew; saat ini ada ${all.length}.`);
-  if (!rules.maleNames.length) errors.push("Minimal harus ada 1 crew pria untuk aturan S2.");
+  if (!activeCrew.length) errors.push("Minimal harus ada 1 crew aktif.");
 
-  const expectedOff = { Senin: 2, Selasa: 1, Rabu: 1, Kamis: 1, Jumat: 1, Sabtu: 0, Minggu: 0 };
-  for (const [day, expected] of Object.entries(expectedOff)) {
-    const actual = rules.offDays[day]?.length || 0;
-    if (actual !== expected) errors.push(`${day}: perlu ${expected} crew libur agar formasi pas, sekarang ${actual}.`);
-    for (const name of rules.offDays[day] || []) {
-      if (!all.includes(name)) errors.push(`${day}: crew libur “${name}” tidak ada di daftar crew.`);
+  for (const day of DAY_NAMES) {
+    const formation = rules.formations[day];
+    const constraint = rules.dayConstraints[day];
+    const off = rules.offDays[day] || [];
+    const unknown = off.filter(name => !allNames.includes(name));
+    if (unknown.length) errors.push(`${day}: crew libur tidak ditemukan: ${unknown.join(", ")}.`);
+    const inactiveOff = off.filter(name => allNames.includes(name) && !activeNames.includes(name));
+    if (inactiveOff.length) warnings.push(`${day}: ${inactiveOff.join(", ")} sudah nonaktif, jadi tidak perlu dimasukkan ke libur.`);
+
+    const activeOff = [...new Set(off.filter(name => activeNames.includes(name)))];
+    const available = activeCrew.filter(x => !activeOff.includes(x.name));
+    const required = formation.S1 + formation.Middle + formation.S2;
+
+    if (required !== available.length) {
+      errors.push(`${day}: formasi butuh ${required} orang, tetapi crew tersedia ${available.length} (${activeCrew.length} aktif - ${activeOff.length} libur).`);
+    }
+    if (constraint.minMaleS2 > formation.S2) {
+      errors.push(`${day}: minimum pria S2 (${constraint.minMaleS2}) melebihi jumlah S2 (${formation.S2}).`);
+    }
+
+    const availableMale = available.filter(x => x.gender === "Pria").length;
+    const availableFemale = available.filter(x => x.gender === "Wanita").length;
+    const maleRequired = constraint.minMaleS2
+      + (constraint.s1Gender === "Pria" ? formation.S1 : 0)
+      + (constraint.middleGender === "Pria" ? formation.Middle : 0);
+    const femaleRequired = (constraint.s1Gender === "Wanita" ? formation.S1 : 0)
+      + (constraint.middleGender === "Wanita" ? formation.Middle : 0);
+
+    if (availableMale < maleRequired) errors.push(`${day}: butuh minimal ${maleRequired} pria berdasarkan rules, tersedia ${availableMale}.`);
+    if (availableFemale < femaleRequired) errors.push(`${day}: butuh minimal ${femaleRequired} wanita berdasarkan rules, tersedia ${availableFemale}.`);
+
+    for (const shift of ["S1", "Middle", "S2"]) {
+      if (formation[shift] > 0 && !rules.rolesByShift[shift]?.length) {
+        errors.push(`${day}: role untuk ${shift} kosong.`);
+      }
     }
   }
 
-  const fridayOff = rules.offDays.Jumat || [];
-  if (fridayOff.some(name => rules.femaleNames.includes(name))) {
-    errors.push("Jumat: crew yang libur harus pria supaya 2 S1 + 1 Middle bisa diisi wanita dan pria yang masuk tetap S2.");
+  const offCountByCrew = Object.fromEntries(activeNames.map(n => [n, 0]));
+  for (const day of DAY_NAMES) {
+    for (const name of rules.offDays[day] || []) {
+      if (name in offCountByCrew) offCountByCrew[name] += 1;
+    }
   }
-
-  const offCountByCrew = Object.fromEntries(all.map(n => [n, 0]));
-  Object.values(rules.offDays).flat().forEach(name => {
-    if (name in offCountByCrew) offCountByCrew[name]++;
-  });
-  const notExactlyOne = Object.entries(offCountByCrew).filter(([, count]) => count !== 1);
-  if (notExactlyOne.length) warnings.push(`Rotasi libur idealnya 1 hari/crew per minggu: ${notExactlyOne.map(([n,c]) => `${n}=${c}`).join(", ")}.`);
+  const uneven = Object.entries(offCountByCrew).filter(([, count]) => count !== 1);
+  if (uneven.length) warnings.push(`Rotasi libur belum 1x/crew per minggu: ${uneven.map(([n,c]) => `${n}=${c}`).join(", ")}.`);
+  if (activeCrew.length < 4) warnings.push("Crew aktif di bawah 4. Pastikan formasi harian benar-benar realistis.");
 
   return { rules, errors, warnings };
 }
@@ -100,13 +269,11 @@ export function generateSchedule({ year, month, includeCarryover = false, rules:
   if (errors.length) return { entries: [], errors, warnings, summary: null, range: null };
 
   const { start, end } = periodForMonth(year, month, includeCarryover);
-  const people = [
-    ...rules.maleNames.map(name => ({ name, gender: "Pria" })),
-    ...rules.femaleNames.map(name => ({ name, gender: "Wanita" }))
-  ];
+  const people = rules.crew.filter(x => x.active !== false).map(x => ({ name: x.name, gender: x.gender }));
   const genderByName = Object.fromEntries(people.map(p => [p.name, p.gender]));
   const counts = Object.fromEntries(people.map(p => [p.name, { S1: 0, Middle: 0, S2: 0, Libur: 0, total: 0 }]));
-  const roleCounts = Object.fromEntries(people.map(p => [p.name, { Kasir: 0, Bar: 0, "Kitchen - Bar": 0 }]));
+  const roleNames = cleanNames(Object.values(rules.rolesByShift).flat());
+  const roleCounts = Object.fromEntries(people.map(p => [p.name, Object.fromEntries(roleNames.map(role => [role, 0]))]));
   const lastShift = Object.fromEntries(people.map(p => [p.name, null]));
   const lastRole = Object.fromEntries(people.map(p => [p.name, null]));
   const entries = [];
@@ -115,87 +282,47 @@ export function generateSchedule({ year, month, includeCarryover = false, rules:
     const date = new Date(cursor);
     const dateKey = localDateKey(date);
     const day = DAY_NAMES[date.getDay()];
-    const formation = FORMATIONS[day];
-    const offNames = new Set(rules.offDays[day] || []);
-    const available = people.map(p => p.name).filter(name => !offNames.has(name));
+    const formation = rules.formations[day];
+    const constraint = rules.dayConstraints[day];
+    const offNames = new Set((rules.offDays[day] || []).filter(name => counts[name]));
+    const available = people.filter(p => !offNames.has(p.name));
     const assigned = new Map();
 
     for (const name of offNames) {
       assigned.set(name, "Libur");
-      if (counts[name]) counts[name].Libur++;
+      counts[name].Libur += 1;
     }
 
-    const pick = (candidates, shift, extraPenalty = () => 0) => {
-      const sorted = candidates.slice().sort((a, b) => {
-        const scoreA = counts[a][shift] * 12 + counts[a].total * 0.6 + (lastShift[a] === shift ? 4 : 0) + extraPenalty(a);
-        const scoreB = counts[b][shift] * 12 + counts[b].total * 0.6 + (lastShift[b] === shift ? 4 : 0) + extraPenalty(b);
-        return scoreA - scoreB || a.localeCompare(b, "id");
-      });
-      return sorted[0];
-    };
+    const slots = [];
+    for (let i = 0; i < formation.S1; i += 1) slots.push({ shift: "S1", gender: constraint.s1Gender });
+    for (let i = 0; i < formation.Middle; i += 1) slots.push({ shift: "Middle", gender: constraint.middleGender });
+    for (let i = 0; i < formation.S2; i += 1) slots.push({ shift: "S2", gender: i < constraint.minMaleS2 ? "Pria" : "Any" });
 
-    const assign = (name, shift) => {
-      if (!name) return;
+    slots.sort((a, b) => (a.gender === "Any") - (b.gender === "Any") || shiftPriority(a.shift) - shiftPriority(b.shift));
+
+    const selected = assignSlotsBacktracking(slots, available, counts, lastShift);
+    if (!selected) {
+      return {
+        entries: [], warnings,
+        range: { start: localDateKey(start), end: localDateKey(end) },
+        summary: null,
+        errors: [`${dateKey} ${day}: rules tidak bisa dipenuhi dengan crew yang tersedia. Cek gender constraint, minimum pria S2, formasi, dan libur.`]
+      };
+    }
+
+    for (const [name, shift] of selected.entries()) {
       assigned.set(name, shift);
-      counts[name][shift]++;
-      counts[name].total++;
-    };
-
-    if (day === "Jumat") {
-      const maleAvailable = available.filter(n => genderByName[n] === "Pria");
-      if (maleAvailable.length !== formation.S2) {
-        return {
-          entries: [], warnings, range: { start: localDateKey(start), end: localDateKey(end) }, summary: null,
-          errors: [`${dateKey} Jumat: ada ${maleAvailable.length} pria masuk, sementara formasi S2 butuh ${formation.S2}. Atur libur Jumat supaya tepat 1 pria libur.`]
-        };
-      }
-      maleAvailable.forEach(name => assign(name, "S2"));
-      const women = available.filter(n => genderByName[n] === "Wanita" && !assigned.has(n));
-      const mid = pick(women, "Middle");
-      assign(mid, "Middle");
-      women.filter(n => n !== mid).forEach(name => assign(name, "S1"));
-    } else {
-      let pool = available.filter(n => !assigned.has(n));
-
-      if (formation.S2 > 0) {
-        const malePool = pool.filter(n => genderByName[n] === "Pria");
-        const firstMale = pick(malePool, "S2");
-        if (!firstMale) return { entries: [], warnings, summary: null, range: null, errors: [`${dateKey}: tidak ada pria tersedia untuk S2.`] };
-        assign(firstMale, "S2");
-        pool = pool.filter(n => n !== firstMale);
-
-        for (let i = 1; i < formation.S2; i++) {
-          const next = pick(pool, "S2", n => genderByName[n] === "Pria" ? -0.15 : 0);
-          assign(next, "S2");
-          pool = pool.filter(n => n !== next);
-        }
-      }
-
-      if (formation.Middle > 0) {
-        const mid = pick(pool, "Middle");
-        assign(mid, "Middle");
-        pool = pool.filter(n => n !== mid);
-      }
-
-      for (let i = 0; i < formation.S1; i++) {
-        const next = pick(pool, "S1");
-        assign(next, "S1");
-        pool = pool.filter(n => n !== next);
-      }
-
-      if (pool.length) return { entries: [], warnings, summary: null, range: null, errors: [`${dateKey}: ${pool.length} crew tidak mendapat shift. Cek formasi/rules.`] };
+      counts[name][shift] += 1;
+      counts[name].total += 1;
     }
 
-    const s2Names = [...assigned.entries()].filter(([, shift]) => shift === "S2").map(([name]) => name);
-    if (!s2Names.some(name => genderByName[name] === "Pria")) {
-      return { entries: [], warnings, summary: null, range: null, errors: [`${dateKey}: S2 tidak memiliki crew pria.`] };
-    }
-
-    const roles = assignRolesForDay(assigned, roleCounts, lastRole);
+    const roles = assignRolesForDay(assigned, roleCounts, lastRole, rules.rolesByShift);
 
     for (const person of people) {
       const shift = assigned.get(person.name);
-      if (!shift) return { entries: [], warnings, summary: null, range: null, errors: [`${dateKey}: ${person.name} belum mendapat status.`] };
+      if (!shift) {
+        return { entries: [], warnings, summary: null, range: null, errors: [`${dateKey}: ${person.name} belum mendapat status.`] };
+      }
       entries.push({
         date: dateKey,
         day,
@@ -214,7 +341,7 @@ export function generateSchedule({ year, month, includeCarryover = false, rules:
     }
   }
 
-  const summary = buildSummary(counts, roleCounts, entries);
+  const summary = buildSummary(counts, roleCounts, entries, roleNames);
   return {
     entries,
     errors: [],
@@ -224,58 +351,64 @@ export function generateSchedule({ year, month, includeCarryover = false, rules:
   };
 }
 
-function assignRolesForDay(assigned, roleCounts, lastRole) {
+function shiftPriority(shift) {
+  return shift === "Middle" ? 0 : shift === "S2" ? 1 : 2;
+}
+
+function assignSlotsBacktracking(slots, available, counts, lastShift) {
+  const used = new Set();
+  const selected = new Map();
+
+  const score = (person, shift) => {
+    const row = counts[person.name] || {};
+    return Number(row[shift] || 0) * 12
+      + Number(row.total || 0) * 0.6
+      + (lastShift[person.name] === shift ? 4 : 0);
+  };
+
+  const recurse = index => {
+    if (index >= slots.length) return true;
+    const slot = slots[index];
+    const candidates = available
+      .filter(person => !used.has(person.name) && (slot.gender === "Any" || person.gender === slot.gender))
+      .sort((a, b) => score(a, slot.shift) - score(b, slot.shift) || a.name.localeCompare(b.name, "id"));
+
+    for (const person of candidates) {
+      used.add(person.name);
+      selected.set(person.name, slot.shift);
+      if (recurse(index + 1)) return true;
+      selected.delete(person.name);
+      used.delete(person.name);
+    }
+    return false;
+  };
+
+  return recurse(0) ? selected : null;
+}
+
+function assignRolesForDay(assigned, roleCounts, lastRole, rolesByShift) {
   const result = new Map();
 
-  const roleScore = (name, role) => {
-    const ownCount = Number(roleCounts[name]?.[role] || 0);
-    const repeatPenalty = lastRole[name] === role ? 2.75 : 0;
-    const allValues = Object.values(roleCounts).map(row => Number(row?.[role] || 0));
-    const roleMin = Math.min(...allValues);
-    return ownCount * 10 + (ownCount - roleMin) * 5 + repeatPenalty;
-  };
-
-  const commit = (name, role) => {
-    result.set(name, role);
-    roleCounts[name][role]++;
-    lastRole[name] = role;
-  };
-
-  for (const shift of ["S1", "S2"]) {
+  for (const shift of ["S1", "Middle", "S2"]) {
     const names = [...assigned.entries()].filter(([, s]) => s === shift).map(([name]) => name);
-    if (!names.length) continue;
+    const roles = cleanNames(rolesByShift?.[shift] || []);
+    if (!names.length || !roles.length) continue;
 
-    const cashier = names.slice().sort((a, b) => roleScore(a, "Kasir") - roleScore(b, "Kasir") || a.localeCompare(b, "id"))[0];
-    commit(cashier, "Kasir");
-
-    const remaining = names.filter(n => n !== cashier);
-    if (remaining.length === 1) {
-      const name = remaining[0];
-      const role = ["Bar", "Kitchen - Bar"].sort((a, b) => roleScore(name, a) - roleScore(name, b) || a.localeCompare(b, "id"))[0];
-      commit(name, role);
-    } else if (remaining.length >= 2) {
-      // Untuk 3 orang dalam satu shift: satu Bar dan satu Kitchen-Bar. Coba dua kombinasi lalu pilih yang paling adil.
-      const [a, b, ...rest] = remaining;
-      const option1 = roleScore(a, "Bar") + roleScore(b, "Kitchen - Bar");
-      const option2 = roleScore(a, "Kitchen - Bar") + roleScore(b, "Bar");
-      if (option1 <= option2) {
-        commit(a, "Bar");
-        commit(b, "Kitchen - Bar");
-      } else {
-        commit(a, "Kitchen - Bar");
-        commit(b, "Bar");
-      }
-      for (const name of rest) {
-        const role = ["Bar", "Kitchen - Bar"].sort((x, y) => roleScore(name, x) - roleScore(name, y))[0];
-        commit(name, role);
-      }
+    for (const name of names) {
+      const role = roles.slice().sort((a, b) => {
+        const countA = Number(roleCounts[name]?.[a] || 0);
+        const countB = Number(roleCounts[name]?.[b] || 0);
+        const repeatA = lastRole[name] === a ? 2.75 : 0;
+        const repeatB = lastRole[name] === b ? 2.75 : 0;
+        const usedTodayA = [...result.values()].filter(x => x === a).length * 1.25;
+        const usedTodayB = [...result.values()].filter(x => x === b).length * 1.25;
+        return (countA * 10 + repeatA + usedTodayA) - (countB * 10 + repeatB + usedTodayB) || a.localeCompare(b, "id");
+      })[0];
+      result.set(name, role);
+      if (!(role in roleCounts[name])) roleCounts[name][role] = 0;
+      roleCounts[name][role] += 1;
+      lastRole[name] = role;
     }
-  }
-
-  const middleNames = [...assigned.entries()].filter(([, s]) => s === "Middle").map(([name]) => name);
-  for (const name of middleNames) {
-    const role = ["Bar", "Kitchen - Bar"].sort((a, b) => roleScore(name, a) - roleScore(name, b) || a.localeCompare(b, "id"))[0];
-    commit(name, role);
   }
 
   return result;
@@ -283,57 +416,48 @@ function assignRolesForDay(assigned, roleCounts, lastRole) {
 
 export function suggestNextOffRotation(rulesInput) {
   const rules = normalizeRules(rulesInput);
-  const males = rules.maleNames;
-  const all = [...rules.maleNames, ...rules.femaleNames];
-  if (!males.length || all.length !== 6) return rules;
-
-  const currentFriday = rules.offDays.Jumat?.[0];
-  const fridayIndex = Math.max(0, males.indexOf(currentFriday));
-  const nextFriday = males[(fridayIndex + 1) % males.length];
-  const slotDays = ["Senin", "Senin", "Selasa", "Rabu", "Kamis"];
-  const currentNonFriday = [
-    ...(rules.offDays.Senin || []),
-    ...(rules.offDays.Selasa || []),
-    ...(rules.offDays.Rabu || []),
-    ...(rules.offDays.Kamis || [])
-  ].filter(name => name !== nextFriday);
-
-  const remaining = all.filter(name => name !== nextFriday);
-  let ordered = currentNonFriday.filter(name => remaining.includes(name));
-  if (currentFriday && remaining.includes(currentFriday) && !ordered.includes(currentFriday)) ordered.push(currentFriday);
-  for (const name of remaining) if (!ordered.includes(name)) ordered.push(name);
-  ordered = [ordered[ordered.length - 1], ...ordered.slice(0, -1)];
-
+  const active = rules.crew.filter(x => x.active !== false).map(x => x.name);
+  if (active.length < 2) return rules;
+  const nextName = name => {
+    const index = active.indexOf(name);
+    return index >= 0 ? active[(index + 1) % active.length] : name;
+  };
   const next = normalizeRules(rules);
-  next.offDays = { Senin: [], Selasa: [], Rabu: [], Kamis: [], Jumat: [nextFriday], Sabtu: [], Minggu: [] };
-  ordered.slice(0, 5).forEach((name, index) => next.offDays[slotDays[index]].push(name));
-  next.version = Number(rules.version || 1) + 1;
+  for (const day of DAY_NAMES) {
+    next.offDays[day] = cleanNames((rules.offDays[day] || []).filter(name => active.includes(name)).map(nextName));
+  }
+  next.version = Number(rules.version || 2) + 1;
   return next;
 }
 
 export function summarizeScheduleEntries(entries = [], crewNames = []) {
   const inferredNames = [...new Set(entries.map(e => e.crewName).filter(Boolean))];
   const names = cleanNames(crewNames.length ? crewNames : inferredNames);
+  const roles = cleanNames(entries.map(e => e.role).filter(Boolean));
   const counts = Object.fromEntries(names.map(name => [name, { S1: 0, Middle: 0, S2: 0, Libur: 0, total: 0 }]));
-  const roleCounts = Object.fromEntries(names.map(name => [name, { Kasir: 0, Bar: 0, "Kitchen - Bar": 0 }]));
+  const roleCounts = Object.fromEntries(names.map(name => [name, Object.fromEntries(roles.map(role => [role, 0]))]));
   for (const entry of entries) {
     if (!counts[entry.crewName]) continue;
-    if (["S1", "Middle", "S2", "Libur"].includes(entry.shift)) counts[entry.crewName][entry.shift]++;
-    if (entry.shift !== "Libur") counts[entry.crewName].total++;
-    if (roleCounts[entry.crewName] && ["Kasir", "Bar", "Kitchen - Bar"].includes(entry.role)) roleCounts[entry.crewName][entry.role]++;
+    if (["S1", "Middle", "S2", "Libur"].includes(entry.shift)) counts[entry.crewName][entry.shift] += 1;
+    if (entry.shift !== "Libur") counts[entry.crewName].total += 1;
+    if (entry.role) {
+      if (!(entry.role in roleCounts[entry.crewName])) roleCounts[entry.crewName][entry.role] = 0;
+      roleCounts[entry.crewName][entry.role] += 1;
+    }
   }
-  return buildSummary(counts, roleCounts, entries);
+  return buildSummary(counts, roleCounts, entries, roles);
 }
 
-function buildSummary(counts, roleCounts, entries) {
+function buildSummary(counts, roleCounts, entries, roleNames = []) {
   const rows = Object.entries(counts).map(([name, c]) => ({ name, ...c }));
   const roleRows = Object.entries(roleCounts).map(([name, c]) => ({ name, ...c }));
   const shiftSpreads = ["S1", "Middle", "S2"].map(shift => {
-    const vals = rows.map(r => r[shift]);
+    const vals = rows.map(r => Number(r[shift] || 0));
     return vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
   });
-  const roleSpreads = ["Kasir", "Bar", "Kitchen - Bar"].map(role => {
-    const vals = roleRows.map(r => r[role]);
+  const roles = roleNames.length ? roleNames : cleanNames(roleRows.flatMap(row => Object.keys(row).filter(k => k !== "name")));
+  const roleSpreads = roles.map(role => {
+    const vals = roleRows.map(r => Number(r[role] || 0));
     return vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
   });
   const shiftAvgSpread = shiftSpreads.reduce((a, b) => a + b, 0) / Math.max(1, shiftSpreads.length);
@@ -342,7 +466,7 @@ function buildSummary(counts, roleCounts, entries) {
   const roleFairnessScore = Math.max(0, Math.round(100 - roleAvgSpread * 7));
   const overallFairnessScore = Math.round((fairnessScore + roleFairnessScore) / 2);
   const days = new Set(entries.map(e => e.date)).size;
-  return { rows, roleRows, fairnessScore, roleFairnessScore, overallFairnessScore, days };
+  return { rows, roleRows, roleNames: roles, fairnessScore, roleFairnessScore, overallFairnessScore, days };
 }
 
 export function localDateKey(date) {

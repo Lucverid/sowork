@@ -48,3 +48,7 @@ export function sendTelegramTest(workerUrl) {
 export function unpairTelegram(workerUrl) {
   return requestWorker(workerUrl, "/api/unpair", { method: "POST", body: "{}" });
 }
+
+export function sendTelegramStockReceiptBatch(workerUrl, payload) {
+  return requestWorker(workerUrl, "/api/stock-receipt-batch", { method: "POST", body: JSON.stringify(payload || {}) });
+}
