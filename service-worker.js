@@ -1,7 +1,5 @@
-const CACHE_NAME = 'agis-finance-v27-4-0-stability-offline';
-const CACHE_PREFIX = 'agis-finance-';
+const CACHE_NAME = 'agis-finance-v27-3-1-inline-feature-switcher-offline';
 
-// Keep the shell explicit so GitHub Pages/PWA can work after the first online load.
 const APP_SHELL = [
   './',
   './index.html',
@@ -19,57 +17,18 @@ const APP_SHELL = [
   './icon-512.png'
 ];
 
-const CORE_SHELL = ['./', './index.html', './manifest.json'];
-
-async function fetchFresh(url) {
-  const request = new Request(url, { cache: 'reload' });
-  const response = await fetch(request);
-  if (!response || !response.ok) throw new Error(`HTTP ${response?.status || 0}: ${url}`);
-  return response;
-}
-
-async function cacheOptionalAssets(cache) {
-  const optional = APP_SHELL.filter(url => !CORE_SHELL.includes(url));
-  const results = await Promise.allSettled(optional.map(async url => {
-    const response = await fetchFresh(url);
-    await cache.put(url, response.clone());
-  }));
-  // One optional asset must not cancel the whole service-worker install.
-  results.forEach((result, i) => {
-    if (result.status === 'rejected') console.warn('[offline-cache] skipped', optional[i], result.reason);
-  });
-}
-
 self.addEventListener('install', event => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    // Core shell is mandatory. Optional files are best-effort so a single bad path
-    // cannot make the entire app lose offline support.
-    for (const url of CORE_SHELL) {
-      const response = await fetchFresh(url);
-      await cache.put(url, response.clone());
-    }
-    await cacheOptionalAssets(cache);
-    await self.skipWaiting();
-  })());
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys
-      .filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
-      .map(key => caches.delete(key)));
-    await self.clients.claim();
-  })());
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
 });
-
-function withTimeout(promise, ms) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('network-timeout')), ms))
-  ]);
-}
 
 self.addEventListener('fetch', event => {
   const request = event.request;
@@ -78,40 +37,31 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Navigation: prefer latest deploy, but fall back quickly when connection is poor/offline.
+  // Navigasi: coba versi terbaru dari network, fallback ke app shell saat offline.
   if (request.mode === 'navigate') {
-    event.respondWith((async () => {
-      try {
-        const response = await withTimeout(fetch(request), 3500);
-        if (response && response.ok) {
-          const cache = await caches.open(CACHE_NAME);
-          await cache.put('./index.html', response.clone());
-        }
-        return response;
-      } catch {
-        return (await caches.match('./index.html')) || (await caches.match('./')) || Response.error();
-      }
-    })());
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
+          return response;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
     return;
   }
 
-  // Local assets: cache-first for instant offline load; refresh cache on a miss.
-  event.respondWith((async () => {
-    const cached = await caches.match(request);
-    if (cached) return cached;
-    try {
-      const response = await fetch(request);
-      if (response && response.ok) {
-        const cache = await caches.open(CACHE_NAME);
-        await cache.put(request, response.clone());
-      }
-      return response;
-    } catch {
-      return Response.error();
-    }
-  })());
-});
-
-self.addEventListener('message', event => {
-  if (event.data === 'SKIP_WAITING') self.skipWaiting();
+  // Asset lokal: cache-first, lalu isi cache jika ada asset baru.
+  event.respondWith(
+    caches.match(request).then(cached => {
+      if (cached) return cached;
+      return fetch(request).then(response => {
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+        }
+        return response;
+      });
+    })
+  );
 });

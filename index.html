@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Agis Finance AI - v27.4.0</title>
+    <title>Agis Finance AI - v27.2.0</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0f172a">
     
@@ -2542,16 +2542,6 @@ body.v273-sheet-open{overflow:hidden}
       if(tab){setFeature(tab.dataset.v273Feature,true);return}
       if(e.target.closest('[data-v273-all]'))openAllFeatures();
     });
-    el.addEventListener('keydown',e=>{
-      const tab=e.target.closest('[data-v273-feature]');
-      if(!tab||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
-      const tabs=[...el.querySelectorAll('[data-v273-feature]')];
-      let i=tabs.indexOf(tab);
-      if(e.key==='Home')i=0; else if(e.key==='End')i=tabs.length-1; else i=(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
-      e.preventDefault();
-      tabs[i]?.focus();
-      setFeature(tabs[i]?.dataset.v273Feature||'decision',false);
-    });
     return el;
   }
 
@@ -2588,29 +2578,16 @@ body.v273-sheet-open{overflow:hidden}
         const selected=btn.dataset.v273Feature===active;
         btn.classList.toggle('active',selected);
         btn.setAttribute('aria-selected',selected?'true':'false');
+        if(selected)requestAnimationFrame(()=>btn.scrollIntoView?.({behavior:'smooth',inline:'center',block:'nearest'}));
       });
       if(window.lucide?.createIcons)window.lucide.createIcons();
     } finally { applying=false; }
-  }
-
-  function refreshVisiblePanel(){
-    // Sections can be rendered while hidden. Give responsive charts/layout a resize
-    // signal after a feature becomes visible, without touching their data/state.
-    const ping=()=>{try{window.dispatchEvent(new Event('resize'))}catch{}};
-    requestAnimationFrame(()=>{ping();setTimeout(ping,180)});
-  }
-
-  function focusActiveTab(smooth=true){
-    const btn=document.querySelector(`[data-v273-feature="${active}"]`);
-    if(btn)requestAnimationFrame(()=>btn.scrollIntoView?.({behavior:smooth?'smooth':'auto',inline:'center',block:'nearest'}));
   }
 
   function setFeature(id,scroll=false){
     if(!FEATURES.some(x=>x.id===id))id='decision';
     saveActive(id);
     applyVisibility();
-    focusActiveTab(scroll);
-    refreshVisiblePanel();
     if(scroll){
       const switcher=document.getElementById('v273-feature-switcher');
       const panel=featureNodes()[id];
@@ -2648,14 +2625,12 @@ body.v273-sheet-open{overflow:hidden}
     return wrap;
   }
 
-  let sheetReturnFocus=null;
   function openAllFeatures(){
-    sheetReturnFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
     const wrap=ensureSheet();
     wrap.hidden=false;
     wrap.setAttribute('aria-hidden','false');
     document.body.classList.add('v273-sheet-open');
-    requestAnimationFrame(()=>{wrap.classList.add('open');wrap.querySelector('[data-v273-open]')?.focus?.()});
+    requestAnimationFrame(()=>wrap.classList.add('open'));
   }
   function closeAllFeatures(){
     const wrap=document.getElementById('v273-feature-sheet');
@@ -2663,7 +2638,7 @@ body.v273-sheet-open{overflow:hidden}
     wrap.classList.remove('open');
     wrap.setAttribute('aria-hidden','true');
     document.body.classList.remove('v273-sheet-open');
-    setTimeout(()=>{if(!wrap.classList.contains('open')){wrap.hidden=true;sheetReturnFocus?.focus?.();sheetReturnFocus=null}},180);
+    setTimeout(()=>{if(!wrap.classList.contains('open'))wrap.hidden=true},180);
   }
 
   function wrapTrackingLaunch(){
@@ -2688,8 +2663,6 @@ body.v273-sheet-open{overflow:hidden}
   function init(){
     ensureSheet();
     applyVisibility();
-    focusActiveTab(false);
-    refreshVisiblePanel();
     wrapTrackingLaunch();
     installObserver();
     [120,320,700,1200].forEach(ms=>setTimeout(()=>{applyVisibility();wrapTrackingLaunch()},ms));
@@ -2704,6 +2677,6 @@ body.v273-sheet-open{overflow:hidden}
   else init();
 })();
 </script>
-<!-- AutoBudgetin v27.4.0: stability polish, resilient offline cache, inline feature switcher -->
+<!-- AutoBudgetin v27.3.1: feature switcher inlined for 2-file mobile deploy -->
 </body>
 </html>
