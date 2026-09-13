@@ -1,15 +1,2709 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#111827" />
-    <link rel="manifest" href="/sowork/manifest.json" />
-    <title>SoWork</title>
-    <script type="module" crossorigin src="/sowork/assets/index-CUNUA5Gn.js"></script>
-    <link rel="stylesheet" crossorigin href="/sowork/assets/index-BOFJN3fc.css">
-  </head>
-  <body>
-    <div id="app"></div>
-  </body>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Agis Finance AI - v27.4.0</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    
+    <!-- v20: seluruh dependency UI/Firebase dilayani lokal agar app shell bisa dibuka tanpa internet -->
+    <script src="./chart.min.js"></script>
+    <script src="./sweetalert2.all.min.js"></script>
+    <script src="./lucide.min.js"></script>
+    <script src="./xlsx.full.min.js"></script>
+    <script src="./firebase-app.js"></script>
+    <script src="./firebase-firestore.js"></script>
+    
+    <style>
+        :root {
+            --bg: #0f172a; --surface: #1e293b; --primary: #2dd4bf;
+            --accent: #3b82f6; --danger: #ef4444; --warning: #f59e0b; --success: #22c55e;
+            --text: #f8fafc; --text-dim: #94a3b8; --border: rgba(255, 255, 255, 0.08);
+            --glass: rgba(30, 41, 59, 0.7);
+        }
+        body.light-mode {
+            --bg: #f8fafc; --surface: #ffffff; --text: #0f172a;
+            --text-dim: #64748b; --border: rgba(0,0,0,0.06);
+            --glass: rgba(255, 255, 255, 0.8);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-tap-highlight-color: transparent; }
+        
+        body { background-color: var(--bg); color: var(--text); padding-bottom: 110px; min-height: 100vh; transition: background 0.3s; overflow-x: hidden; }
+        .container { max-width: 500px; margin: auto; padding: 20px; }
+
+        /* Splash Screen */
+        #splash-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--bg); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 10000;
+            transition: all 0.5s ease;
+        }
+        .spinner { width: 45px; height: 45px; border: 4px solid var(--surface); border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Privacy Blur */
+        .blur-active .master-amount, .blur-active .w-val, .blur-active .t-amt, 
+        .blur-active #goal-amount, .blur-active #chart-total-val, .blur-active .adv-scrollable {
+            filter: blur(12px); pointer-events: none; user-select: none;
+        }
+
+        /* Header & Balance */
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+        .status-badge { font-size: 10px; padding: 4px 10px; border-radius: 12px; font-weight: 800; text-transform: uppercase; }
+        .status-online { background: rgba(45, 212, 191, 0.15); color: var(--primary); }
+        .status-offline { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid var(--danger); }
+        .btn-icon { background: var(--surface); border: 1px solid var(--border); color: var(--text); width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+        .master-balance { text-align: center; margin-bottom: 8px; }
+        .master-amount { font-size: clamp(2rem, 9vw, 2.8rem); font-weight: 800; display: block; letter-spacing: -1.5px; }
+        .goal-info { text-align: center; font-size: 0.85rem; color: var(--warning); margin-bottom: 30px; font-weight: 600; cursor: pointer; }
+
+        /* Wallet Cards */
+        .wallet-container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 25px; }
+        .w-card { background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 18px 8px; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+        .w-icon { width: 46px; height: 46px; border-radius: 16px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
+        .w-icon i { width: 22px !important; height: 22px !important; }
+        .w-name { font-size: 0.6rem; color: var(--text-dim); font-weight: 800; text-transform: uppercase; margin-bottom: 4px; }
+        .w-val { font-size: clamp(0.6rem, 3vw, 0.8rem); font-weight: 800; width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* Advisor / Smart Insight */
+        .advisor { 
+            background: var(--surface); border-radius: 28px; padding: 18px; 
+            margin: 25px 0; border: 1px solid var(--border); 
+            display: flex; gap: 15px; align-items: flex-start; 
+            height: 225px; overflow: hidden;
+        }
+        .adv-icon { width: 44px; height: 44px; background: var(--primary); color: #0f172a; border-radius: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .adv-main { flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+        .adv-scrollable { flex: 1; overflow-y: auto; font-size: 0.82rem; line-height: 1.6; color: var(--text-dim); }
+        .insight-status { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:999px; font-size:0.68rem; font-weight:900; margin-bottom:8px; }
+        .insight-safe { background:rgba(45,212,191,.14); color:var(--primary); }
+        .insight-warn { background:rgba(245,158,11,.15); color:var(--warning); }
+        .insight-danger { background:rgba(239,68,68,.15); color:var(--danger); }
+        .insight-row { margin-bottom:7px; }
+        .insight-divider { border-top:1px solid var(--border); padding-top:8px; margin-top:4px; }
+
+        /* Transaction List */
+        .t-item { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--border); }
+        .t-info { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+        .t-cat-name { font-weight: 700; font-size: 0.95rem; }
+        .t-sub-info { font-size: 0.75rem; color: var(--text-dim); display: flex; gap: 6px; }
+        .t-amt { font-weight: 800; font-size: 0.9rem; color: var(--danger); display: flex; align-items: center; gap: 8px; }
+        .t-amt.income { color: var(--success); }
+        .t-amt.transfer { color: var(--accent); }
+        .t-actions { display:flex; gap:8px; align-items:center; margin-left:8px; }
+        .t-action { width:28px; height:28px; border-radius:9px; border:1px solid var(--border); background:transparent; color:var(--text-dim); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+        .t-action i { width:13px !important; height:13px !important; }
+        .cashflow-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin-top:14px; }
+        .cashflow-stat { background:var(--surface); border:1px solid var(--border); border-radius:18px; padding:12px 8px; min-width:0; }
+        .cashflow-label { display:block; color:var(--text-dim); font-size:.58rem; font-weight:900; text-transform:uppercase; margin-bottom:5px; }
+        .cashflow-value { display:block; font-size:clamp(.68rem,2.8vw,.82rem); font-weight:900; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .cashflow-note { margin-top:12px; color:var(--text-dim); font-size:.72rem; line-height:1.5; }
+        .type-switch { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:15px; padding:5px; background:var(--surface); border:1px solid var(--border); border-radius:18px; }
+        .type-btn { border:0; border-radius:14px; padding:11px 5px; background:transparent; color:var(--text-dim); font-size:.7rem; font-weight:900; cursor:pointer; }
+        .type-btn.active { background:var(--primary); color:#0f172a; }
+        .form-hidden { display:none !important; }
+        .history-filters { display:grid; grid-template-columns:1.2fr .8fr; gap:8px; }
+        .edit-modal-grid { text-align:left; }
+        .edit-modal-grid label { display:block; margin:8px 0 5px; font-size:.72rem; font-weight:800; color:#64748b; }
+        .edit-modal-grid input, .edit-modal-grid select { margin-bottom:5px; }
+
+        /* v23: goals, recurring, security & backup */
+        .section-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; }
+        .section-title { font-size:1rem; font-weight:800; display:flex; align-items:center; gap:8px; }
+        .btn-small { border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:12px; padding:9px 12px; font-size:.7rem; font-weight:900; cursor:pointer; }
+        .goal-list, .recurring-list { display:flex; flex-direction:column; gap:10px; }
+        .goal-card, .recurring-card { background:var(--surface); border:1px solid var(--border); border-radius:18px; padding:14px; }
+        .goal-top, .recurring-top { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+        .goal-name, .recurring-name { font-weight:900; font-size:.86rem; }
+        .mini-muted { color:var(--text-dim); font-size:.68rem; line-height:1.45; }
+        .progress-track { height:8px; border-radius:999px; background:rgba(148,163,184,.18); overflow:hidden; margin:10px 0 7px; }
+        .progress-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,var(--primary),var(--accent)); }
+        .mini-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+        .mini-action { border:1px solid var(--border); background:transparent; color:var(--text-dim); border-radius:10px; padding:7px 9px; font-size:.65rem; font-weight:850; cursor:pointer; }
+        .mini-action.danger { color:var(--danger); }
+        .mini-action.primary { color:var(--primary); }
+        .empty-box { padding:18px 8px; text-align:center; color:var(--text-dim); font-size:.75rem; border:1px dashed var(--border); border-radius:16px; }
+        .backup-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+        .security-state { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0 16px; color:var(--text-dim); font-size:.76rem; }
+        .security-dot { width:9px; height:9px; border-radius:50%; background:var(--danger); display:inline-block; margin-right:6px; }
+        .security-dot.on { background:var(--success); }
+        #pin-lock-screen { position:fixed; inset:0; z-index:20000; background:rgba(15,23,42,.97); display:none; align-items:center; justify-content:center; padding:24px; }
+        #pin-lock-screen.active { display:flex; }
+        .pin-panel { width:min(360px,100%); text-align:center; background:#1e293b; border:1px solid rgba(255,255,255,.1); border-radius:30px; padding:28px 22px; color:#f8fafc; box-shadow:0 30px 80px rgba(0,0,0,.45); }
+        .pin-logo { width:58px; height:58px; margin:0 auto 16px; border-radius:20px; display:flex; align-items:center; justify-content:center; background:#2dd4bf; color:#0f172a; }
+        .pin-input { text-align:center; letter-spacing:10px; font-size:1.25rem; background:#0f172a !important; color:#f8fafc !important; margin:18px 0 10px !important; }
+        .pin-error { min-height:18px; font-size:.7rem; color:#ef4444; margin-bottom:8px; }
+        .swal2-html-container .modal-field { width:100%; padding:12px; border-radius:12px; border:1px solid #cbd5e1; margin:5px 0 9px; }
+
+        /* v24: reliability, control, advanced history & health */
+        .overview-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:9px; margin-bottom:20px; }
+        .overview-stat { background:var(--surface); border:1px solid var(--border); border-radius:18px; padding:13px; min-width:0; }
+        .overview-label { display:block; color:var(--text-dim); font-size:.58rem; font-weight:900; text-transform:uppercase; margin-bottom:5px; }
+        .overview-value { display:block; font-weight:900; font-size:.82rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .overview-note { color:var(--text-dim); font-size:.61rem; margin-top:4px; line-height:1.35; }
+        /* v24.1 additive: carry-over budget. Tidak mengubah batas aman harian. */
+        .carry-over-stat { grid-column:1 / -1; position:relative; }
+        .carry-over-row { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+        .carry-over-reset { border:1px solid var(--border); background:transparent; color:var(--text-dim); border-radius:9px; padding:5px 8px; font-size:.58rem; font-weight:850; cursor:pointer; flex-shrink:0; }
+        .carry-over-potential { color:var(--primary); font-weight:800; }
+        /* v24.2 additive: streak, recovery target, dan proyeksi akhir bulan. */
+        .recovery-stat { grid-column:1 / -1; }
+        .recovery-progress { height:7px; border-radius:999px; background:rgba(148,163,184,.16); overflow:hidden; margin-top:8px; }
+        .recovery-progress > span { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,var(--primary),var(--success)); }
+        .recovery-actions { display:flex; gap:6px; margin-top:9px; flex-wrap:wrap; }
+        .recovery-action { border:1px solid var(--border); background:transparent; color:var(--text-dim); border-radius:9px; padding:6px 8px; font-size:.58rem; font-weight:850; cursor:pointer; }
+        .filter-panel { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+        .filter-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+        .filter-panel input, .filter-panel select { margin-bottom:0; padding:12px 13px; border-radius:14px; font-size:.75rem; }
+        .filter-actions { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+        .filter-summary { color:var(--text-dim); font-size:.67rem; line-height:1.4; }
+        .filter-reset { border:1px solid var(--border); background:transparent; color:var(--text-dim); border-radius:11px; padding:8px 10px; font-size:.65rem; font-weight:850; cursor:pointer; flex-shrink:0; }
+        .health-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+        .health-score { width:54px; height:54px; border-radius:18px; display:flex; align-items:center; justify-content:center; flex-direction:column; background:rgba(45,212,191,.12); color:var(--primary); font-weight:950; }
+        .health-score small { font-size:.5rem; font-weight:800; opacity:.8; }
+        .health-issues { display:flex; flex-direction:column; gap:7px; }
+        .issue-row { border:1px solid var(--border); border-radius:13px; padding:10px 11px; font-size:.68rem; line-height:1.45; color:var(--text-dim); }
+        .issue-row.good { color:var(--success); background:rgba(34,197,94,.06); }
+        .issue-row.warn { color:var(--warning); background:rgba(245,158,11,.06); }
+        .issue-row.danger { color:var(--danger); background:rgba(239,68,68,.06); }
+        .conflict-list { display:flex; flex-direction:column; gap:9px; margin-top:12px; }
+        .conflict-card { border:1px solid rgba(245,158,11,.35); background:rgba(245,158,11,.05); border-radius:16px; padding:12px; }
+        .conflict-title { font-weight:900; font-size:.76rem; color:var(--warning); margin-bottom:5px; }
+        .conflict-compare { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
+        .conflict-version { border:1px solid var(--border); border-radius:12px; padding:9px; font-size:.61rem; color:var(--text-dim); min-width:0; }
+        .audit-list { max-height:320px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+        .audit-item { border-bottom:1px solid var(--border); padding:8px 0 10px; }
+        .audit-action { font-size:.72rem; font-weight:900; margin-bottom:3px; }
+        .audit-detail { font-size:.64rem; color:var(--text-dim); line-height:1.45; }
+        .audit-time { font-size:.58rem; color:var(--text-dim); margin-top:4px; }
+        .sync-pill { display:inline-flex; padding:3px 7px; border-radius:999px; font-size:.57rem; font-weight:900; }
+        .sync-pill.warn { background:rgba(245,158,11,.12); color:var(--warning); }
+        .sync-pill.good { background:rgba(34,197,94,.12); color:var(--success); }
+        .security-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0 0; }
+        .security-grid select { margin:0; padding:12px; border-radius:13px; font-size:.7rem; }
+        @media (max-width:380px){ .filter-grid,.security-grid,.conflict-compare{grid-template-columns:1fr;} }
+
+        /* Navigation */
+        .nav-bar { position: fixed; bottom: 20px; left: 20px; right: 20px; height: 75px; background: var(--surface); border-radius: 28px; display: flex; justify-content: space-around; align-items: center; box-shadow: 0 15px 35px rgba(0,0,0,0.4); z-index: 1000; border: 1px solid var(--border); max-width: 460px; margin: 0 auto; }
+        .nav-item { color: var(--text-dim); cursor: pointer; transition: 0.3s; padding: 10px; }
+        .nav-item.active { color: var(--primary); transform: translateY(-5px); }
+
+        .card { background: var(--glass); backdrop-filter: blur(15px); border-radius: 30px; padding: 22px; margin-bottom: 20px; border: 1px solid var(--border); }
+        .btn-primary { background: linear-gradient(135deg, var(--primary), var(--accent)); color: #0f172a; padding: 18px; border-radius: 18px; border: none; font-weight: 800; width: 100%; cursor: pointer; }
+        
+        /* NEW: Calculator UI Pro */
+        .calc-toggle { position: fixed; bottom: 110px; right: 20px; width: 48px; height: 48px; background: var(--accent); color: white; border-radius: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2000; border: none; box-shadow: 0 8px 15px rgba(0,0,0,0.3); }
+        
+        #calc-container { 
+            position: fixed; bottom: 170px; right: 20px; width: 280px; min-width: 200px; min-height: 350px;
+            background: var(--glass); border: 1px solid var(--border); border-radius: 24px; 
+            padding: 15px; display: none; z-index: 2001; box-shadow: 0 20px 50px rgba(0,0,0,0.6); 
+            backdrop-filter: blur(20px); overflow: hidden; touch-action: none;
+        }
+
+        .calc-header { cursor: move; padding: 5px; margin-bottom: 12px; display: flex; justify-content: center; background: rgba(255,255,255,0.08); border-radius: 10px; }
+        .drag-handle { width: 50px; height: 5px; background: var(--text-dim); border-radius: 10px; opacity: 0.5; }
+
+        .calc-display { width: 100%; background: rgba(0,0,0,0.3); border-radius: 15px; padding: 15px; text-align: right; font-size: 1.5rem; font-weight: 800; color: var(--primary); margin-bottom: 15px; min-height: 60px; border: 1px solid var(--border); }
+        .calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; height: calc(100% - 120px); }
+        .calc-btn { border-radius: 14px; border: 1px solid var(--border); background: rgba(255,255,255,0.05); color: var(--text); font-weight: 700; cursor: pointer; transition: 0.1s; font-size: 1rem; }
+        .calc-btn:active { background: var(--primary); color: #000; transform: scale(0.95); }
+        .calc-btn.op { background: rgba(59,130,246,0.15); color: var(--accent); }
+
+        .resizer { position: absolute; right: 0; bottom: 0; width: 25px; height: 25px; cursor: nwse-resize; z-index: 2002; }
+
+        .page { display: none; }
+        .page.active { display: block; animation: slideUp 0.3s ease; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } }
+        input, select { width: 100%; padding: 16px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface); color: var(--text); margin-bottom: 12px; outline: none; }
+
+        /* v24.3 — interaction layer; visual theme intentionally preserved */
+        html { scroll-behavior:smooth; }
+        .interactive-greeting { text-align:center; color:var(--text-dim); font-size:.72rem; font-weight:750; margin:-7px 0 8px; opacity:0; transform:translateY(4px); animation:v243Fade .45s .12s ease forwards; }
+        .card,.w-card,.overview-stat,.advisor,.goal-card,.recurring-card { transition:transform .22s ease, border-color .22s ease, box-shadow .22s ease, background .22s ease; }
+        @media (hover:hover) and (pointer:fine) {
+          .card:hover,.overview-stat:hover,.goal-card:hover,.recurring-card:hover { transform:translateY(-2px); border-color:rgba(45,212,191,.22); box-shadow:0 12px 28px rgba(0,0,0,.12); }
+          .w-card:hover { transform:translateY(-3px) scale(1.015); border-color:rgba(45,212,191,.24); }
+        }
+        .w-card:active,.overview-stat:active,.card:active { transform:scale(.985); }
+        .btn-icon,.btn-primary,.btn-small,.mini-action,.recovery-action,.carry-over-reset,.nav-item,.type-btn,.t-action { position:relative; overflow:hidden; transition:transform .16s ease, filter .16s ease, background .2s ease; }
+        .btn-icon:active,.btn-primary:active,.btn-small:active,.mini-action:active,.recovery-action:active,.carry-over-reset:active,.nav-item:active,.type-btn:active,.t-action:active { transform:scale(.92); }
+        .v243-ripple { position:absolute; border-radius:50%; background:rgba(255,255,255,.22); transform:scale(0); animation:v243Ripple .48s ease-out; pointer-events:none; }
+        @keyframes v243Ripple { to { transform:scale(3.4); opacity:0; } }
+        @keyframes v243Fade { to { opacity:1; transform:none; } }
+        @keyframes v243ValuePulse { 0%{transform:translateY(2px);opacity:.72} 55%{transform:translateY(-1px)} 100%{transform:none;opacity:1} }
+        .v243-value-pulse { animation:v243ValuePulse .32s ease; }
+        .progress-fill,.recovery-progress span { transition:width .65s cubic-bezier(.2,.8,.2,1); }
+        .advisor { cursor:pointer; height:225px; }
+        .advisor::after { content:'Ketuk untuk detail'; position:absolute; right:18px; bottom:10px; font-size:.56rem; font-weight:800; color:var(--text-dim); opacity:.62; }
+        .advisor { position:relative; }
+        .advisor.expanded { height:min(420px,62vh); border-color:rgba(45,212,191,.24); box-shadow:0 14px 34px rgba(0,0,0,.16); }
+        .advisor.expanded::after { content:'Ketuk untuk ringkas'; }
+        .page.active { animation:v243Page .34s cubic-bezier(.2,.75,.2,1); }
+        @keyframes v243Page { from { opacity:0; transform:translateY(8px) scale(.995); } to { opacity:1; transform:none; } }
+        .nav-item.active::after { content:''; position:absolute; left:50%; bottom:2px; width:5px; height:5px; border-radius:50%; background:var(--primary); transform:translateX(-50%); box-shadow:0 0 10px var(--primary); }
+        .t-item { transition:background .18s ease, transform .18s ease; border-radius:14px; padding-left:7px; padding-right:5px; }
+        .t-item:active { background:rgba(148,163,184,.06); transform:scale(.99); }
+        @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; } }
+
+    </style>
+    <link rel="stylesheet" href="./v24-4-features.css">
+    <link rel="stylesheet" href="./v24-5-automation.css">
+    <link rel="stylesheet" href="./v24-6-layout.css">
+    <link rel="stylesheet" href="./v25-features.css">
+    <link rel="stylesheet" href="./v25-1-mobile.css">
+    <link rel="stylesheet" href="./v25-2-clean-home.css">
+    <link rel="stylesheet" href="./v25-3-health-pulse.css">
+    <link rel="stylesheet" href="./v25-3-1-quick-transaction.css">
+    <link rel="stylesheet" href="./v25-3-2-ui-polish.css">
+    <link rel="stylesheet" href="./v25-3-3-financial-plan.css">
+    <link rel="stylesheet" href="./v25-3-4-balance-wallet.css">
+    <link rel="stylesheet" href="./v25-3-5-balance-savings.css">
+    <link rel="stylesheet" href="./v25-3-6-health-balance.css">
+    <link rel="stylesheet" href="./v25-3-10-health-engine.css">
+    <link rel="stylesheet" href="./v25-5-17-easter-egg.css">
+    <link rel="stylesheet" href="./v26-decision-lab.css">
+    <link rel="stylesheet" href="./v27-tracking.css?v=27.2.0">
+    <style id="v2731-feature-switcher-inline">
+/* v27.3 — compact Financial Plan feature switcher */
+#planning .v273-feature-switcher{
+  width:100%;
+  margin:12px 0 14px;
+  padding:14px;
+  border:1px solid var(--border);
+  border-radius:22px;
+  background:linear-gradient(180deg,rgba(30,41,59,.72),rgba(15,23,42,.72));
+  box-shadow:0 10px 28px rgba(0,0,0,.12);
+  overflow:hidden;
+}
+#planning .v273-feature-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+#planning .v273-feature-head>div{min-width:0;display:grid;gap:2px}
+#planning .v273-feature-head small{font-size:.61rem;letter-spacing:.14em;font-weight:900;color:var(--primary)}
+#planning .v273-feature-head b{font-size:.93rem;line-height:1.2}
+#planning .v273-feature-head span{font-size:.67rem;color:var(--text-dim);line-height:1.4}
+#planning .v273-all-btn{border:1px solid var(--border);background:rgba(148,163,184,.08);color:var(--text);border-radius:14px;min-width:66px;height:42px;padding:0 10px;display:flex;align-items:center;justify-content:center;gap:6px;font:inherit;font-size:.7rem;font-weight:850;cursor:pointer;flex:none}
+#planning .v273-all-btn svg{width:16px;height:16px;color:var(--primary)}
+#planning .v273-tabs{display:flex;gap:8px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:none;padding:2px 1px 4px;-webkit-overflow-scrolling:touch}
+#planning .v273-tabs::-webkit-scrollbar{display:none}
+#planning .v273-tab{scroll-snap-align:center;flex:0 0 auto;min-width:112px;height:44px;padding:0 13px;border:1px solid var(--border);border-radius:14px;background:rgba(15,23,42,.6);color:var(--text-dim);display:flex;align-items:center;justify-content:center;gap:7px;font:inherit;font-size:.72rem;font-weight:850;cursor:pointer;transition:transform .16s ease,border-color .2s ease,background .2s ease,color .2s ease}
+#planning .v273-tab svg{width:16px;height:16px;flex:none}
+#planning .v273-tab.active{color:var(--text);border-color:rgba(45,212,191,.42);background:linear-gradient(135deg,rgba(45,212,191,.15),rgba(59,130,246,.13));box-shadow:inset 0 0 0 1px rgba(45,212,191,.05)}
+#planning .v273-tab:active,#planning .v273-all-btn:active{transform:scale(.97)}
+#planning .v273-feature-hidden{display:none !important}
+
+.v273-sheet-wrap[hidden]{display:none!important}
+.v273-sheet-wrap{position:fixed;inset:0;z-index:9998;display:flex;align-items:flex-end;justify-content:center;padding:14px;pointer-events:none}
+.v273-sheet-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.68);backdrop-filter:blur(3px);opacity:0;transition:opacity .18s ease;pointer-events:auto}
+.v273-sheet{position:relative;width:min(680px,100%);max-height:min(78vh,720px);overflow:auto;border:1px solid var(--border);border-radius:26px 26px 20px 20px;background:var(--card-bg,#111827);box-shadow:0 -18px 55px rgba(0,0,0,.35);padding:10px 16px 18px;transform:translateY(24px);opacity:0;transition:transform .2s ease,opacity .18s ease;pointer-events:auto}
+.v273-sheet-wrap.open .v273-sheet-backdrop{opacity:1}
+.v273-sheet-wrap.open .v273-sheet{transform:none;opacity:1}
+.v273-sheet-grab{width:46px;height:5px;border-radius:999px;background:rgba(148,163,184,.34);margin:0 auto 12px}
+.v273-sheet-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.v273-sheet-head>div{display:grid;gap:3px}
+.v273-sheet-head small{font-size:.61rem;letter-spacing:.14em;font-weight:900;color:var(--primary)}
+.v273-sheet-head h3{margin:0;font-size:1.15rem}
+.v273-sheet-head p{margin:0;color:var(--text-dim);font-size:.71rem;line-height:1.45}
+.v273-sheet-close{width:40px;height:40px;border-radius:13px;border:1px solid var(--border);background:rgba(148,163,184,.08);color:var(--text);display:grid;place-items:center;flex:none}
+.v273-sheet-close svg{width:18px;height:18px}
+.v273-feature-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.v273-feature-card{width:100%;border:1px solid var(--border);border-radius:18px;background:rgba(15,23,42,.55);color:var(--text);padding:13px;text-align:left;display:grid;grid-template-columns:42px minmax(0,1fr) 18px;gap:10px;align-items:start;font:inherit;cursor:pointer}
+.v273-feature-card:active{transform:scale(.985)}
+.v273-feature-icon{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:rgba(45,212,191,.10);color:var(--primary)}
+.v273-feature-icon svg{width:19px;height:19px}
+.v273-feature-copy{display:grid;min-width:0;gap:2px}
+.v273-feature-copy>b{font-size:.68rem;color:var(--primary)}
+.v273-feature-copy>strong{font-size:.84rem;line-height:1.25}
+.v273-feature-copy>small{font-size:.66rem;line-height:1.42;color:var(--text-dim)}
+.v273-feature-copy>em{font-style:normal;font-size:.59rem;color:#94a3b8;margin-top:4px;line-height:1.35}
+.v273-chevron{width:17px;height:17px;color:#64748b;margin-top:11px}
+body.v273-sheet-open{overflow:hidden}
+
+@media (max-width:759px){
+  #planning .v273-feature-switcher{margin:9px 0 11px;padding:12px;border-radius:19px}
+  #planning .v273-feature-head{margin-bottom:10px}
+  #planning .v273-feature-head span{display:none}
+  #planning .v273-all-btn{min-width:44px;width:44px;padding:0}
+  #planning .v273-all-btn span{display:none}
+  #planning .v273-tab{min-width:104px;height:42px;padding:0 11px;font-size:.69rem}
+  .v273-sheet-wrap{padding:0;align-items:flex-end}
+  .v273-sheet{width:100%;max-height:82vh;border-radius:24px 24px 0 0;border-bottom:0;padding:9px 14px calc(18px + env(safe-area-inset-bottom))}
+  .v273-feature-list{grid-template-columns:1fr}
+  .v273-feature-card{grid-template-columns:40px minmax(0,1fr) 18px;padding:12px}
+  .v273-feature-icon{width:40px;height:40px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  #planning .v273-tab,.v273-sheet,.v273-sheet-backdrop{transition:none!important}
+}
+    </style>
+</head>
+<body>
+
+<div id="pin-lock-screen" aria-hidden="true">
+    <div class="pin-panel">
+        <div class="pin-logo"><i data-lucide="lock-keyhole"></i></div>
+        <h2 style="font-size:1.15rem; margin-bottom:6px">Agis Finance Terkunci</h2>
+        <div style="font-size:.75rem; color:#94a3b8">Masukkan PIN untuk membuka data keuangan.</div>
+        <input id="pin-unlock-input" class="pin-input" type="password" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••">
+        <div id="pin-error" class="pin-error"></div>
+        <button class="btn-primary" onclick="unlockApp()">Buka Aplikasi</button>
+    </div>
+</div>
+
+<div id="splash-screen">
+    <div class="spinner"></div>
+    <h3 style="letter-spacing: 3px; font-weight: 800;">AGIS FINANCE</h3>
+    <p style="color:var(--text-dim); font-size:0.8rem; margin-top: 10px;">VERSION 25.3.5 SMART TELEGRAM REMINDER</p>
+</div>
+
+<div class="container">
+    <div id="home" class="page active">
+        <div class="header">
+            <div style="display:flex; gap:10px; align-items:center">
+                <span id="statusBadge" class="status-badge status-online" onclick="flushOutbox()" title="Ketuk untuk coba sinkronisasi" style="cursor:pointer">Online</span>
+                <button onclick="togglePrivacy()" class="btn-icon" id="privacyBtn"><i data-lucide="eye"></i></button>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button onclick="lockApp()" class="btn-icon" id="pinLockBtn" style="display:none" title="Kunci aplikasi"><i data-lucide="lock-keyhole"></i></button>
+                <button onclick="toggleTheme()" class="btn-icon"><i data-lucide="sun-moon"></i></button>
+            </div>
+        </div>
+
+        <div class="v2535-balance-savings-row" aria-label="Ringkasan saldo dan tabungan">
+            <div class="master-balance v2534-balance-only" aria-label="Saldo tersedia">
+                <span class="master-amount" id="total-balance">Rp 0</span>
+            </div>
+            <div class="goal-info v2535-savings-inline" onclick="nav('settings')" title="Buka target tabungan">
+                <i data-lucide="target" aria-hidden="true"></i>
+                <span>Tabungan</span> <strong id="goal-amount">Rp 0</strong>
+            </div>
+        </div>
+
+        <div class="wallet-container">
+            <div class="w-card">
+                <div class="w-icon" style="background:rgba(45,212,191,0.1)"><i data-lucide="banknote" style="color:var(--primary)"></i></div>
+                <span class="w-name">Tunai</span>
+                <span class="w-val" id="w-cash">0</span>
+            </div>
+            <div class="w-card">
+                <div class="w-icon" style="background:rgba(59,130,246,0.1)"><i data-lucide="landmark" style="color:var(--accent)"></i></div>
+                <span class="w-name">Bank</span>
+                <span class="w-val" id="w-bank">0</span>
+            </div>
+            <div class="w-card">
+                <div class="w-icon" style="background:rgba(245,158,11,0.1)"><i data-lucide="smartphone" style="color:var(--warning)"></i></div>
+                <span class="w-name">E-Wallet</span>
+                <span class="w-val" id="w-e">0</span>
+            </div>
+        </div>
+
+        <div class="overview-grid">
+            <div class="overview-stat">
+                <span class="overview-label">Status</span>
+                <span class="overview-value" id="home-fin-status">—</span>
+                <div class="overview-note" id="home-fin-status-note">Menganalisa...</div>
+            </div>
+            <div class="overview-stat">
+                <span class="overview-label">Aman Hari Ini</span>
+                <span class="overview-value" id="home-safe-today" style="color:var(--primary)">Rp 0</span>
+                <div class="overview-note" id="home-safe-note">Sisa budget harian</div>
+            </div>
+            <div class="overview-stat">
+                <span class="overview-label">Keluar Hari Ini</span>
+                <span class="overview-value" id="home-spent-today" style="color:var(--danger)">Rp 0</span>
+                <div class="overview-note" id="home-spent-note">0 transaksi</div>
+            </div>
+            <div class="overview-stat">
+                <span class="overview-label">Target Tabungan</span>
+                <span class="overview-value" id="home-goal-progress">0%</span>
+                <div class="overview-note" id="home-sync-note">Sync bersih</div>
+            </div>
+            <div class="overview-stat carry-over-stat">
+                <div class="carry-over-row">
+                    <div>
+                        <span class="overview-label">Budget Tersimpan</span>
+                        <span class="overview-value" id="home-carry-over" style="color:var(--success)">Rp 0</span>
+                        <div class="overview-note" id="home-carry-note">Sisa jatah yang tidak dipakai akan masuk besok.</div>
+                    </div>
+                    <button class="carry-over-reset" onclick="resetCarryOver()" title="Reset budget tersimpan">Reset</button>
+                </div>
+            </div>
+            <div class="overview-stat">
+                <span class="overview-label">No-Spend Streak</span>
+                <span class="overview-value" id="home-no-spend-streak" style="color:var(--primary)">0 hari</span>
+                <div class="overview-note" id="home-no-spend-note">Hari tanpa belanja konsumtif</div>
+            </div>
+            <div class="overview-stat">
+                <span class="overview-label">Prediksi Akhir Bulan</span>
+                <span class="overview-value" id="home-eom-prediction">—</span>
+                <div class="overview-note" id="home-eom-note">Berdasarkan rata-rata 7 hari</div>
+            </div>
+            <div class="overview-stat recovery-stat">
+                <div class="carry-over-row">
+                    <div style="min-width:0;flex:1">
+                        <span class="overview-label">Recovery Target</span>
+                        <span class="overview-value" id="home-recovery-value">Belum dibuat</span>
+                        <div class="overview-note" id="home-recovery-note">Pulihkan buffer dari carry-over yang benar-benar sudah terkumpul.</div>
+                        <div class="recovery-progress"><span id="home-recovery-bar" style="width:0%"></span></div>
+                        <div class="recovery-actions">
+                            <button class="recovery-action" onclick="openRecoveryTarget()">Atur / Edit</button>
+                            <button class="recovery-action" onclick="clearRecoveryTarget()">Hapus Target</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card home-cashflow-card" style="padding:18px">
+            <div style="display:flex; justify-content:space-between; align-items:center">
+                <div style="font-weight:800; display:flex; gap:8px; align-items:center"><i data-lucide="chart-no-axes-combined" style="width:18px"></i> Cashflow Bulan Ini</div>
+                <span id="cashflow-month" style="font-size:.65rem; color:var(--text-dim); font-weight:800"></span>
+            </div>
+            <div class="cashflow-grid">
+                <div class="cashflow-stat"><span class="cashflow-label">Masuk</span><span class="cashflow-value" id="month-income" style="color:var(--success)">Rp 0</span></div>
+                <div class="cashflow-stat"><span class="cashflow-label">Keluar</span><span class="cashflow-value" id="month-expense" style="color:var(--danger)">Rp 0</span></div>
+                <div class="cashflow-stat"><span class="cashflow-label">Net</span><span class="cashflow-value" id="month-net">Rp 0</span></div>
+            </div>
+            <div class="cashflow-note" id="cashflow-note">Belum ada data cashflow bulan ini.</div>
+        </div>
+
+        <div class="advisor">
+            <div class="adv-icon"><i data-lucide="sparkles"></i></div>
+            <div class="adv-main">
+                <span style="font-weight:800; color:var(--primary); font-size:0.85rem; margin-bottom:5px">Smart Insight</span>
+                <div id="advisorContent" class="adv-scrollable">Menganalisa data...</div>
+            </div>
+        </div>
+
+        <div class="card home-chart-card">
+            <div style="display:flex; justify-content:space-between; margin-bottom:15px; align-items:center">
+                <div style="font-weight:700; display:flex; align-items:center; gap:8px"><i data-lucide="pie-chart"></i> Pengeluaran</div>
+                <div id="chart-total-val" style="font-weight:800; color:var(--danger)">Rp 0</div>
+            </div>
+            <div style="height:220px;"><canvas id="pieChart"></canvas></div>
+        </div>
+    </div>
+
+    <div id="history" class="page">
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px">
+                <h2 style="font-size:1rem; font-weight:700">Riwayat</h2>
+                <button onclick="exportToExcel()" style="padding:8px 15px; border-radius:12px; background:#22c55e; color:white; border:none; font-size:0.7rem; font-weight:800; cursor:pointer">XLSX</button>
+            </div>
+            <div class="filter-panel">
+                <input type="search" id="filterSearch" placeholder="Cari kategori, wallet, nama rutin..." oninput="renderAll()">
+                <div class="filter-grid">
+                    <input type="month" id="filterMonth" onchange="renderAll()">
+                    <select id="filterType" onchange="renderAll()">
+                        <option value="all">Semua jenis</option>
+                        <option value="expense">Pengeluaran</option>
+                        <option value="income">Pemasukan</option>
+                        <option value="transfer">Transfer</option>
+                    </select>
+                    <select id="filterWallet" onchange="renderAll()">
+                        <option value="all">Semua wallet</option>
+                        <option value="Tunai">Tunai</option><option value="Bank">Bank</option><option value="E-Wallet">E-Wallet</option>
+                    </select>
+                    <select id="filterCategory" onchange="renderAll()"><option value="all">Semua kategori</option></select>
+                    <input type="date" id="filterFrom" onchange="renderAll()" aria-label="Tanggal mulai">
+                    <input type="date" id="filterTo" onchange="renderAll()" aria-label="Tanggal akhir">
+                    <input type="text" id="filterMin" placeholder="Nominal minimum" inputmode="numeric" oninput="formatMoneyField(this);renderAll()">
+                    <input type="text" id="filterMax" placeholder="Nominal maksimum" inputmode="numeric" oninput="formatMoneyField(this);renderAll()">
+                </div>
+                <div class="filter-actions">
+                    <div class="filter-summary" id="historyFilterSummary">0 transaksi</div>
+                    <button class="filter-reset" onclick="resetHistoryFilters()">Reset Filter</button>
+                </div>
+            </div>
+            <div id="transList" style="max-height: 520px; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <div id="add" class="page">
+        <div class="card">
+            <h2 style="font-size:1rem; font-weight:700; margin-bottom:18px">Catat Transaksi</h2>
+            <div class="type-switch">
+                <button class="type-btn active" data-type="expense" onclick="setTransactionType('expense')">Pengeluaran</button>
+                <button class="type-btn" data-type="income" onclick="setTransactionType('income')">Pemasukan</button>
+                <button class="type-btn" data-type="transfer" onclick="setTransactionType('transfer')">Transfer</button>
+            </div>
+            <form id="transForm" onsubmit="return false">
+                <input type="hidden" id="t-type" value="expense">
+                <input type="date" id="t-date">
+                <div id="t-standard-fields">
+                    <select id="t-wallet">
+                        <option value="Tunai">💰 Tunai</option><option value="Bank">🏦 Bank</option><option value="E-Wallet">📱 E-Wallet</option>
+                    </select>
+                    <select id="t-cat"></select>
+                </div>
+                <div id="t-transfer-fields" class="form-hidden">
+                    <select id="t-from">
+                        <option value="Tunai">Dari: 💰 Tunai</option><option value="Bank">Dari: 🏦 Bank</option><option value="E-Wallet">Dari: 📱 E-Wallet</option>
+                    </select>
+                    <select id="t-to">
+                        <option value="Bank">Ke: 🏦 Bank</option><option value="E-Wallet">Ke: 📱 E-Wallet</option><option value="Tunai">Ke: 💰 Tunai</option>
+                    </select>
+                </div>
+                <input type="text" id="t-amount-display" placeholder="Nominal" inputmode="numeric" oninput="formatInput(this)">
+                <input type="hidden" id="t-amount">
+                <input type="text" id="t-note" maxlength="120" placeholder="Keterangan (opsional), contoh: makan siang / bensin">
+            </form>
+            <button class="btn-primary" onclick="saveTransaction()"><i data-lucide="check-circle"></i> Simpan Transaksi</button>
+        </div>
+    </div>
+
+    <div id="planning" class="page">
+        <div class="v2531-planning-head">
+            <div>
+                <span class="v2531-page-kicker">FINANCIAL PLAN</span>
+                <h2>Planning</h2>
+                <p>Budget, tagihan, rencana, realisasi, dan laporan. Buka satu fitur sesuai kebutuhan.</p>
+            </div>
+            <i data-lucide="calendar-range" aria-hidden="true"></i>
+        </div>
+        <div id="v2531-planning-host">
+            <div class="v2531-planning-loading">Menyiapkan data planning…</div>
+        </div>
+    </div>
+
+    <div id="settings" class="page">
+        <div class="card">
+            <h2 style="font-size:1rem; font-weight:700; margin-bottom:18px">Update Saldo</h2>
+            <input type="text" id="set-cash" placeholder="Saldo Tunai" inputmode="numeric" autocomplete="off" oninput="formatMoneyField(this)">
+            <input type="text" id="set-bank" placeholder="Saldo Bank" inputmode="numeric" autocomplete="off" oninput="formatMoneyField(this)">
+            <input type="text" id="set-e" placeholder="Saldo E-Wallet" inputmode="numeric" autocomplete="off" oninput="formatMoneyField(this)">
+            <button class="btn-primary" onclick="updateWallets()">Simpan Saldo</button>
+        </div>
+
+        <div class="card">
+            <div class="section-title" style="margin-bottom:8px"><i data-lucide="scale"></i> Rekonsiliasi Saldo</div>
+            <div class="mini-muted" style="margin-bottom:13px">Kalau saldo asli berbeda dengan aplikasi, masukkan saldo sebenarnya. Selisih akan dibuat sebagai transaksi penyesuaian agar riwayat tetap bisa dilacak.</div>
+            <select id="reconcile-wallet">
+                <option value="Tunai">Tunai</option><option value="Bank">Bank</option><option value="E-Wallet">E-Wallet</option>
+            </select>
+            <input type="text" id="reconcile-actual" placeholder="Saldo sebenarnya" inputmode="numeric" autocomplete="off" oninput="formatMoneyField(this)">
+            <button class="btn-primary" onclick="reconcileWallet()">Cocokkan Saldo</button>
+        </div>
+
+        <div class="card">
+            <div class="section-head">
+                <div class="section-title"><i data-lucide="target"></i> Target Tabungan</div>
+                <button class="btn-small" onclick="openGoalModal()">+ Target</button>
+            </div>
+            <div id="goalsList" class="goal-list"></div>
+            <div class="mini-muted" style="margin-top:12px">Nominal “disisihkan” dianggap dana yang tidak boleh dibelanjakan dan dikurangi dari Saldo Tersedia.</div>
+        </div>
+
+        <div class="card limit-guard-card">
+            <div class="section-title" style="margin-bottom:6px"><i data-lucide="gauge"></i> Limit Bulanan <span class="purpose-chip guard">Pagar Maksimum</span></div>
+            <div class="mini-muted purpose-explain" style="margin-bottom:14px">Limit = batas keras/alarm. Berbeda dari Budget Planning yang merupakan target alokasi ideal. Contoh: budget makan Rp300k, limit maksimal Rp400k.</div>
+            <select id="l-cat"><option>Makan & Minum</option><option>Transportasi</option><option>Belanja</option><option>Tagihan</option><option>Hiburan</option></select>
+            <input type="text" id="l-amount" placeholder="Batas maksimum bulan ini" inputmode="numeric" autocomplete="off" oninput="formatMoneyField(this)">
+            <button class="btn-primary" style="background:var(--danger)" onclick="setLimit()">Pasang Batas Maksimum</button>
+        </div>
+
+        <div class="card">
+            <div class="section-head">
+                <div class="section-title"><i data-lucide="repeat-2"></i> Transaksi Rutin</div>
+                <button class="btn-small" onclick="openRecurringModal()">+ Rutin</button>
+            </div>
+            <div id="recurringList" class="recurring-list"></div>
+            <div class="mini-muted" style="margin-top:12px">Saat tanggal jatuh tempo tercapai, transaksi dibuat otomatis. Tetap bekerja offline dan masuk antrean sync.</div>
+        </div>
+
+        <div class="card">
+            <div class="health-head">
+                <div>
+                    <div class="section-title"><i data-lucide="activity"></i> Health & Sync Control</div>
+                    <div class="mini-muted" style="margin-top:5px">Cek antrean, konflik, integritas data lokal, backup, dan keamanan dasar.</div>
+                </div>
+                <div id="healthScore" class="health-score"><span>—</span><small>/100</small></div>
+            </div>
+            <div id="healthIssues" class="health-issues"></div>
+            <button class="btn-small" style="width:100%;margin-top:10px" onclick="runHealthCheck(true)">Jalankan Health Check</button>
+            <div style="border-top:1px solid var(--border);margin:15px 0 10px;padding-top:12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <div><div style="font-weight:900;font-size:.78rem">Konflik Sync</div><div class="mini-muted">Muncul kalau data yang sama berubah di dua perangkat.</div></div>
+                <span id="conflictCount" class="sync-pill good">0 konflik</span>
+            </div>
+            <div id="conflictList" class="conflict-list"></div>
+        </div>
+
+        <div class="card">
+            <div class="section-title"><i data-lucide="shield-check"></i> Keamanan PIN</div>
+            <div class="security-state">
+                <span><span id="securityDot" class="security-dot"></span><span id="pinStatusText">PIN belum aktif</span></span>
+                <span class="mini-muted">4–6 digit</span>
+            </div>
+            <button class="btn-primary" id="pinPrimaryBtn" onclick="configurePin()">Aktifkan PIN</button>
+            <button class="btn-small" id="pinDisableBtn" onclick="disablePin()" style="display:none; width:100%; margin-top:9px; color:var(--danger)">Nonaktifkan PIN</button>
+            <div class="security-grid">
+                <div>
+                    <div class="mini-muted" style="margin-bottom:5px">Auto-lock setelah ditinggal</div>
+                    <select id="autoLockSelect" onchange="saveAutoLockSetting()">
+                        <option value="30000">30 detik</option><option value="60000">1 menit</option><option value="300000">5 menit</option><option value="900000">15 menit</option><option value="0">Jangan otomatis</option>
+                    </select>
+                </div>
+                <div>
+                    <div class="mini-muted" style="margin-bottom:5px">Proteksi percobaan PIN</div>
+                    <div class="issue-row good" style="padding:10px;margin:0">Cooldown bertingkat aktif</div>
+                </div>
+            </div>
+            <div class="mini-muted" style="margin-top:12px">PIN hanya mengunci tampilan aplikasi di perangkat ini. PIN tidak dikirim ke Firestore dan bukan enkripsi database.</div>
+        </div>
+
+        <div class="card">
+            <div class="section-head">
+                <div class="section-title"><i data-lucide="history"></i> Audit Log</div>
+                <button class="btn-small" onclick="clearAuditLog()">Bersihkan</button>
+            </div>
+            <div id="auditList" class="audit-list"></div>
+            <div class="mini-muted" style="margin-top:10px">Audit disimpan lokal dan ikut Backup JSON. PIN/nominal PIN tidak pernah dicatat.</div>
+        </div>
+
+        <div class="card">
+            <div class="section-title" style="margin-bottom:14px"><i data-lucide="archive"></i> Backup & Restore</div>
+            <div class="backup-grid">
+                <button class="btn-primary" onclick="exportBackup()">Backup JSON</button>
+                <button class="btn-primary" style="background:var(--accent);color:white" onclick="document.getElementById('v245-import').click()">Restore / Import</button>
+            </div>
+            <input type="file" id="v245-import" accept="application/json,.json" style="display:none" onchange="previewImportV245(event)">
+            <div id="v245-preview" class="v245-preview" hidden></div>
+            <div class="mini-muted" style="margin-top:12px">Backup schema v27 memuat wallet, transaksi, planning, Decision Lab, tracking penjualan/stok, dan tracking cicilan. Backup v22–v26 tetap bisa direstore. PIN sengaja tidak ikut diekspor.</div>
+        </div>
+    </div>
+</div>
+
+<button class="calc-toggle" onclick="toggleCalc()"><i data-lucide="calculator"></i></button>
+<div id="calc-container">
+    <div class="calc-header" id="calcHeader"><div class="drag-handle"></div></div>
+    <div class="calc-display" id="calcDisplay">0</div>
+    <div class="calc-grid">
+        <button class="calc-btn op" onclick="calcClear()">C</button>
+        <button class="calc-btn op" onclick="calcPush('/')">/</button>
+        <button class="calc-btn op" onclick="calcPush('*')">×</button>
+        <button class="calc-btn op" onclick="calcPop()"><i data-lucide="delete" style="width:18px"></i></button>
+        <button class="calc-btn" onclick="calcPush('7')">7</button>
+        <button class="calc-btn" onclick="calcPush('8')">8</button>
+        <button class="calc-btn" onclick="calcPush('9')">9</button>
+        <button class="calc-btn op" onclick="calcPush('-')">-</button>
+        <button class="calc-btn" onclick="calcPush('4')">4</button>
+        <button class="calc-btn" onclick="calcPush('5')">5</button>
+        <button class="calc-btn" onclick="calcPush('6')">6</button>
+        <button class="calc-btn op" onclick="calcPush('+')">+</button>
+        <button class="calc-btn" onclick="calcPush('1')">1</button>
+        <button class="calc-btn" onclick="calcPush('2')">2</button>
+        <button class="calc-btn" onclick="calcPush('3')">3</button>
+        <button class="calc-btn" style="background:var(--primary); color:#000; grid-row: span 2;" onclick="calcEqual()">=</button>
+        <button class="calc-btn" style="grid-column: span 2;" onclick="calcPush('0')">0</button>
+        <button class="calc-btn" onclick="calcPush('.')">.</button>
+    </div>
+    <div class="resizer" id="calcResizer"></div>
+</div>
+
+<nav class="nav-bar v2531-nav" aria-label="Navigasi utama">
+    <div class="nav-item active" role="button" tabindex="0" aria-label="Home" title="Home" onclick="nav('home', this)"><i data-lucide="layout-grid"></i></div>
+    <div class="nav-item" role="button" tabindex="0" aria-label="Riwayat" title="Riwayat" onclick="nav('history', this)"><i data-lucide="receipt-text"></i></div>
+    <div class="nav-item nav-add" role="button" tabindex="0" aria-label="Catat transaksi" title="Catat transaksi" onclick="nav('add', this)"><span class="nav-add-button"><i data-lucide="plus"></i></span></div>
+    <div class="nav-item" role="button" tabindex="0" aria-label="Planning" title="Planning" onclick="nav('planning', this)"><i data-lucide="calendar-range"></i></div>
+    <div class="nav-item" role="button" tabindex="0" aria-label="Pengaturan" title="Pengaturan" onclick="nav('settings', this)"><i data-lucide="sliders-horizontal"></i></div>
+</nav>
+
+<script>
+    // --- FIREBASE v8 LOCAL (v20) ---
+    const firebaseConfig = { apiKey: "AIzaSyDBrKNaJsfGEVHSsPj9xWCPzZCsO_8UUJ8", authDomain: "trackingmoney-bb785.firebaseapp.com", projectId: "trackingmoney-bb785", storageBucket: "trackingmoney-bb785.firebasestorage.app", messagingSenderId: "725272276839", appId: "1:725272276839:web:d95f1643629c97edae09c2" };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const FieldValue = firebase.firestore.FieldValue;
+
+    let store = { trans: [], incomes: [], transfers: [], goals: [], recurring: [], audit: [], conflicts: [], wallets: { Tunai: 0, Bank: 0, "E-Wallet": 0 }, goal: 0, limits: {} };
+    let pieChart;
+    let syncInProgress = false;
+    let lastSyncError = '';
+    const LOCAL_SNAPSHOT_KEY = 'agis_finance_snapshot_v24';
+    const LEGACY_SNAPSHOT_KEYS = ['agis_finance_snapshot_v23', 'agis_finance_snapshot_v22', 'agis_finance_snapshot_v21', 'agis_finance_snapshot_v20_1'];
+    const OUTBOX_KEY = 'agis_finance_outbox_v21';
+    const PIN_KEY = 'agis_finance_pin_v23';
+    const AUTO_LOCK_KEY = 'agis_finance_auto_lock_v24';
+    const PIN_GUARD_KEY = 'agis_finance_pin_guard_v24';
+    const DEVICE_ID_KEY = 'agis_finance_device_id_v24';
+    const LAST_BACKUP_KEY = 'agis_finance_last_backup_v24';
+    const CARRY_OVER_KEY = 'agis_finance_carry_over_v24_1';
+    const RECOVERY_TARGET_KEY = 'agis_finance_recovery_target_v24_2';
+    const CARRY_OVER_EXCLUDED_CATEGORIES = ['Keluarga & Pemberian', 'Penyesuaian Saldo'];
+    const SYSTEM_ADJUSTMENT_CATEGORY = 'Penyesuaian Saldo';
+    const LEGACY_GOAL_MIGRATION_KEY = 'agis_finance_goal_migrated_v23';
+    const moneyFormatter = new Intl.NumberFormat('id-ID');
+    const fmt = (n) => "Rp " + moneyFormatter.format(Number(n) || 0);
+    const DEVICE_ID = (() => { let id = localStorage.getItem(DEVICE_ID_KEY); if (!id) { id = `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,10)}`; localStorage.setItem(DEVICE_ID_KEY,id); } return id; })();
+    let localSnapshotSavedAt = 0;
+
+    function normalizeWallets(wallets = {}) {
+        return {
+            Tunai: Number(wallets.Tunai) || 0,
+            Bank: Number(wallets.Bank) || 0,
+            "E-Wallet": Number(wallets["E-Wallet"]) || 0
+        };
+    }
+
+    function auditEvent(action, detail = '', meta = {}) {
+        const entry = {
+            id: `audit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`,
+            action: String(action || 'Perubahan'), detail: String(detail || ''),
+            entityType: meta.entityType || '', entityId: meta.entityId || '',
+            createdAt: Date.now(), deviceId: DEVICE_ID
+        };
+        store.audit = [entry, ...(store.audit || [])].slice(0, 500);
+        persistLocalSnapshot();
+        return entry;
+    }
+
+    function userPendingOps() {
+        return readOutbox().filter(op => !String(op.type || '').startsWith('audit')).length;
+    }
+
+    function entityInfoFromOp(op) {
+        const type = String(op?.type || '');
+        if (type.includes('Expense')) return { entityType:'expense', entityId:op.expenseId || '' };
+        if (type.includes('Income')) return { entityType:'income', entityId:op.incomeId || '' };
+        if (type.includes('Transfer')) return { entityType:'transfer', entityId:op.transferId || '' };
+        if (type.includes('SavingsGoal')) return { entityType:'goal', entityId:op.goalItemId || '' };
+        if (type.includes('Recurring')) return { entityType:'recurring', entityId:op.recurringId || '' };
+        return { entityType:'unknown', entityId:'' };
+    }
+
+    function isServerConflict(serverData, op) {
+        if (!serverData || op?.force) return false;
+        const baseUpdatedAt = Number(op.baseUpdatedAt || 0);
+        const baseVersion = Number(op.baseVersion || 0);
+        if (!baseUpdatedAt && !baseVersion) return false;
+        const serverUpdatedAt = Number(serverData.updatedAt || serverData.createdAt || 0);
+        const serverVersion = Number(serverData.version || 1);
+        const otherDevice = serverData.deviceId && serverData.deviceId !== DEVICE_ID;
+        return !!otherDevice && ((baseUpdatedAt && serverUpdatedAt > baseUpdatedAt) || (baseVersion && serverVersion > baseVersion));
+    }
+
+    function conflictError(serverData) {
+        const err = new Error('Data berubah di perangkat lain.');
+        err.agisConflict = true;
+        err.serverData = serverData || null;
+        return err;
+    }
+
+    function registerConflict(op, serverData) {
+        const info = entityInfoFromOp(op);
+        const localData = op.data || null;
+        const deleting = String(op.type || '').toLowerCase().includes('delete');
+        // Setelah konflik ditemukan, UI dikembalikan ke versi cloud supaya saldo dan record
+        // tetap konsisten sampai user memilih versi yang ingin dipakai.
+        if (['expense','income','transfer'].includes(info.entityType)) {
+            if (deleting) {
+                if (serverData) {
+                    applyWalletDeltaLocal(walletDeltaForData(info.entityType, serverData, 1));
+                    replaceRecord(info.entityType, info.entityId, serverData);
+                    const key = localKeyForEntity(info.entityType);
+                    if (key) store[key] = store[key].map(x => x.id === info.entityId ? {id:info.entityId,...serverData} : x);
+                }
+            } else if (localData && serverData) {
+                applyWalletDeltaLocal(combineWalletDeltas(walletDeltaForData(info.entityType, localData, -1), walletDeltaForData(info.entityType, serverData, 1)));
+                const key = localKeyForEntity(info.entityType);
+                if (key) store[key] = [{id:info.entityId,...serverData}, ...store[key].filter(x => x.id !== info.entityId)];
+            }
+        } else if (info.entityType === 'goal') {
+            if (serverData) store.goals = [{id:info.entityId,...serverData}, ...store.goals.filter(x=>x.id!==info.entityId)];
+            else store.goals = store.goals.filter(x=>x.id!==info.entityId);
+            recomputeReservedGoal(false);
+        } else if (info.entityType === 'recurring') {
+            if (serverData) store.recurring = [{id:info.entityId,...serverData}, ...store.recurring.filter(x=>x.id!==info.entityId)];
+            else store.recurring = store.recurring.filter(x=>x.id!==info.entityId);
+        }
+        const conflict = {
+            id: `conflict_${info.entityType}_${info.entityId}_${Date.now()}`,
+            entityType: info.entityType, entityId: info.entityId,
+            localData, serverData: serverData || null,
+            originalOp: { ...op }, detectedAt: Date.now()
+        };
+        store.conflicts = [conflict, ...(store.conflicts || []).filter(c => !(c.entityType === info.entityType && c.entityId === info.entityId))].slice(0,100);
+        auditEvent('Konflik sync terdeteksi', `${info.entityType} ${info.entityId || ''}`.trim(), info);
+        persistLocalSnapshot();
+        renderAll();
+    }
+
+    function summarizeData(data, type = '') {
+        if (!data) return 'Tidak ada data';
+        if (type === 'transfer') return `${data.tanggal || '-'} · ${data.dari || '?'} → ${data.ke || '?'} · ${fmt(data.nominal)}`;
+        if (['expense','income'].includes(type)) return `${data.tanggal || '-'} · ${data.kategori || '-'} · ${data.dompet || '-'} · ${fmt(data.nominal)}`;
+        if (type === 'goal') return `${data.name || 'Target'} · ${fmt(data.saved)} / ${fmt(data.target)}`;
+        if (type === 'recurring') return `${data.name || 'Rutin'} · ${data.type || '-'} · ${fmt(data.nominal)}`;
+        return 'Versi data tersedia';
+    }
+
+    // Mirror lokal sebagai fallback tambahan di atas cache IndexedDB Firestore.
+    // Tujuannya: setelah reload tanpa internet, saldo terakhir langsung tersedia dan tidak kembali ke Rp 0.
+    function persistLocalSnapshot() {
+        try {
+            localSnapshotSavedAt = Date.now();
+            localStorage.setItem(LOCAL_SNAPSHOT_KEY, JSON.stringify({
+                wallets: normalizeWallets(store.wallets),
+                goal: Number(store.goal) || 0,
+                limits: store.limits || {},
+                trans: Array.isArray(store.trans) ? store.trans.slice(0, 1500) : [],
+                incomes: Array.isArray(store.incomes) ? store.incomes.slice(0, 1500) : [],
+                transfers: Array.isArray(store.transfers) ? store.transfers.slice(0, 1500) : [],
+                goals: Array.isArray(store.goals) ? store.goals.slice(0, 300) : [],
+                recurring: Array.isArray(store.recurring) ? store.recurring.slice(0, 300) : [],
+                audit: Array.isArray(store.audit) ? store.audit.slice(0, 500) : [],
+                conflicts: Array.isArray(store.conflicts) ? store.conflicts.slice(0, 100) : [],
+                savedAt: localSnapshotSavedAt
+            }));
+        } catch (err) {
+            console.warn('Local snapshot gagal disimpan:', err);
+        }
+    }
+
+    function restoreLocalSnapshot() {
+        try {
+            let raw = localStorage.getItem(LOCAL_SNAPSHOT_KEY);
+            if (!raw) {
+                for (const key of LEGACY_SNAPSHOT_KEYS) {
+                    raw = localStorage.getItem(key);
+                    if (raw) break;
+                }
+            }
+            if (!raw) return false;
+            const cached = JSON.parse(raw);
+            store.wallets = normalizeWallets(cached.wallets);
+            store.goal = Number(cached.goal) || 0;
+            store.limits = cached.limits && typeof cached.limits === 'object' ? cached.limits : {};
+            store.trans = Array.isArray(cached.trans) ? cached.trans : [];
+            store.incomes = Array.isArray(cached.incomes) ? cached.incomes : [];
+            store.transfers = Array.isArray(cached.transfers) ? cached.transfers : [];
+            store.goals = Array.isArray(cached.goals) ? cached.goals : [];
+            store.recurring = Array.isArray(cached.recurring) ? cached.recurring : [];
+            store.audit = Array.isArray(cached.audit) ? cached.audit : [];
+            store.conflicts = Array.isArray(cached.conflicts) ? cached.conflicts : [];
+            localSnapshotSavedAt = Number(cached.savedAt) || 0;
+            if (store.goals.length) recomputeReservedGoal(false);
+            persistLocalSnapshot();
+            return true;
+        } catch (err) {
+            console.warn('Local snapshot gagal dibaca:', err);
+            return false;
+        }
+    }
+
+    function readOutbox() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+            console.warn('Outbox gagal dibaca:', err);
+            return [];
+        }
+    }
+
+    function writeOutbox(queue) {
+        try {
+            localStorage.setItem(OUTBOX_KEY, JSON.stringify(queue));
+        } catch (err) {
+            console.error('Outbox gagal disimpan:', err);
+        }
+        updateNetworkStatus();
+    }
+
+    function enqueueSync(op) {
+        const queue = readOutbox();
+        if (!queue.some(item => item.opId === op.opId)) queue.push(op);
+        writeOutbox(queue);
+    }
+
+    function mergePendingCollection(cloudItems, kind) {
+        const queue = readOutbox();
+        const config = {
+            expense: { add:'addExpense', edit:'editExpense', del:'deleteExpense', id:'expenseId' },
+            income: { add:'addIncome', edit:'editIncome', del:'deleteIncome', id:'incomeId' },
+            transfer: { add:'addTransfer', edit:'editTransfer', del:'deleteTransfer', id:'transferId' },
+            goalItem: { add:'addSavingsGoal', edit:'editSavingsGoal', del:'deleteSavingsGoal', id:'goalItemId' },
+            recurring: { add:'addRecurring', edit:'editRecurring', del:'deleteRecurring', id:'recurringId' }
+        }[kind];
+        const byId = new Map((cloudItems || []).map(item => [item.id, item]));
+        queue.forEach(op => {
+            if (!config) return;
+            const id = op[config.id];
+            if (!id) return;
+            if (op.type === config.del) byId.delete(id);
+            else if (op.type === config.add || op.type === config.edit) byId.set(id, { id, ...op.data, pendingSync: true });
+        });
+        return [...byId.values()].sort((a, b) => {
+            if (['expense','income','transfer'].includes(kind)) {
+                const dateCmp = String(b.tanggal || '').localeCompare(String(a.tanggal || ''));
+                return dateCmp || (Number(b.createdAt || 0) - Number(a.createdAt || 0));
+            }
+            return Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0);
+        });
+    }
+
+    function addWalletDelta(target, wallet, delta) {
+        if (!wallet || !delta) return;
+        target[wallet] = (target[wallet] || 0) + Number(delta || 0);
+    }
+
+    function walletDeltaForData(type, data, direction = 1) {
+        const delta = {};
+        const nominal = Number(data?.nominal || 0) * direction;
+        if (type === 'expense') addWalletDelta(delta, data?.dompet, -nominal);
+        else if (type === 'income') addWalletDelta(delta, data?.dompet, nominal);
+        else if (type === 'transfer') {
+            addWalletDelta(delta, data?.dari, -nominal);
+            addWalletDelta(delta, data?.ke, nominal);
+        }
+        return delta;
+    }
+
+    function combineWalletDeltas(...deltas) {
+        const result = {};
+        deltas.forEach(delta => Object.entries(delta || {}).forEach(([wallet, value]) => addWalletDelta(result, wallet, value)));
+        return Object.fromEntries(Object.entries(result).filter(([, value]) => Number(value) !== 0));
+    }
+
+    function applyWalletDeltaLocal(delta) {
+        const next = normalizeWallets(store.wallets);
+        Object.entries(delta || {}).forEach(([wallet, value]) => { next[wallet] = (Number(next[wallet]) || 0) + Number(value || 0); });
+        store.wallets = normalizeWallets(next);
+    }
+
+    function applyWalletDeltaServer(transaction, walletRef, delta) {
+        const payload = {};
+        Object.entries(delta || {}).forEach(([wallet, value]) => {
+            if (Number(value)) payload[wallet] = FieldValue.increment(Number(value));
+        });
+        if (Object.keys(payload).length) transaction.set(walletRef, payload, { merge: true });
+    }
+
+    async function refreshFromServer() {
+        if (!navigator.onLine || readOutbox().length) return;
+        try {
+            const [walletSnap, goalSnap, limitsSnap, expenseSnap, incomeSnap, transferSnap, goalsSnap, recurringSnap] = await Promise.all([
+                db.collection('config').doc('wallets').get({ source: 'server' }),
+                db.collection('config').doc('goal').get({ source: 'server' }),
+                db.collection('config').doc('limits').get({ source: 'server' }),
+                db.collection('pengeluaran').orderBy('tanggal', 'desc').get({ source: 'server' }),
+                db.collection('pemasukan').orderBy('tanggal', 'desc').get({ source: 'server' }),
+                db.collection('transfer').orderBy('tanggal', 'desc').get({ source: 'server' }),
+                db.collection('goals').get({ source: 'server' }),
+                db.collection('recurring').get({ source: 'server' })
+            ]);
+            if (walletSnap.exists) store.wallets = normalizeWallets(walletSnap.data());
+            if (goalSnap.exists) store.goal = Number(goalSnap.data().amount) || 0;
+            if (limitsSnap.exists) { const {updatedAt,deviceId,...limitData}=limitsSnap.data()||{}; store.limits=limitData; }
+            store.trans = expenseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            store.incomes = incomeSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            store.transfers = transferSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            store.goals = goalsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            store.recurring = recurringSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            if (store.goals.length) recomputeReservedGoal(false);
+            persistLocalSnapshot();
+            renderAll();
+        } catch (err) {
+            console.warn('Refresh server tertunda:', err);
+        }
+    }
+
+    async function executeOutboxOperation(op) {
+        const walletRef = db.collection('config').doc('wallets');
+        const collectionOps = {
+            addExpense: ['pengeluaran', 'expenseId', 'expense', 'add'],
+            editExpense: ['pengeluaran', 'expenseId', 'expense', 'edit'],
+            deleteExpense: ['pengeluaran', 'expenseId', 'expense', 'delete'],
+            addIncome: ['pemasukan', 'incomeId', 'income', 'add'],
+            editIncome: ['pemasukan', 'incomeId', 'income', 'edit'],
+            deleteIncome: ['pemasukan', 'incomeId', 'income', 'delete'],
+            addTransfer: ['transfer', 'transferId', 'transfer', 'add'],
+            editTransfer: ['transfer', 'transferId', 'transfer', 'edit'],
+            deleteTransfer: ['transfer', 'transferId', 'transfer', 'delete']
+        };
+        const versionedSimpleOps = {
+            addSavingsGoal: ['goals', 'goalItemId', 'add'],
+            editSavingsGoal: ['goals', 'goalItemId', 'edit'],
+            deleteSavingsGoal: ['goals', 'goalItemId', 'delete'],
+            addRecurring: ['recurring', 'recurringId', 'add'],
+            editRecurring: ['recurring', 'recurringId', 'edit'],
+            deleteRecurring: ['recurring', 'recurringId', 'delete']
+        };
+        const restoreOps = {
+            restoreExpense: ['pengeluaran', 'expenseId'],
+            restoreIncome: ['pemasukan', 'incomeId'],
+            restoreTransfer: ['transfer', 'transferId']
+        };
+
+        if (collectionOps[op.type]) {
+            const [collectionName, idField, transactionType, action] = collectionOps[op.type];
+            const itemRef = db.collection(collectionName).doc(op[idField]);
+            await db.runTransaction(async transaction => {
+                const itemSnap = await transaction.get(itemRef);
+                const serverData = itemSnap.exists ? (itemSnap.data() || {}) : null;
+                if ((action === 'edit' || action === 'delete') && itemSnap.exists && isServerConflict(serverData, op)) throw conflictError(serverData);
+                if (action === 'add') {
+                    if (itemSnap.exists) return;
+                    applyWalletDeltaServer(transaction, walletRef, walletDeltaForData(transactionType, op.data, 1));
+                    transaction.set(itemRef, op.data);
+                } else if (action === 'delete') {
+                    if (!itemSnap.exists) return;
+                    applyWalletDeltaServer(transaction, walletRef, walletDeltaForData(transactionType, serverData || op.data || {}, -1));
+                    transaction.delete(itemRef);
+                } else {
+                    if (!itemSnap.exists) {
+                        applyWalletDeltaServer(transaction, walletRef, walletDeltaForData(transactionType, op.data, 1));
+                        transaction.set(itemRef, op.data);
+                        return;
+                    }
+                    const delta = combineWalletDeltas(
+                        walletDeltaForData(transactionType, serverData || {}, -1),
+                        walletDeltaForData(transactionType, op.data, 1)
+                    );
+                    applyWalletDeltaServer(transaction, walletRef, delta);
+                    transaction.set(itemRef, op.data);
+                }
+            });
+            return;
+        }
+
+        if (versionedSimpleOps[op.type]) {
+            const [collectionName, idField, action] = versionedSimpleOps[op.type];
+            const ref = db.collection(collectionName).doc(op[idField]);
+            await db.runTransaction(async transaction => {
+                const snap = await transaction.get(ref);
+                const serverData = snap.exists ? (snap.data() || {}) : null;
+                if ((action === 'edit' || action === 'delete') && snap.exists && isServerConflict(serverData, op)) throw conflictError(serverData);
+                if (action === 'delete') { if (snap.exists) transaction.delete(ref); }
+                else transaction.set(ref, op.data || {});
+            });
+            return;
+        }
+
+        if (restoreOps[op.type]) {
+            const [collectionName, idField] = restoreOps[op.type];
+            await db.collection(collectionName).doc(op[idField]).set(op.data || {});
+            return;
+        }
+        if (op.type === 'setWallets') { await walletRef.set({ ...normalizeWallets(op.data), updatedAt:Number(op.updatedAt)||Date.now(), deviceId:DEVICE_ID }); return; }
+        if (op.type === 'setGoal') { await db.collection('config').doc('goal').set({ amount:Number(op.amount)||0, updatedAt:Number(op.updatedAt)||Date.now(), deviceId:DEVICE_ID }); return; }
+        if (op.type === 'setLimit') { await db.collection('config').doc('limits').set({ [op.category]:Number(op.amount)||0, updatedAt:Number(op.updatedAt)||Date.now(), deviceId:DEVICE_ID }, { merge:true }); return; }
+    }
+
+    async function flushOutbox() {
+        if (syncInProgress || !navigator.onLine) return;
+        let queue = readOutbox();
+        if (!queue.length) { updateNetworkStatus(); return; }
+        syncInProgress = true; lastSyncError = ''; updateNetworkStatus();
+        try {
+            while (navigator.onLine && queue.length) {
+                const op = queue[0];
+                try {
+                    await executeOutboxOperation(op);
+                    queue.shift(); writeOutbox(queue);
+                } catch (err) {
+                    if (err?.agisConflict) {
+                        registerConflict(op, err.serverData);
+                        queue.shift(); writeOutbox(queue);
+                        continue;
+                    }
+                    throw err;
+                }
+            }
+        } catch (err) {
+            lastSyncError = err?.message || 'Sinkronisasi gagal';
+            console.warn('Outbox sync:', err);
+        } finally {
+            syncInProgress = false; updateNetworkStatus();
+            if (!readOutbox().length) refreshFromServer();
+            else if (navigator.onLine) setTimeout(flushOutbox, 10000);
+        }
+    }
+
+    function digitsOnly(value) {
+        return String(value ?? '').replace(/\D/g, '');
+    }
+
+    window.formatMoneyField = (el) => {
+        const digits = digitsOnly(el.value);
+        el.value = digits ? moneyFormatter.format(Number(digits)) : '';
+    };
+
+    function parseMoneyField(id) {
+        const digits = digitsOnly(document.getElementById(id)?.value);
+        return digits ? Number(digits) : 0;
+    }
+
+    // Formatter nominal transaksi + hidden raw value.
+    window.formatInput = (el) => {
+        const val = digitsOnly(el.value);
+        const hidden = document.getElementById('t-amount');
+        if (!val) {
+            if (hidden) hidden.value = '';
+            el.value = '';
+            return;
+        }
+        el.value = moneyFormatter.format(Number(val));
+        if (hidden) hidden.value = val;
+    };
+
+    const EXPENSE_CATEGORIES = ['Makan & Minum','Transportasi','Belanja','Tagihan','Hiburan','Keluarga & Pemberian','Lainnya'];
+    const INCOME_CATEGORIES = ['Gaji','Bonus','Penjualan','Refund','Hadiah','Lainnya'];
+
+    function fillCategoryOptions(values, selected = '') {
+        const select = document.getElementById('t-cat');
+        if (!select) return;
+        select.innerHTML = values.map(v => `<option${v === selected ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+    }
+
+    window.setTransactionType = (type) => {
+        const valid = ['expense','income','transfer'].includes(type) ? type : 'expense';
+        document.getElementById('t-type').value = valid;
+        document.querySelectorAll('.type-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.type === valid));
+        const transferFields = document.getElementById('t-transfer-fields');
+        const standardFields = document.getElementById('t-standard-fields');
+        transferFields.classList.toggle('form-hidden', valid !== 'transfer');
+        standardFields.classList.toggle('form-hidden', valid === 'transfer');
+        if (valid === 'expense') fillCategoryOptions(EXPENSE_CATEGORIES);
+        if (valid === 'income') fillCategoryOptions(INCOME_CATEGORIES);
+    };
+
+    function populateHistoryFilterOptions() {
+        const el = document.getElementById('filterCategory'); if (!el) return;
+        const current = el.value || 'all';
+        const values = [...new Set([...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES, SYSTEM_ADJUSTMENT_CATEGORY])].sort((a,b)=>a.localeCompare(b,'id'));
+        el.innerHTML = '<option value="all">Semua kategori</option>' + values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        if (values.includes(current)) el.value = current;
+    }
+
+    window.resetHistoryFilters = () => {
+        const ids = ['filterSearch','filterFrom','filterTo','filterMin','filterMax'];
+        ids.forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+        const month=document.getElementById('filterMonth'); if(month) month.value='';
+        const type=document.getElementById('filterType'); if(type) type.value='all';
+        const wallet=document.getElementById('filterWallet'); if(wallet) wallet.value='all';
+        const cat=document.getElementById('filterCategory'); if(cat) cat.value='all';
+        renderAll();
+    };
+
+    function historyMatchesFilters(t) {
+        const month = document.getElementById('filterMonth')?.value || '';
+        const type = document.getElementById('filterType')?.value || 'all';
+        const wallet = document.getElementById('filterWallet')?.value || 'all';
+        const category = document.getElementById('filterCategory')?.value || 'all';
+        const from = document.getElementById('filterFrom')?.value || '';
+        const to = document.getElementById('filterTo')?.value || '';
+        const min = Number(digitsOnly(document.getElementById('filterMin')?.value));
+        const max = Number(digitsOnly(document.getElementById('filterMax')?.value));
+        const q = (document.getElementById('filterSearch')?.value || '').trim().toLowerCase();
+        if (month && !String(t.tanggal || '').startsWith(month)) return false;
+        if (type !== 'all' && t.type !== type) return false;
+        if (from && String(t.tanggal || '') < from) return false;
+        if (to && String(t.tanggal || '') > to) return false;
+        if (min && Number(t.nominal || 0) < min) return false;
+        if (max && Number(t.nominal || 0) > max) return false;
+        if (wallet !== 'all') {
+            const matchesWallet = t.type === 'transfer' ? (t.dari === wallet || t.ke === wallet) : t.dompet === wallet;
+            if (!matchesWallet) return false;
+        }
+        if (category !== 'all' && (t.type === 'transfer' || t.kategori !== category)) return false;
+        if (q) {
+            const hay = [t.kategori,t.dompet,t.dari,t.ke,t.recurringName,t.tanggal,t.id,t.type].filter(Boolean).join(' ').toLowerCase();
+            if (!hay.includes(q)) return false;
+        }
+        return true;
+    }
+
+    function syncWalletInputsFromStore(force = false) {
+        const map = { 'set-cash': 'Tunai', 'set-bank': 'Bank', 'set-e': 'E-Wallet' };
+        Object.entries(map).forEach(([id, wallet]) => {
+            const el = document.getElementById(id);
+            if (!el || (!force && document.activeElement === el)) return;
+            el.value = moneyFormatter.format(Number(store.wallets[wallet]) || 0);
+        });
+    }
+
+    const hideSplash = () => {
+        const splash = document.getElementById('splash-screen');
+        if (splash) { splash.style.opacity = '0'; setTimeout(() => splash.style.display = 'none', 500); }
+    };
+    setTimeout(hideSplash, 4000);
+
+    window.nav = (id, el) => {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        const navItems = [...document.querySelectorAll('.nav-item')];
+        navItems.forEach(n => n.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+
+        if (el) {
+            el.classList.add('active');
+        } else {
+            const pageOrder = ['home', 'history', 'add', 'planning', 'settings'];
+            const index = pageOrder.indexOf(id);
+            if (index >= 0 && navItems[index]) navItems[index].classList.add('active');
+        }
+
+        if (id === 'settings') syncWalletInputsFromStore(true);
+        if (id === 'add') {
+            const transactionDate = document.getElementById('t-date');
+            if (transactionDate) {
+                const today = localDateKey();
+                const previousAutoDate = transactionDate.dataset.autoDate || '';
+                if (!transactionDate.value || transactionDate.value === previousAutoDate) transactionDate.value = today;
+                transactionDate.dataset.autoDate = today;
+            }
+        }
+    };
+
+    window.togglePrivacy = () => {
+        const isBlur = document.body.classList.toggle('blur-active');
+        localStorage.setItem('agis_privacy', isBlur);
+        document.getElementById('privacyBtn').innerHTML = isBlur ? '<i data-lucide="eye-off"></i>' : '<i data-lucide="eye"></i>';
+        lucide.createIcons();
+    };
+
+    window.toggleTheme = () => {
+        const isLight = document.body.classList.toggle('light-mode');
+        localStorage.setItem('agis_theme', isLight ? 'light' : 'dark');
+        renderAll();
+    };
+
+    function showWriteError(err) {
+        console.error(err);
+        Swal.fire('Gagal menyimpan', err?.message || 'Perubahan gagal disinkronkan.', 'error');
+    }
+
+    function queuedNotice(onlineText, offlineText) {
+        if (navigator.onLine) return Swal.fire({ title: 'Tersimpan', text: onlineText, icon: 'success', timer: 1100, showConfirmButton: false });
+        return Swal.fire({ title: 'Disimpan offline', text: offlineText, icon: 'info', timer: 1700, showConfirmButton: false });
+    }
+
+    function addLocalRecord(type, id, data) {
+        const record = { id, ...data, pendingSync: true };
+        if (type === 'expense') store.trans = [record, ...store.trans.filter(t => t.id !== id)];
+        else if (type === 'income') store.incomes = [record, ...store.incomes.filter(t => t.id !== id)];
+        else store.transfers = [record, ...store.transfers.filter(t => t.id !== id)];
+    }
+
+    window.saveTransaction = () => {
+        const d = document.getElementById('t-date').value;
+        const type = document.getElementById('t-type').value || 'expense';
+        const amount = parseInt(document.getElementById('t-amount').value, 10);
+        if (!amount || amount <= 0 || !d) return Swal.fire('Error', 'Data belum lengkap', 'warning');
+
+        let id, data, op;
+        const createdAt = Date.now();
+        const catatan = (document.getElementById('t-note')?.value || '').trim().slice(0,120);
+        if (type === 'expense') {
+            const ref = db.collection('pengeluaran').doc(); id = ref.id;
+            data = { tanggal:d, dompet:document.getElementById('t-wallet').value, kategori:document.getElementById('t-cat').value, nominal:amount, catatan, createdAt, updatedAt:createdAt, version:1, deviceId:DEVICE_ID };
+            op = { opId:`add:${id}`, type:'addExpense', expenseId:id, data, createdAt };
+        } else if (type === 'income') {
+            const ref = db.collection('pemasukan').doc(); id = ref.id;
+            data = { tanggal:d, dompet:document.getElementById('t-wallet').value, kategori:document.getElementById('t-cat').value, nominal:amount, catatan, createdAt, updatedAt:createdAt, version:1, deviceId:DEVICE_ID };
+            op = { opId:`income:${id}`, type:'addIncome', incomeId:id, data, createdAt };
+        } else {
+            const from = document.getElementById('t-from').value;
+            const to = document.getElementById('t-to').value;
+            if (from === to) return Swal.fire('Transfer tidak valid', 'Wallet asal dan tujuan harus berbeda.', 'warning');
+            const ref = db.collection('transfer').doc(); id = ref.id;
+            data = { tanggal:d, dari:from, ke:to, nominal:amount, catatan, createdAt, updatedAt:createdAt, version:1, deviceId:DEVICE_ID };
+            op = { opId:`transfer:${id}`, type:'addTransfer', transferId:id, data, createdAt };
+        }
+
+        enqueueSync(op);
+        applyWalletDeltaLocal(walletDeltaForData(type, data, 1));
+        addLocalRecord(type, id, data);
+        persistLocalSnapshot();
+        renderAll();
+
+        document.getElementById('t-amount-display').value = '';
+        document.getElementById('t-amount').value = '';
+        const noteInput = document.getElementById('t-note'); if (noteInput) noteInput.value = '';
+        nav('home');
+        const label = type === 'expense' ? 'Pengeluaran' : type === 'income' ? 'Pemasukan' : 'Transfer';
+        auditEvent(`Tambah ${label}`, `${type === 'transfer' ? `${data.dari} → ${data.ke}` : `${data.kategori} · ${data.dompet}`} · ${fmt(data.nominal)}`, {entityType:type, entityId:id});
+        queuedNotice(`${label} berhasil dicatat.`, `${label} tersimpan di perangkat dan akan dikirim saat internet kembali.`);
+        flushOutbox();
+    };
+
+    window.updateWallets = () => {
+        const before = normalizeWallets(store.wallets);
+        const data = {
+            Tunai: parseMoneyField('set-cash'),
+            Bank: parseMoneyField('set-bank'),
+            "E-Wallet": parseMoneyField('set-e')
+        };
+
+        store.wallets = normalizeWallets(data);
+        persistLocalSnapshot();
+        renderAll();
+        const walletNow = Date.now();
+        enqueueSync({ opId:`wallets:${walletNow}`, type:'setWallets', data, createdAt:walletNow, updatedAt:walletNow });
+        auditEvent('Update saldo manual', `Tunai ${fmt(before.Tunai)} → ${fmt(data.Tunai)} · Bank ${fmt(before.Bank)} → ${fmt(data.Bank)} · E-Wallet ${fmt(before['E-Wallet'])} → ${fmt(data['E-Wallet'])}`);
+
+        ['set-cash', 'set-bank', 'set-e'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        nav('home');
+        queuedNotice('Saldo diperbarui.', 'Saldo tersimpan di perangkat dan akan sinkron saat online.');
+        flushOutbox();
+    };
+
+    window.setLimit = () => {
+        const cat = document.getElementById('l-cat').value;
+        const val = parseMoneyField('l-amount');
+        store.limits = { ...store.limits, [cat]: val };
+        persistLocalSnapshot();
+        renderAll();
+        const limitNow = Date.now();
+        enqueueSync({ opId:`limit:${cat}:${limitNow}`, type:'setLimit', category:cat, amount:val, createdAt:limitNow, updatedAt:limitNow });
+        auditEvent('Ubah limit', `${cat}: ${fmt(val)}`, {entityType:'limit', entityId:cat});
+        document.getElementById('l-amount').value = '';
+        queuedNotice(`Batas ${cat} disimpan.`, `Batas ${cat} tersimpan di perangkat dan akan sinkron saat online.`);
+        flushOutbox();
+    };
+
+    // Legacy compatibility only. UI goal lama sudah tidak punya #goal-input.
+    // Jangan biarkan pemanggilan lama/console menyebabkan null error.
+    window.setGoal = () => {
+        const input = document.getElementById('goal-input');
+        if (!input) {
+            console.warn('[Finance] setGoal legacy diabaikan: #goal-input sudah tidak dipakai. Gunakan Savings Goal UI.');
+            return false;
+        }
+        const amount = parseMoneyField('goal-input');
+        store.goal = amount;
+        persistLocalSnapshot();
+        renderAll();
+        const now = Date.now();
+        enqueueSync({ opId: `goal:${now}`, type: 'setGoal', amount, createdAt: now, updatedAt: now });
+        input.value = '';
+        queuedNotice('Target tabungan disimpan.', 'Target tabungan tersimpan di perangkat dan akan sinkron saat online.');
+        flushOutbox();
+        return true;
+    };
+
+
+    function recomputeReservedGoal(syncCloud = true) {
+        store.goal = (store.goals || []).reduce((sum, g) => sum + Math.max(0, Number(g.saved) || 0), 0);
+        persistLocalSnapshot();
+        if (syncCloud) {const now=Date.now();enqueueSync({opId:`goal-total:${now}`,type:'setGoal',amount:store.goal,createdAt:now,updatedAt:now});}
+        return store.goal;
+    }
+
+    function migrateLegacyGoal() {
+        if ((store.goals || []).length || !(Number(store.goal) > 0)) return;
+        const data = {
+            name: 'Tabungan Utama', target: Number(store.goal), saved: Number(store.goal), deadline: '',
+            createdAt:Date.now(), updatedAt:Date.now(), version:1, deviceId:DEVICE_ID, migrated:true
+        };
+        const id = 'legacy-main-goal';
+        store.goals = [{ id, ...data, pendingSync:true }];
+        localStorage.setItem(LEGACY_GOAL_MIGRATION_KEY, 'true');
+        persistLocalSnapshot();
+        enqueueSync({ opId:`goal-item-migrate:${id}`, type:'addSavingsGoal', goalItemId:id, data, createdAt:Date.now() });
+    }
+
+    function goalById(id) { return (store.goals || []).find(g => g.id === id); }
+
+    window.openGoalModal = async (id = '') => {
+        const current = id ? goalById(id) : null;
+        const result = await Swal.fire({
+            title: current ? 'Edit Target Tabungan' : 'Target Tabungan Baru',
+            html: `<div style="text-align:left">
+                <label class="mini-muted">Nama target</label><input id="sg-name" class="modal-field" maxlength="40" value="${escapeHtml(current?.name || '')}" placeholder="Contoh: Laptop">
+                <label class="mini-muted">Target</label><input id="sg-target" class="modal-field" inputmode="numeric" value="${current ? moneyFormatter.format(Number(current.target)||0) : ''}" oninput="formatMoneyField(this)" placeholder="5.000.000">
+                <label class="mini-muted">Sudah disisihkan</label><input id="sg-saved" class="modal-field" inputmode="numeric" value="${current ? moneyFormatter.format(Number(current.saved)||0) : '0'}" oninput="formatMoneyField(this)" placeholder="0">
+                <label class="mini-muted">Deadline (opsional)</label><input id="sg-deadline" class="modal-field" type="date" value="${escapeHtml(current?.deadline || '')}">
+            </div>`,
+            showCancelButton:true, confirmButtonText:'Simpan', cancelButtonText:'Batal', focusConfirm:false,
+            preConfirm: () => {
+                const name = document.getElementById('sg-name').value.trim();
+                const target = Number(digitsOnly(document.getElementById('sg-target').value));
+                const saved = Number(digitsOnly(document.getElementById('sg-saved').value));
+                const deadline = document.getElementById('sg-deadline').value;
+                if (!name || !target || target <= 0) return Swal.showValidationMessage('Nama dan target wajib diisi.');
+                if (saved < 0) return Swal.showValidationMessage('Nominal disisihkan tidak valid.');
+                return { name, target, saved, deadline };
+            }
+        });
+        if (!result.isConfirmed) return;
+        const now = Date.now();
+        const goalId = id || db.collection('goals').doc().id;
+        const data = { ...result.value, createdAt:current?.createdAt || now, updatedAt:now, version:(Number(current?.version)||0)+1, deviceId:DEVICE_ID };
+        store.goals = [{ id:goalId, ...data, pendingSync:true }, ...(store.goals || []).filter(g => g.id !== goalId)];
+        enqueueSync({ opId:`${id ? 'edit' : 'add'}-goal-item:${goalId}:${now}`, type:id?'editSavingsGoal':'addSavingsGoal', goalItemId:goalId, data, createdAt:now, baseUpdatedAt:Number(current?.updatedAt || current?.createdAt || 0), baseVersion:Number(current?.version || 0) });
+        auditEvent(id ? 'Edit target tabungan' : 'Tambah target tabungan', `${data.name} · target ${fmt(data.target)} · disisihkan ${fmt(data.saved)}`, {entityType:'goal',entityId:goalId});
+        recomputeReservedGoal(true);
+        renderAll(); flushOutbox();
+        queuedNotice('Target tabungan disimpan.', 'Target tersimpan offline dan akan sinkron saat online.');
+    };
+
+    window.addGoalFunds = async (id) => {
+        const current = goalById(id); if (!current) return;
+        const r = await Swal.fire({ title:`Sisihkan ke ${escapeHtml(current.name)}`, input:'text', inputLabel:'Nominal', inputPlaceholder:'100.000', showCancelButton:true, confirmButtonText:'Sisihkan',
+            didOpen:() => { const input = Swal.getInput(); if(input){ input.setAttribute('inputmode','numeric'); input.oninput=()=>formatMoneyField(input); } },
+            inputValidator:v => Number(digitsOnly(v)) > 0 ? undefined : 'Masukkan nominal yang valid.' });
+        if (!r.isConfirmed) return;
+        const add = Number(digitsOnly(r.value));
+        const now = Date.now();
+        const data = { ...current, saved:Math.min(Number(current.target)||0,(Number(current.saved)||0)+add), updatedAt:now, version:(Number(current.version)||1)+1, deviceId:DEVICE_ID };
+        delete data.id; delete data.pendingSync;
+        store.goals = store.goals.map(g => g.id === id ? {id, ...data, pendingSync:true} : g);
+        enqueueSync({ opId:`fund-goal:${id}:${now}`, type:'editSavingsGoal', goalItemId:id, data, createdAt:now, baseUpdatedAt:Number(current.updatedAt||current.createdAt||0), baseVersion:Number(current.version||1) });
+        auditEvent('Sisihkan dana tabungan', `${current.name}: +${fmt(add)}`, {entityType:'goal',entityId:id});
+        recomputeReservedGoal(true); renderAll(); flushOutbox();
+    };
+
+    window.deleteGoal = async (id) => {
+        const current = goalById(id); if (!current) return;
+        const r = await Swal.fire({title:'Hapus target?', text:`${current.name} akan dihapus dan dana yang disisihkan kembali dianggap tersedia.`, icon:'warning', showCancelButton:true, confirmButtonText:'Hapus', cancelButtonText:'Batal'});
+        if (!r.isConfirmed) return;
+        store.goals = store.goals.filter(g => g.id !== id);
+        const now=Date.now();
+        enqueueSync({opId:`delete-goal-item:${id}:${now}`, type:'deleteSavingsGoal', goalItemId:id, data:current, createdAt:now, baseUpdatedAt:Number(current.updatedAt||current.createdAt||0), baseVersion:Number(current.version||1)});
+        auditEvent('Hapus target tabungan', `${current.name} · ${fmt(current.saved)} disisihkan`, {entityType:'goal',entityId:id});
+        recomputeReservedGoal(true); renderAll(); flushOutbox();
+    };
+
+    function renderGoals() {
+        const el = document.getElementById('goalsList'); if (!el) return;
+        const goals = [...(store.goals || [])].sort((a,b)=>(a.deadline||'9999').localeCompare(b.deadline||'9999'));
+        if (!goals.length) { el.innerHTML='<div class="empty-box">Belum ada target tabungan. Buat target pertama lu.</div>'; return; }
+        el.innerHTML = goals.map(g => {
+            const target=Math.max(1,Number(g.target)||0), saved=Math.max(0,Number(g.saved)||0), pct=Math.min(100,(saved/target)*100);
+            const deadline=g.deadline ? new Date(`${g.deadline}T00:00:00`).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'}) : 'Tanpa deadline';
+            const conflict=(store.conflicts||[]).some(c=>c.entityType==='goal'&&c.entityId===g.id); const pending=conflict?'<span style="color:var(--danger)"> • Konflik sync</span>':(g.pendingSync?'<span style="color:var(--warning)"> • Menunggu sync</span>':'');
+            return `<div class="goal-card"><div class="goal-top"><div><div class="goal-name">${escapeHtml(g.name)}</div><div class="mini-muted">${fmt(saved)} / ${fmt(target)}${pending}</div></div><div style="font-weight:900;color:var(--primary);font-size:.8rem">${pct.toFixed(0)}%</div></div><div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div><div class="mini-muted">🎯 ${deadline} · Kurang ${fmt(Math.max(0,target-saved))}</div><div class="mini-actions"><button class="mini-action primary" onclick="addGoalFunds('${escapeJs(g.id)}')">+ Sisihkan</button><button class="mini-action" onclick="openGoalModal('${escapeJs(g.id)}')">Edit</button><button class="mini-action danger" onclick="deleteGoal('${escapeJs(g.id)}')">Hapus</button></div></div>`;
+        }).join('');
+    }
+
+    function recurringById(id){ return (store.recurring||[]).find(r=>r.id===id); }
+    function recurringCategoryOptions(type, selected='') {
+        const arr = type==='income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+        return arr.map(v=>`<option value="${escapeHtml(v)}"${v===selected?' selected':''}>${escapeHtml(v)}</option>`).join('');
+    }
+    window.updateRecurringModalCategories = () => {
+        const type=document.getElementById('rr-type')?.value || 'expense'; const cat=document.getElementById('rr-cat');
+        if(cat) cat.innerHTML=recurringCategoryOptions(type);
+    };
+
+    window.openRecurringModal = async (id='') => {
+        const current=id?recurringById(id):null;
+        const today=localDateKey();
+        const type=current?.type || 'expense';
+        const result=await Swal.fire({
+            title: current?'Edit Transaksi Rutin':'Transaksi Rutin Baru',
+            html:`<div style="text-align:left">
+                <label class="mini-muted">Nama</label><input id="rr-name" class="modal-field" maxlength="40" value="${escapeHtml(current?.name||'')}" placeholder="Contoh: Kuota bulanan">
+                <label class="mini-muted">Jenis</label><select id="rr-type" class="modal-field" onchange="updateRecurringModalCategories()"><option value="expense"${type==='expense'?' selected':''}>Pengeluaran</option><option value="income"${type==='income'?' selected':''}>Pemasukan</option></select>
+                <label class="mini-muted">Wallet</label><select id="rr-wallet" class="modal-field">${walletOptionHtml(current?.dompet||'Tunai')}</select>
+                <label class="mini-muted">Kategori</label><select id="rr-cat" class="modal-field">${recurringCategoryOptions(type,current?.kategori||'')}</select>
+                <label class="mini-muted">Nominal</label><input id="rr-amount" class="modal-field" inputmode="numeric" value="${current?moneyFormatter.format(Number(current.nominal)||0):''}" oninput="formatMoneyField(this)" placeholder="100.000">
+                <label class="mini-muted">Frekuensi</label><select id="rr-frequency" class="modal-field"><option value="monthly"${current?.frequency==='monthly'?' selected':''}>Bulanan</option><option value="weekly"${current?.frequency==='weekly'?' selected':''}>Mingguan</option></select>
+                <label class="mini-muted">Jatuh tempo berikutnya</label><input id="rr-next" class="modal-field" type="date" value="${escapeHtml(current?.nextDate||today)}">
+                <label style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:.75rem"><input id="rr-active" type="checkbox" style="width:auto;margin:0" ${current?.active===false?'':'checked'}> Aktif</label>
+            </div>`,
+            showCancelButton:true, confirmButtonText:'Simpan', cancelButtonText:'Batal', focusConfirm:false,
+            preConfirm:()=>{
+                const data={name:document.getElementById('rr-name').value.trim(),type:document.getElementById('rr-type').value,dompet:document.getElementById('rr-wallet').value,kategori:document.getElementById('rr-cat').value,nominal:Number(digitsOnly(document.getElementById('rr-amount').value)),frequency:document.getElementById('rr-frequency').value,nextDate:document.getElementById('rr-next').value,active:document.getElementById('rr-active').checked};
+                if(!data.name||!data.nominal||!data.nextDate) return Swal.showValidationMessage('Nama, nominal, dan tanggal wajib diisi.');
+                return data;
+            }
+        });
+        if(!result.isConfirmed)return;
+        const now=Date.now(), rid=id||db.collection('recurring').doc().id;
+        const data={...result.value,anchorDay:result.value.frequency==='monthly'?Number(result.value.nextDate.slice(8,10)):null,createdAt:current?.createdAt||now,updatedAt:now};
+        store.recurring=[{id:rid,...data,pendingSync:true},...(store.recurring||[]).filter(r=>r.id!==rid)];
+        enqueueSync({opId:`${id?'edit':'add'}-recurring:${rid}:${now}`,type:id?'editRecurring':'addRecurring',recurringId:rid,data,createdAt:now});
+        persistLocalSnapshot(); renderAll(); processRecurringTransactions(); flushOutbox();
+        queuedNotice('Transaksi rutin disimpan.', 'Jadwal rutin tersimpan offline dan akan sync saat online.');
+    };
+
+    window.toggleRecurring = (id) => {
+        const current=recurringById(id); if(!current)return; const now=Date.now();
+        const data={...current,active:current.active===false?true:false,updatedAt:now,version:(Number(current.version)||1)+1,deviceId:DEVICE_ID}; delete data.id; delete data.pendingSync;
+        store.recurring=store.recurring.map(r=>r.id===id?{id,...data,pendingSync:true}:r);
+        enqueueSync({opId:`toggle-recurring:${id}:${now}`,type:'editRecurring',recurringId:id,data,createdAt:now,baseUpdatedAt:Number(current.updatedAt||current.createdAt||0),baseVersion:Number(current.version||1)});
+        auditEvent(data.active?'Aktifkan transaksi rutin':'Jeda transaksi rutin',current.name,{entityType:'recurring',entityId:id});
+        persistLocalSnapshot(); renderAll(); processRecurringTransactions(); flushOutbox();
+    };
+
+    window.deleteRecurring = async (id) => {
+        const current=recurringById(id); if(!current)return;
+        const r=await Swal.fire({title:'Hapus transaksi rutin?',text:current.name,icon:'warning',showCancelButton:true,confirmButtonText:'Hapus',cancelButtonText:'Batal'}); if(!r.isConfirmed)return;
+        store.recurring=store.recurring.filter(x=>x.id!==id); const now=Date.now();
+        enqueueSync({opId:`delete-recurring:${id}:${now}`,type:'deleteRecurring',recurringId:id,data:current,createdAt:now,baseUpdatedAt:Number(current.updatedAt||current.createdAt||0),baseVersion:Number(current.version||1)});
+        auditEvent('Hapus transaksi rutin',current.name,{entityType:'recurring',entityId:id});
+        persistLocalSnapshot(); renderAll(); flushOutbox();
+    };
+
+    function renderRecurring(){
+        const el=document.getElementById('recurringList'); if(!el)return;
+        const rows=[...(store.recurring||[])].sort((a,b)=>String(a.nextDate||'').localeCompare(String(b.nextDate||'')));
+        if(!rows.length){el.innerHTML='<div class="empty-box">Belum ada transaksi rutin.</div>';return;}
+        el.innerHTML=rows.map(r=>{const next=r.nextDate?new Date(`${r.nextDate}T00:00:00`).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'}):'-'; const type=r.type==='income'?'Pemasukan':'Pengeluaran'; const conflict=(store.conflicts||[]).some(c=>c.entityType==='recurring'&&c.entityId===r.id); const pending=conflict?'<span style="color:var(--danger)"> • Konflik sync</span>':(r.pendingSync?'<span style="color:var(--warning)"> • Menunggu sync</span>':''); return `<div class="recurring-card" style="opacity:${r.active===false?.6:1}"><div class="recurring-top"><div><div class="recurring-name">${escapeHtml(r.name)}</div><div class="mini-muted">${type} · ${escapeHtml(r.dompet)} · ${escapeHtml(r.kategori)}${pending}</div></div><div style="font-weight:900;color:${r.type==='income'?'var(--success)':'var(--danger)'}">${fmt(r.nominal)}</div></div><div class="mini-muted" style="margin-top:8px">🔁 ${r.frequency==='weekly'?'Mingguan':'Bulanan'} · Berikutnya ${next}</div><div class="mini-actions"><button class="mini-action primary" onclick="toggleRecurring('${escapeJs(r.id)}')">${r.active===false?'Aktifkan':'Jeda'}</button><button class="mini-action" onclick="openRecurringModal('${escapeJs(r.id)}')">Edit</button><button class="mini-action danger" onclick="deleteRecurring('${escapeJs(r.id)}')">Hapus</button></div></div>`}).join('');
+    }
+
+    function advanceRecurringDate(dateKey, frequency, anchorDay=null){
+        const d=dateFromKey(dateKey);
+        if(frequency==='weekly') d.setDate(d.getDate()+7);
+        else { const day=Number(anchorDay)||d.getDate(); d.setDate(1); d.setMonth(d.getMonth()+1); const max=new Date(d.getFullYear(),d.getMonth()+1,0).getDate(); d.setDate(Math.min(day,max)); }
+        return localDateKey(d);
+    }
+    let recurringProcessing=false;
+    function processRecurringTransactions(){
+        if(recurringProcessing)return; recurringProcessing=true;
+        try{
+            const today=localDateKey(); let changed=false;
+            (store.recurring||[]).forEach(rule=>{
+                if(rule.active===false||!rule.nextDate)return;
+                let due=rule.nextDate, loops=0;
+                while(due<=today && loops<24){
+                    const type=rule.type==='income'?'income':'expense';
+                    const collection=type==='income'?'pemasukan':'pengeluaran';
+                    const id=`${rule.id}_${due}`;
+                    const list=type==='income'?store.incomes:store.trans;
+                    if(!list.some(t=>t.id===id)){
+                        const createdAt=Date.now(); const data={tanggal:due,dompet:rule.dompet,kategori:rule.kategori,nominal:Number(rule.nominal)||0,createdAt,updatedAt:createdAt,version:1,deviceId:DEVICE_ID,recurringId:rule.id,recurringName:rule.name};
+                        const op=type==='income'?{opId:`income:${id}`,type:'addIncome',incomeId:id,data,createdAt:Date.now()}:{opId:`add:${id}`,type:'addExpense',expenseId:id,data,createdAt:Date.now()};
+                        enqueueSync(op); applyWalletDeltaLocal(walletDeltaForData(type,data,1)); addLocalRecord(type,id,data); auditEvent('Transaksi rutin otomatis',`${rule.name} · ${fmt(data.nominal)}`,{entityType:type,entityId:id}); changed=true;
+                    }
+                    due=advanceRecurringDate(due,rule.frequency,rule.anchorDay); loops++;
+                }
+                if(due!==rule.nextDate){
+                    const now=Date.now(); const data={...rule,nextDate:due,updatedAt:now,version:(Number(rule.version)||1)+1,deviceId:DEVICE_ID}; delete data.id; delete data.pendingSync;
+                    store.recurring=store.recurring.map(r=>r.id===rule.id?{id:rule.id,...data,pendingSync:true}:r);
+                    enqueueSync({opId:`advance-recurring:${rule.id}:${now}`,type:'editRecurring',recurringId:rule.id,data,createdAt:now,baseUpdatedAt:Number(rule.updatedAt||rule.createdAt||0),baseVersion:Number(rule.version||1)}); changed=true;
+                }
+            });
+            if(changed){persistLocalSnapshot();renderAll();flushOutbox();}
+        } finally {recurringProcessing=false;}
+    }
+
+    function cleanBackupRecord(item){ const x={...(item||{})}; delete x.pendingSync; return x; }
+    function migrateBackupPayload(parsed) {
+        const version = Number(parsed?.schemaVersion || parsed?.version || 22);
+        const d = parsed?.data || parsed;
+        if (!d || !d.wallets || !Array.isArray(d.trans)) throw new Error('Format backup tidak dikenali.');
+        return { version, data:{
+            wallets:normalizeWallets(d.wallets), goal:Number(d.goal)||0,
+            limits:d.limits&&typeof d.limits==='object'?d.limits:{},
+            trans:Array.isArray(d.trans)?d.trans.map(cleanBackupRecord):[],
+            incomes:Array.isArray(d.incomes)?d.incomes.map(cleanBackupRecord):[],
+            transfers:Array.isArray(d.transfers)?d.transfers.map(cleanBackupRecord):[],
+            goals:Array.isArray(d.goals)?d.goals.map(cleanBackupRecord):[],
+            recurring:Array.isArray(d.recurring)?d.recurring.map(cleanBackupRecord):[],
+            audit:Array.isArray(d.audit)?d.audit.map(cleanBackupRecord):[],
+            v25:d.v25&&typeof d.v25==='object'?d.v25:null,
+            v26:d.v26&&typeof d.v26==='object'?d.v26:null,
+            v27:d.v27&&typeof d.v27==='object'?d.v27:null,
+            carryOver:d.carryOver&&typeof d.carryOver==='object'?d.carryOver:null,
+            recoveryTarget:d.recoveryTarget&&typeof d.recoveryTarget==='object'?d.recoveryTarget:null
+        }};
+    }
+
+    window.exportBackup = () => {
+        const carryOver = typeof readCarryOverState === 'function' ? readCarryOverState() : null;
+        const recoveryTarget = typeof readRecoveryTarget === 'function' ? readRecoveryTarget() : null;
+        const v25 = typeof window.getV25SnapshotData === 'function' ? window.getV25SnapshotData() : (()=>{try{return JSON.parse(localStorage.getItem('agis_finance_v25_planning')||'null')}catch{return null}})();
+        const v26 = typeof window.getV26DecisionData === 'function' ? window.getV26DecisionData() : null;
+        const v27 = typeof window.getV27TrackingData === 'function' ? window.getV27TrackingData() : (()=>{try{return JSON.parse(localStorage.getItem('agis_finance_v27_tracking')||'null')}catch{return null}})();
+        const payload={app:'Agis Finance',schemaVersion:27,compatibleFrom:22,exportedAt:new Date().toISOString(),deviceId:DEVICE_ID,data:{wallets:normalizeWallets(store.wallets),goal:Number(store.goal)||0,limits:store.limits||{},trans:(store.trans||[]).map(cleanBackupRecord),incomes:(store.incomes||[]).map(cleanBackupRecord),transfers:(store.transfers||[]).map(cleanBackupRecord),goals:(store.goals||[]).map(cleanBackupRecord),recurring:(store.recurring||[]).map(cleanBackupRecord),audit:(store.audit||[]).map(cleanBackupRecord),v25,v26,v27,carryOver,recoveryTarget}};
+        const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`AgisFinance_v27_Backup_${localDateKey()}.json`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+        localStorage.setItem(LAST_BACKUP_KEY,String(Date.now())); auditEvent('Backup dibuat','Schema v27 · Decision Lab + Tracking ikut'); renderHealth();
+    };
+
+    window.restoreBackupFile = async (event) => {
+        const file=event.target.files?.[0]; event.target.value=''; if(!file)return;
+        try{
+            const raw=await file.text(); const parsed=JSON.parse(raw); const migrated=migrateBackupPayload(parsed); const d=migrated.data;
+            const confirm=await Swal.fire({title:'Restore backup?',text:`Backup schema v${migrated.version} akan dimigrasikan ke v25 lalu digabungkan/sinkron ke cloud. PIN tidak berubah.`,icon:'warning',showCancelButton:true,confirmButtonText:'Restore',cancelButtonText:'Batal'}); if(!confirm.isConfirmed)return;
+            store.wallets=d.wallets; store.limits=d.limits; store.trans=d.trans; store.incomes=d.incomes; store.transfers=d.transfers; store.goals=d.goals; store.recurring=d.recurring; store.audit=d.audit;
+            if(d.v25){try{localStorage.setItem('agis_finance_v25_planning',JSON.stringify({...d.v25,bills:d.v25.bills||[],budgets:d.v25.budgets||{}}));}catch{}}
+            if(d.v26){try{localStorage.setItem('agis_finance_v26_decision_lab',JSON.stringify(d.v26));}catch{}}
+            if(d.v27){try{localStorage.setItem('agis_finance_v27_tracking',JSON.stringify(d.v27));}catch{}}
+            if(d.carryOver){try{writeCarryOverState({month:String(d.carryOver.month||''),balance:Math.max(0,Number(d.carryOver.balance)||0),lastDate:String(d.carryOver.lastDate||''),dailyBase:Math.max(0,Number(d.carryOver.dailyBase)||0),history:d.carryOver.history&&typeof d.carryOver.history==='object'?d.carryOver.history:{}});}catch(err){console.warn('Carry-over restore gagal:',err)}}
+            if(d.recoveryTarget){try{localStorage.setItem(RECOVERY_TARGET_KEY,JSON.stringify(d.recoveryTarget));}catch{}}
+            store.conflicts=[]; store.goal=store.goals.length?store.goals.reduce((sum,g)=>sum+(Number(g.saved)||0),0):d.goal;
+            const now=Date.now(); enqueueSync({opId:`restore-wallets:${now}`,type:'setWallets',data:store.wallets,createdAt:now,updatedAt:now}); enqueueSync({opId:`restore-goal-total:${now}`,type:'setGoal',amount:store.goal,createdAt:now,updatedAt:now}); Object.entries(store.limits).forEach(([category,amount])=>enqueueSync({opId:`restore-limit:${category}:${now}`,type:'setLimit',category,amount:Number(amount)||0,createdAt:now,updatedAt:now}));
+            store.trans.forEach(t=>{if(t.id)enqueueSync({opId:`restore-expense:${t.id}:${now}`,type:'restoreExpense',expenseId:t.id,data:cleanBackupRecord(t),createdAt:now,force:true})}); store.incomes.forEach(t=>{if(t.id)enqueueSync({opId:`restore-income:${t.id}:${now}`,type:'restoreIncome',incomeId:t.id,data:cleanBackupRecord(t),createdAt:now,force:true})}); store.transfers.forEach(t=>{if(t.id)enqueueSync({opId:`restore-transfer:${t.id}:${now}`,type:'restoreTransfer',transferId:t.id,data:cleanBackupRecord(t),createdAt:now,force:true})}); store.goals.forEach(g=>enqueueSync({opId:`restore-goal-item:${g.id}:${now}`,type:'addSavingsGoal',goalItemId:g.id,data:cleanBackupRecord(g),createdAt:now,force:true})); store.recurring.forEach(r=>enqueueSync({opId:`restore-recurring:${r.id}:${now}`,type:'addRecurring',recurringId:r.id,data:cleanBackupRecord(r),createdAt:now,force:true}));
+            auditEvent('Restore backup',`Schema v${migrated.version} → v27`); persistLocalSnapshot(); renderAll(); processRecurringTransactions(); flushOutbox(); Swal.fire('Backup dipulihkan','Data lokal, planning, Decision Lab, dan Tracking sudah dipulihkan lalu antrean sinkronisasi dibuat.','success');
+        }catch(err){Swal.fire('Restore gagal',err.message||'File backup rusak.','error');}
+    };
+
+    function bytesToBase64(bytes){let binary='';bytes.forEach(b=>binary+=String.fromCharCode(b));return btoa(binary)}
+    function base64ToBytes(value){const binary=atob(value);return Uint8Array.from(binary,c=>c.charCodeAt(0))}
+    function getPinConfig(){try{return JSON.parse(localStorage.getItem(PIN_KEY)||'null')}catch{return null}}
+    async function derivePinHash(pin,salt){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(pin),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:120000,hash:'SHA-256'},key,256);return bytesToBase64(new Uint8Array(bits))}
+    async function verifyPin(pin){const cfg=getPinConfig();if(!cfg)return true;return (await derivePinHash(pin,base64ToBytes(cfg.salt)))===cfg.hash}
+    function pinEnabled(){return !!getPinConfig()}
+    function getAutoLockMs(){const raw=localStorage.getItem(AUTO_LOCK_KEY);return raw===null?30000:Math.max(0,Number(raw)||0)}
+    window.saveAutoLockSetting=()=>{const el=document.getElementById('autoLockSelect');if(!el)return;localStorage.setItem(AUTO_LOCK_KEY,String(Number(el.value)||0));auditEvent('Ubah auto-lock',el.options[el.selectedIndex]?.text||`${el.value} ms`);updateSecurityUI()};
+    function getPinGuard(){try{return JSON.parse(localStorage.getItem(PIN_GUARD_KEY)||'{"failures":0,"blockedUntil":0}')}catch{return {failures:0,blockedUntil:0}}}
+    function savePinGuard(g){localStorage.setItem(PIN_GUARD_KEY,JSON.stringify({failures:Number(g.failures)||0,blockedUntil:Number(g.blockedUntil)||0}))}
+    function resetPinGuard(){savePinGuard({failures:0,blockedUntil:0})}
+    function updateSecurityUI(){const enabled=pinEnabled(); const txt=document.getElementById('pinStatusText'),dot=document.getElementById('securityDot'),main=document.getElementById('pinPrimaryBtn'),disable=document.getElementById('pinDisableBtn'),lock=document.getElementById('pinLockBtn'),sel=document.getElementById('autoLockSelect'); if(txt)txt.textContent=enabled?'PIN aktif':'PIN belum aktif';if(dot)dot.classList.toggle('on',enabled);if(main)main.textContent=enabled?'Ganti PIN':'Aktifkan PIN';if(disable)disable.style.display=enabled?'block':'none';if(lock)lock.style.display=enabled?'flex':'none';if(sel)sel.value=String(getAutoLockMs());}
+    async function askCurrentPin(){const r=await Swal.fire({title:'Masukkan PIN saat ini',input:'password',inputAttributes:{inputmode:'numeric',maxlength:'6',autocomplete:'off'},showCancelButton:true,confirmButtonText:'Lanjut',inputValidator:v=>/^\d{4,6}$/.test(v)?undefined:'PIN harus 4–6 digit.'});if(!r.isConfirmed)return false;if(!(await verifyPin(r.value))){Swal.fire('PIN salah','','error');return false}return true}
+    async function askNewPin(){const r=await Swal.fire({title:'Buat PIN',html:'<input id="new-pin-1" class="swal2-input" type="password" inputmode="numeric" maxlength="6" placeholder="PIN 4–6 digit"><input id="new-pin-2" class="swal2-input" type="password" inputmode="numeric" maxlength="6" placeholder="Ulangi PIN">',showCancelButton:true,confirmButtonText:'Simpan PIN',focusConfirm:false,preConfirm:()=>{const a=document.getElementById('new-pin-1').value,b=document.getElementById('new-pin-2').value;if(!/^\d{4,6}$/.test(a))return Swal.showValidationMessage('PIN harus 4–6 digit.');if(a!==b)return Swal.showValidationMessage('Konfirmasi PIN tidak sama.');return a}});return r.isConfirmed?r.value:null}
+    window.configurePin=async()=>{const changing=pinEnabled();if(changing&&!(await askCurrentPin()))return;const pin=await askNewPin();if(!pin)return;const salt=crypto.getRandomValues(new Uint8Array(16));const hash=await derivePinHash(pin,salt);localStorage.setItem(PIN_KEY,JSON.stringify({salt:bytesToBase64(salt),hash,createdAt:Date.now()}));resetPinGuard();auditEvent(changing?'Ganti PIN':'Aktifkan PIN','Konfigurasi keamanan lokal diperbarui.');updateSecurityUI();renderHealth();Swal.fire('PIN aktif','Aplikasi sekarang bisa dikunci dengan PIN.','success')};
+    window.disablePin=async()=>{if(!pinEnabled())return;if(!(await askCurrentPin()))return;localStorage.removeItem(PIN_KEY);resetPinGuard();document.getElementById('pin-lock-screen')?.classList.remove('active');auditEvent('Nonaktifkan PIN','App lock dinonaktifkan di perangkat ini.');updateSecurityUI();renderHealth();Swal.fire('PIN dinonaktifkan','','success')};
+    window.lockApp=()=>{if(!pinEnabled())return;const screen=document.getElementById('pin-lock-screen');if(screen){screen.classList.add('active');screen.setAttribute('aria-hidden','false');const input=document.getElementById('pin-unlock-input');if(input){input.value='';setTimeout(()=>input.focus(),50)}const err=document.getElementById('pin-error');if(err)err.textContent='';}};
+    window.unlockApp=async()=>{const input=document.getElementById('pin-unlock-input');const err=document.getElementById('pin-error');const guard=getPinGuard();if(Date.now()<Number(guard.blockedUntil||0)){const sec=Math.ceil((guard.blockedUntil-Date.now())/1000);if(err)err.textContent=`Terlalu banyak percobaan. Coba lagi ${sec} detik.`;return}const pin=input?.value||'';if(!/^\d{4,6}$/.test(pin)){if(err)err.textContent='PIN harus 4–6 digit.';return}if(await verifyPin(pin)){resetPinGuard();document.getElementById('pin-lock-screen')?.classList.remove('active');if(err)err.textContent='';}else{const failures=Number(guard.failures||0)+1;let blockedUntil=0;if(failures>=15)blockedUntil=Date.now()+600000;else if(failures>=10)blockedUntil=Date.now()+120000;else if(failures>=5)blockedUntil=Date.now()+30000;savePinGuard({failures,blockedUntil});if(input)input.value='';if(err)err.textContent=blockedUntil?`PIN salah ${failures}x. Cooldown aktif.`:`PIN salah. Percobaan ke-${failures}.`;}};
+    let appHiddenAt=0;
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)appHiddenAt=Date.now();else{const timeout=getAutoLockMs();if(pinEnabled()&&timeout>0&&appHiddenAt&&Date.now()-appHiddenAt>timeout)lockApp()}});
+    document.addEventListener('keydown',e=>{if(e.key==='Enter'&&document.getElementById('pin-lock-screen')?.classList.contains('active'))unlockApp()});
+
+    function getRecord(type, id) {
+        const list = type === 'expense' ? store.trans : type === 'income' ? store.incomes : store.transfers;
+        return list.find(t => t.id === id);
+    }
+
+    function replaceRecord(type, id, data) {
+        const key = type === 'expense' ? 'trans' : type === 'income' ? 'incomes' : 'transfers';
+        store[key] = store[key].map(t => t.id === id ? { id, ...data, pendingSync:true } : t);
+    }
+
+    function deleteLocalRecord(type, id) {
+        const key = type === 'expense' ? 'trans' : type === 'income' ? 'incomes' : 'transfers';
+        store[key] = store[key].filter(t => t.id !== id);
+    }
+
+    function categoryOptionHtml(values, selected) {
+        return values.map(v => `<option value="${escapeHtml(v)}"${v === selected ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+    }
+
+    function walletOptionHtml(selected) {
+        return ['Tunai','Bank','E-Wallet'].map(v => `<option value="${v}"${v === selected ? ' selected' : ''}>${v}</option>`).join('');
+    }
+
+    window.editTransaction = async (id, type) => {
+        const current = getRecord(type, id);
+        if (!current) return;
+        const isTransfer = type === 'transfer';
+        const categories = type === 'income' ? [...INCOME_CATEGORIES, ...(current.kategori===SYSTEM_ADJUSTMENT_CATEGORY?[SYSTEM_ADJUSTMENT_CATEGORY]:[])] : [...EXPENSE_CATEGORIES, ...(current.kategori===SYSTEM_ADJUSTMENT_CATEGORY?[SYSTEM_ADJUSTMENT_CATEGORY]:[])];
+        const html = isTransfer ? `
+            <div class="edit-modal-grid">
+                <label>Tanggal</label><input id="edit-date" type="date" value="${escapeHtml(current.tanggal)}">
+                <label>Dari wallet</label><select id="edit-from">${walletOptionHtml(current.dari)}</select>
+                <label>Ke wallet</label><select id="edit-to">${walletOptionHtml(current.ke)}</select>
+                <label>Nominal</label><input id="edit-amount" inputmode="numeric" value="${moneyFormatter.format(Number(current.nominal)||0)}">
+                <label>Keterangan</label><input id="edit-note" maxlength="120" value="${escapeHtml(current.catatan||current.note||'')}" placeholder="Opsional">
+            </div>` : `
+            <div class="edit-modal-grid">
+                <label>Tanggal</label><input id="edit-date" type="date" value="${escapeHtml(current.tanggal)}">
+                <label>Wallet</label><select id="edit-wallet">${walletOptionHtml(current.dompet)}</select>
+                <label>Kategori</label><select id="edit-cat">${categoryOptionHtml(categories, current.kategori)}</select>
+                <label>Nominal</label><input id="edit-amount" inputmode="numeric" value="${moneyFormatter.format(Number(current.nominal)||0)}">
+                <label>Keterangan</label><input id="edit-note" maxlength="120" value="${escapeHtml(current.catatan||current.note||'')}" placeholder="Opsional">
+            </div>`;
+
+        const result = await Swal.fire({
+            title: type === 'expense' ? 'Edit Pengeluaran' : type === 'income' ? 'Edit Pemasukan' : 'Edit Transfer',
+            html, showCancelButton:true, confirmButtonText:'Simpan', cancelButtonText:'Batal',
+            didOpen: () => {
+                const amountEl = document.getElementById('edit-amount');
+                amountEl?.addEventListener('input', () => formatMoneyField(amountEl));
+            },
+            preConfirm: () => {
+                const tanggal = document.getElementById('edit-date')?.value;
+                const nominal = Number(digitsOnly(document.getElementById('edit-amount')?.value));
+                if (!tanggal || !nominal) return Swal.showValidationMessage('Tanggal dan nominal wajib diisi.');
+                if (isTransfer) {
+                    const dari = document.getElementById('edit-from').value;
+                    const ke = document.getElementById('edit-to').value;
+                    if (dari === ke) return Swal.showValidationMessage('Wallet asal dan tujuan harus berbeda.');
+                    return { tanggal, dari, ke, nominal, catatan:(document.getElementById('edit-note')?.value||'').trim().slice(0,120), createdAt:Number(current.createdAt)||Date.now() };
+                }
+                return { tanggal, dompet:document.getElementById('edit-wallet').value, kategori:document.getElementById('edit-cat').value, nominal, catatan:(document.getElementById('edit-note')?.value||'').trim().slice(0,120), createdAt:Number(current.createdAt)||Date.now() };
+            }
+        });
+        if (!result.isConfirmed || !result.value) return;
+
+        const editNow = Date.now();
+        const data = { ...result.value, updatedAt:editNow, version:(Number(current.version)||1)+1, deviceId:DEVICE_ID };
+        applyWalletDeltaLocal(combineWalletDeltas(walletDeltaForData(type, current, -1), walletDeltaForData(type, data, 1)));
+        replaceRecord(type, id, data);
+        const baseMeta = { createdAt:editNow, baseUpdatedAt:Number(current.updatedAt||current.createdAt||0), baseVersion:Number(current.version||1) };
+        const op = type === 'expense'
+            ? { opId:`edit-expense:${id}:${editNow}`, type:'editExpense', expenseId:id, data, ...baseMeta }
+            : type === 'income'
+                ? { opId:`edit-income:${id}:${editNow}`, type:'editIncome', incomeId:id, data, ...baseMeta }
+                : { opId:`edit-transfer:${id}:${editNow}`, type:'editTransfer', transferId:id, data, ...baseMeta };
+        enqueueSync(op);
+        auditEvent('Edit transaksi', `${type} · ${fmt(current.nominal)} → ${fmt(data.nominal)}`, {entityType:type,entityId:id});
+        persistLocalSnapshot();
+        renderAll();
+        queuedNotice('Perubahan transaksi disimpan.', 'Edit tersimpan offline dan akan disinkronkan saat online.');
+        flushOutbox();
+    };
+
+    window.removeTransaction = async (id, type) => {
+        const current = getRecord(type, id);
+        if (!current) return;
+        const confirm = await Swal.fire({ title:'Hapus transaksi?', text:'Dampak transaksi pada saldo akan dibatalkan.', icon:'warning', showCancelButton:true, confirmButtonText:'Hapus' });
+        if (!confirm.isConfirmed) return;
+
+        const now = Date.now();
+        const op = type === 'expense'
+            ? { opId:`delete-expense:${id}:${now}`, type:'deleteExpense', expenseId:id, data:current, createdAt:now }
+            : type === 'income'
+                ? { opId:`delete-income:${id}:${now}`, type:'deleteIncome', incomeId:id, data:current, createdAt:now }
+                : { opId:`delete-transfer:${id}:${now}`, type:'deleteTransfer', transferId:id, data:current, createdAt:now };
+        op.baseUpdatedAt = Number(current.updatedAt||current.createdAt||0); op.baseVersion = Number(current.version||1);
+        enqueueSync(op);
+        auditEvent('Hapus transaksi', `${type} · ${fmt(current.nominal)}`, {entityType:type,entityId:id});
+        applyWalletDeltaLocal(walletDeltaForData(type, current, -1));
+        deleteLocalRecord(type, id);
+        persistLocalSnapshot();
+        renderAll();
+        queuedNotice('Transaksi dihapus.', 'Penghapusan tersimpan offline dan akan disinkronkan saat online.');
+        flushOutbox();
+    };
+
+    // Kompatibilitas tombol lama jika masih ada cache HTML v21.
+    window.removeTrans = (id) => removeTransaction(id, 'expense');
+
+    window.reconcileWallet = async () => {
+        const wallet=document.getElementById('reconcile-wallet')?.value || 'Tunai';
+        const actual=parseMoneyField('reconcile-actual');
+        const current=Number(store.wallets[wallet])||0;
+        const delta=actual-current;
+        if (!document.getElementById('reconcile-actual')?.value) return Swal.fire('Saldo belum diisi','Masukkan saldo sebenarnya.','warning');
+        if (delta===0) return Swal.fire('Sudah cocok',`${wallet} sudah ${fmt(current)}. Tidak ada penyesuaian.`, 'success');
+        const type=delta>0?'income':'expense'; const nominal=Math.abs(delta); const now=Date.now();
+        const confirm=await Swal.fire({title:'Buat penyesuaian saldo?',html:`${wallet}: <b>${fmt(current)}</b> → <b>${fmt(actual)}</b><br><span style="color:#64748b;font-size:.8rem">Selisih ${delta>0?'+':'-'}${fmt(nominal)} akan masuk ke riwayat.</span>`,icon:'question',showCancelButton:true,confirmButtonText:'Buat Penyesuaian',cancelButtonText:'Batal'}); if(!confirm.isConfirmed)return;
+        const collection=type==='income'?'pemasukan':'pengeluaran'; const ref=db.collection(collection).doc(); const id=ref.id;
+        const data={tanggal:localDateKey(),dompet:wallet,kategori:SYSTEM_ADJUSTMENT_CATEGORY,nominal,createdAt:now,updatedAt:now,version:1,deviceId:DEVICE_ID,reconciliation:true,balanceBefore:current,balanceAfter:actual};
+        const op=type==='income'?{opId:`income:${id}`,type:'addIncome',incomeId:id,data,createdAt:now}:{opId:`add:${id}`,type:'addExpense',expenseId:id,data,createdAt:now};
+        enqueueSync(op); applyWalletDeltaLocal(walletDeltaForData(type,data,1)); addLocalRecord(type,id,data); auditEvent('Rekonsiliasi saldo',`${wallet}: ${fmt(current)} → ${fmt(actual)} (${delta>0?'+':'-'}${fmt(nominal)})`,{entityType:type,entityId:id});
+        const input=document.getElementById('reconcile-actual');if(input)input.value=''; persistLocalSnapshot(); renderAll(); flushOutbox(); queuedNotice('Saldo berhasil direkonsiliasi.','Penyesuaian tersimpan offline dan akan sync saat online.');
+    };
+
+    function localKeyForEntity(type){ return type==='expense'?'trans':type==='income'?'incomes':type==='transfer'?'transfers':type==='goal'?'goals':type==='recurring'?'recurring':''; }
+    window.resolveConflict = (id, choice) => {
+        const c=(store.conflicts||[]).find(x=>x.id===id); if(!c)return;
+        const key=localKeyForEntity(c.entityType);
+        if(choice==='cloud'){
+            if(key){ if(c.serverData) store[key]=[{id:c.entityId,...c.serverData},...store[key].filter(x=>x.id!==c.entityId)]; else store[key]=store[key].filter(x=>x.id!==c.entityId); }
+            auditEvent('Resolusi konflik: cloud',`${c.entityType} ${c.entityId}`,{entityType:c.entityType,entityId:c.entityId});
+        } else {
+            const op={...c.originalOp,opId:`force:${c.originalOp.opId}:${Date.now()}`,force:true,createdAt:Date.now(),baseUpdatedAt:0,baseVersion:0};
+            const deleting=String(op.type).toLowerCase().includes('delete');
+            if(['expense','income','transfer'].includes(c.entityType)) {
+                if(deleting && c.serverData) applyWalletDeltaLocal(walletDeltaForData(c.entityType,c.serverData,-1));
+                else if(c.serverData && c.localData) applyWalletDeltaLocal(combineWalletDeltas(walletDeltaForData(c.entityType,c.serverData,-1),walletDeltaForData(c.entityType,c.localData,1)));
+            }
+            enqueueSync(op);
+            if(key && c.localData && !deleting) store[key]=[{id:c.entityId,...c.localData,pendingSync:true},...store[key].filter(x=>x.id!==c.entityId)];
+            if(key && deleting) store[key]=store[key].filter(x=>x.id!==c.entityId);
+            if(c.entityType==='goal') recomputeReservedGoal(false);
+            auditEvent('Resolusi konflik: lokal',`${c.entityType} ${c.entityId}`,{entityType:c.entityType,entityId:c.entityId});
+        }
+        store.conflicts=store.conflicts.filter(x=>x.id!==id); persistLocalSnapshot(); renderAll(); if(choice==='local')flushOutbox();
+    };
+
+    function renderConflicts(){
+        const list=document.getElementById('conflictList'),badge=document.getElementById('conflictCount'); if(!list||!badge)return;
+        const rows=store.conflicts||[]; badge.textContent=`${rows.length} konflik`; badge.className=`sync-pill ${rows.length?'warn':'good'}`;
+        if(!rows.length){list.innerHTML='<div class="empty-box" style="padding:12px">Tidak ada konflik sync.</div>';return;}
+        list.innerHTML=rows.map(c=>`<div class="conflict-card"><div class="conflict-title">⚠ ${escapeHtml(c.entityType)} · ${escapeHtml(c.entityId)}</div><div class="mini-muted">Perubahan lokal bertabrakan dengan versi yang lebih baru dari perangkat lain.</div><div class="conflict-compare"><div class="conflict-version"><b>Versi Lokal</b><br>${escapeHtml(summarizeData(c.localData,c.entityType))}</div><div class="conflict-version"><b>Versi Cloud</b><br>${escapeHtml(summarizeData(c.serverData,c.entityType))}</div></div><div class="mini-actions"><button class="mini-action" onclick="resolveConflict('${escapeJs(c.id)}','cloud')">Pakai Cloud</button><button class="mini-action primary" onclick="resolveConflict('${escapeJs(c.id)}','local')">Terapkan Lokal</button></div></div>`).join('');
+    }
+
+    function healthReport(){
+        let score=100; const issues=[];
+        const add=(severity,text,penalty)=>{score=Math.max(0,score-penalty);issues.push({severity,text})};
+        if(!pinEnabled()) add('warn','PIN belum aktif. Data tetap bisa dibuka siapa pun yang punya akses ke browser ini.',8);
+        if(typeof firebase.auth!=='function') add('warn','Firebase Auth belum aktif. Setup sekarang cocok untuk penggunaan pribadi, belum aman untuk multi-user publik.',12);
+        const queue=readOutbox(); const pending=userPendingOps();
+        if(pending){const oldest=Math.min(...queue.map(x=>Number(x.createdAt)||Date.now()));const age=Date.now()-oldest;add(age>86400000?'danger':'warn',`${pending} operasi masih menunggu sync${age>600000?' cukup lama':''}.`,age>86400000?18:8)}
+        if(lastSyncError) add('danger',`Sync error terakhir: ${lastSyncError}`,15);
+        if((store.conflicts||[]).length) add('danger',`${store.conflicts.length} konflik sync perlu dipilih versinya.`,20);
+        const collections=[store.trans,store.incomes,store.transfers,store.goals,store.recurring];
+        let duplicate=0,invalid=0;
+        collections.forEach(arr=>{const ids=new Set();(arr||[]).forEach(x=>{if(x.id){if(ids.has(x.id))duplicate++;ids.add(x.id)}})});
+        [...store.trans,...store.incomes,...store.transfers].forEach(t=>{if(!t.tanggal||!(Number(t.nominal)>0))invalid++});
+        if(duplicate) add('danger',`${duplicate} ID duplikat terdeteksi di snapshot lokal.`,20);
+        if(invalid) add('danger',`${invalid} transaksi punya tanggal/nominal tidak valid.`,20);
+        const negative=Object.entries(store.wallets).filter(([,v])=>Number(v)<0); if(negative.length)add('warn',`Saldo negatif: ${negative.map(([k])=>k).join(', ')}. Cek apakah memang overdraft atau perlu rekonsiliasi.`,8);
+        const totalWallets=Object.values(normalizeWallets(store.wallets)).reduce((a,b)=>a+b,0); if(Number(store.goal)>totalWallets)add('warn','Dana yang disisihkan untuk target lebih besar dari total saldo wallet.',8);
+        const lastBackup=Number(localStorage.getItem(LAST_BACKUP_KEY)||0); if(!lastBackup)add('warn','Belum ada backup v24 yang tercatat di perangkat ini.',5); else if(Date.now()-lastBackup>30*86400000)add('warn','Backup terakhir lebih dari 30 hari lalu.',5);
+        if(!issues.length)issues.push({severity:'good',text:'Data lokal, sync, PIN, dan backup terlihat sehat.'});
+        return {score,issues};
+    }
+
+    function renderHealth(){
+        const report=healthReport(),score=document.getElementById('healthScore'),issues=document.getElementById('healthIssues');if(!score||!issues)return;
+        score.querySelector('span').textContent=String(report.score); const cls=report.score>=85?'var(--success)':report.score>=65?'var(--warning)':'var(--danger)';score.style.color=cls;score.style.background=report.score>=85?'rgba(34,197,94,.08)':report.score>=65?'rgba(245,158,11,.08)':'rgba(239,68,68,.08)';
+        issues.innerHTML=report.issues.slice(0,6).map(i=>`<div class="issue-row ${i.severity}">${i.severity==='good'?'✓':i.severity==='danger'?'✕':'!'} ${escapeHtml(i.text)}</div>`).join('');
+    }
+    window.runHealthCheck=(showToast=false)=>{renderHealth();renderConflicts();if(showToast){const r=healthReport();Swal.fire({title:`Health Score ${r.score}/100`,text:r.score>=85?'Sistem terlihat sehat.':r.score>=65?'Ada beberapa hal yang perlu dicek.':'Ada masalah penting yang perlu dibereskan.',icon:r.score>=85?'success':r.score>=65?'warning':'error'})}};
+
+    function renderAudit(){const el=document.getElementById('auditList');if(!el)return;const rows=(store.audit||[]).slice(0,80);if(!rows.length){el.innerHTML='<div class="empty-box">Belum ada aktivitas yang dicatat.</div>';return}el.innerHTML=rows.map(a=>`<div class="audit-item"><div class="audit-action">${escapeHtml(a.action)}</div><div class="audit-detail">${escapeHtml(a.detail||'')}</div><div class="audit-time">${new Date(Number(a.createdAt)||Date.now()).toLocaleString('id-ID')}</div></div>`).join('')}
+    window.clearAuditLog=async()=>{const r=await Swal.fire({title:'Bersihkan audit log?',text:'Riwayat perubahan lokal akan dihapus. Backup lama tetap menyimpan salinannya.',icon:'warning',showCancelButton:true,confirmButtonText:'Bersihkan',cancelButtonText:'Batal'});if(!r.isConfirmed)return;store.audit=[];persistLocalSnapshot();renderAll()};
+
+    function localDateKey(date = new Date()) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+
+    function dateFromKey(key) {
+        const [y, m, d] = String(key || '').split('-').map(Number);
+        return new Date(y || 1970, (m || 1) - 1, d || 1);
+    }
+
+    // v24.1: Budget Tersimpan disimpan terpisah dari snapshot/sync v24 agar fitur lama tetap kompatibel.
+    function readCarryOverState() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(CARRY_OVER_KEY) || '{}');
+            return {
+                month: String(parsed.month || ''),
+                balance: Math.max(0, Number(parsed.balance) || 0),
+                lastDate: String(parsed.lastDate || ''),
+                dailyBase: Math.max(0, Number(parsed.dailyBase) || 0),
+                history: parsed.history && typeof parsed.history === 'object' ? parsed.history : {}
+            };
+        } catch (err) {
+            console.warn('Carry-over gagal dibaca:', err);
+            return { month:'', balance:0, lastDate:'', dailyBase:0, history:{} };
+        }
+    }
+
+    function writeCarryOverState(state) {
+        try { localStorage.setItem(CARRY_OVER_KEY, JSON.stringify(state)); }
+        catch (err) { console.warn('Carry-over gagal disimpan:', err); }
+    }
+
+    function carryOverSpentOn(dateKey) {
+        return store.trans.reduce((sum, t) => {
+            if (t.tanggal !== dateKey || CARRY_OVER_EXCLUDED_CATEGORIES.includes(t.kategori)) return sum;
+            return sum + Number(t.nominal || 0);
+        }, 0);
+    }
+
+    function dateKeyPlusDays(key, days) {
+        const d = dateFromKey(key); d.setDate(d.getDate() + days);
+        const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+        return `${y}-${m}-${day}`;
+    }
+
+    function updateCarryOver(baseDaily) {
+        const todayKey = localDateKey();
+        const monthKey = todayKey.slice(0,7);
+        const state = readCarryOverState();
+        if (state.month !== monthKey) {
+            state.month = monthKey; state.balance = 0; state.lastDate = ''; state.dailyBase = 0; state.history = {};
+        }
+
+        const safeBase = Math.max(0, Math.floor(Number(baseDaily) || 0));
+        if (!state.lastDate) {
+            state.lastDate = todayKey;
+            state.dailyBase = safeBase;
+            state.history[todayKey] = { base:safeBase, spent:carryOverSpentOn(todayKey), saved:0, pending:true };
+            writeCarryOverState(state);
+        } else if (state.lastDate < todayKey) {
+            let cursor = state.lastDate;
+            let guard = 0;
+            while (cursor < todayKey && guard++ < 40) {
+                const row = state.history[cursor] || {};
+                const base = Math.max(0, Number(row.base) || Number(state.dailyBase) || safeBase);
+                const spent = carryOverSpentOn(cursor);
+                const saved = Math.max(0, base - spent);
+                const oldSaved = Math.max(0, Number(row.saved) || 0);
+                state.balance = Math.max(0, state.balance + saved - oldSaved);
+                state.history[cursor] = { base, spent, saved, pending:false };
+                cursor = dateKeyPlusDays(cursor, 1);
+                if (cursor < todayKey && !state.history[cursor]) state.history[cursor] = { base:Number(state.dailyBase)||safeBase, spent:0, saved:0, pending:true };
+            }
+            state.lastDate = todayKey;
+            state.dailyBase = safeBase;
+            state.history[todayKey] = state.history[todayKey] || { base:safeBase, spent:0, saved:0, pending:true };
+        }
+
+        // Koreksi otomatis jika transaksi hari yang sudah selesai diedit/dihapus.
+        Object.entries(state.history).forEach(([key,row]) => {
+            if (key >= todayKey || !key.startsWith(monthKey)) return;
+            const base = Math.max(0, Number(row.base) || 0);
+            const spent = carryOverSpentOn(key);
+            const saved = Math.max(0, base - spent);
+            const oldSaved = Math.max(0, Number(row.saved) || 0);
+            if (saved !== oldSaved || spent !== Number(row.spent || 0)) {
+                state.balance = Math.max(0, state.balance + saved - oldSaved);
+                state.history[key] = { base, spent, saved, pending:false };
+            }
+        });
+
+        const todayRow = state.history[todayKey] || { base:safeBase, spent:0, saved:0, pending:true };
+        if (!todayRow.base && safeBase) todayRow.base = safeBase;
+        todayRow.spent = carryOverSpentOn(todayKey);
+        todayRow.pending = true;
+        state.history[todayKey] = todayRow;
+        state.dailyBase = Math.max(0, Number(todayRow.base) || safeBase);
+        state.lastDate = todayKey;
+        const potential = Math.max(0, state.dailyBase - todayRow.spent);
+        writeCarryOverState(state);
+        return { balance:Math.floor(state.balance), potential:Math.floor(potential), base:Math.floor(state.dailyBase), spent:Math.floor(todayRow.spent) };
+    }
+
+    window.resetCarryOver = async () => {
+        const r = await Swal.fire({ title:'Reset Budget Tersimpan?', text:'Nilai carry-over bulan ini akan kembali ke Rp 0. Transaksi dan saldo tidak berubah.', icon:'warning', showCancelButton:true, confirmButtonText:'Reset', cancelButtonText:'Batal' });
+        if (!r.isConfirmed) return;
+        localStorage.removeItem(CARRY_OVER_KEY);
+        renderAll();
+    };
+
+    function eligibleSpendOn(dateKey) {
+        return store.trans.reduce((sum,t) => {
+            if (t.tanggal !== dateKey || CARRY_OVER_EXCLUDED_CATEGORIES.includes(t.kategori)) return sum;
+            return sum + Number(t.nominal || 0);
+        }, 0);
+    }
+
+    function calculateNoSpendStreak() {
+        const today = localDateKey();
+        const month = today.slice(0,7);
+        let cursor = today, streak = 0, guard = 0;
+        while (cursor.startsWith(month) && guard++ < 31) {
+            if (eligibleSpendOn(cursor) > 0) break;
+            streak += 1;
+            cursor = dateKeyPlusDays(cursor, -1);
+        }
+        return streak;
+    }
+
+    function readRecoveryTarget() {
+        try {
+            const data = JSON.parse(localStorage.getItem(RECOVERY_TARGET_KEY) || 'null');
+            if (!data || !Number(data.amount)) return null;
+            return { name:String(data.name || 'Recovery Buffer'), amount:Math.max(0,Number(data.amount)||0), startDate:String(data.startDate || localDateKey()), createdAt:Number(data.createdAt)||Date.now() };
+        } catch (err) { console.warn('Recovery target gagal dibaca:', err); return null; }
+    }
+
+    function recoveryProgress(target, carryState = readCarryOverState()) {
+        if (!target) return { recovered:0, pct:0, remaining:0 };
+        const recovered = Object.entries(carryState.history || {}).reduce((sum,[date,row]) => {
+            if (date < target.startDate || row?.pending) return sum;
+            return sum + Math.max(0,Number(row?.saved)||0);
+        }, 0);
+        const capped = Math.min(Number(target.amount)||0, recovered);
+        return { recovered:Math.floor(capped), pct:target.amount ? Math.min(100,(capped/target.amount)*100) : 0, remaining:Math.max(0,Math.floor((Number(target.amount)||0)-capped)) };
+    }
+
+    window.openRecoveryTarget = async () => {
+        const current = readRecoveryTarget();
+        const r = await Swal.fire({
+            title: current ? 'Edit Recovery Target' : 'Buat Recovery Target',
+            html:`<div style="text-align:left"><label class="mini-muted">Nama target</label><input id="recovery-name" class="modal-field" maxlength="40" value="${escapeHtml(current?.name || 'Pulihkan Buffer')}" placeholder="Contoh: Balikin buffer 100k"><label class="mini-muted">Nominal yang ingin dipulihkan</label><input id="recovery-amount" class="modal-field" inputmode="numeric" value="${current ? moneyFormatter.format(current.amount) : ''}" oninput="formatMoneyField(this)" placeholder="100.000"><label class="mini-muted">Mulai dihitung sejak</label><input id="recovery-start" class="modal-field" type="date" value="${escapeHtml(current?.startDate || localDateKey())}"><div class="mini-muted" style="margin-top:6px">Progress hanya mengambil carry-over yang sudah benar-benar masuk setelah hari berganti, bukan potensi hari ini.</div></div>`,
+            showCancelButton:true, confirmButtonText:'Simpan', cancelButtonText:'Batal', focusConfirm:false,
+            preConfirm:()=>{const name=document.getElementById('recovery-name').value.trim()||'Recovery Buffer';const amount=Number(digitsOnly(document.getElementById('recovery-amount').value));const startDate=document.getElementById('recovery-start').value;if(!amount||amount<=0||!startDate)return Swal.showValidationMessage('Nominal dan tanggal mulai wajib valid.');return{name,amount,startDate};}
+        });
+        if(!r.isConfirmed)return;
+        localStorage.setItem(RECOVERY_TARGET_KEY,JSON.stringify({...r.value,createdAt:current?.createdAt||Date.now()}));
+        renderAll();
+    };
+
+    window.clearRecoveryTarget = async () => {
+        if (!readRecoveryTarget()) return;
+        const r = await Swal.fire({title:'Hapus Recovery Target?',text:'Hanya target recovery yang dihapus. Saldo, transaksi, dan carry-over tetap aman.',icon:'warning',showCancelButton:true,confirmButtonText:'Hapus',cancelButtonText:'Batal'});
+        if(!r.isConfirmed)return;
+        localStorage.removeItem(RECOVERY_TARGET_KEY); renderAll();
+    };
+
+    function sumRange(transactions, start, end) {
+        return transactions.reduce((sum, t) => {
+            if (!t.tanggal) return sum;
+            const dt = dateFromKey(t.tanggal);
+            return dt >= start && dt <= end ? sum + Number(t.nominal || 0) : sum;
+        }, 0);
+    }
+
+    function buildSmartInsight(disposable, cats, remainingDays) {
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        const start7 = new Date(today); start7.setDate(start7.getDate() - 6); start7.setHours(0,0,0,0);
+        const prevEnd = new Date(start7); prevEnd.setMilliseconds(-1);
+        const prevStart = new Date(start7); prevStart.setDate(prevStart.getDate() - 7); prevStart.setHours(0,0,0,0);
+        const relevant = store.trans.filter(t => t.tanggal && dateFromKey(t.tanggal) <= today);
+        const last7 = sumRange(relevant, start7, today);
+        const prev7 = sumRange(relevant, prevStart, prevEnd);
+        const avg7 = last7 / 7;
+        const safeDaily = disposable > 0 && remainingDays > 0 ? disposable / remainingDays : 0;
+        const daysAfterToday = Math.max(remainingDays - 1, 0);
+        const predictedEnd = disposable - (avg7 * daysAfterToday);
+
+        let status = 'AMAN', statusClass = 'insight-safe', statusIcon = '🟢';
+        if (disposable <= 0 || predictedEnd < 0) {
+            status = 'KRITIS'; statusClass = 'insight-danger'; statusIcon = '🔴';
+        } else if (avg7 > safeDaily * 1.15 && avg7 > 0) {
+            status = 'WASPADA'; statusClass = 'insight-warn'; statusIcon = '🟡';
+        }
+
+        let comparison = 'Belum cukup data pembanding.';
+        if (prev7 > 0) {
+            const pct = ((last7 - prev7) / prev7) * 100;
+            comparison = pct > 0
+                ? `7 hari terakhir naik <b>${Math.abs(pct).toFixed(0)}%</b> dari 7 hari sebelumnya.`
+                : pct < 0
+                    ? `7 hari terakhir turun <b>${Math.abs(pct).toFixed(0)}%</b> dari 7 hari sebelumnya.`
+                    : 'Pengeluaran 7 hari terakhir sama dengan periode sebelumnya.';
+        } else if (last7 > 0) {
+            comparison = `7 hari terakhir keluar <b>${fmt(last7)}</b>; periode sebelumnya belum punya data.`;
+        }
+
+        const topCategory = Object.entries(cats).sort((a,b) => b[1] - a[1])[0];
+        const topText = topCategory ? `${escapeHtml(topCategory[0])} — <b>${fmt(topCategory[1])}</b>` : 'Belum ada pengeluaran bulan ini.';
+
+        return { safeDaily, avg7, predictedEnd, status, statusClass, statusIcon, comparison, topText };
+    }
+
+    function allTransactions() {
+        return [
+            ...store.trans.map(t => ({ ...t, type:'expense' })),
+            ...store.incomes.map(t => ({ ...t, type:'income' })),
+            ...store.transfers.map(t => ({ ...t, type:'transfer' }))
+        ].sort((a,b) => {
+            const dateCmp = String(b.tanggal || '').localeCompare(String(a.tanggal || ''));
+            return dateCmp || (Number(b.createdAt || 0) - Number(a.createdAt || 0));
+        });
+    }
+
+    window.renderAll = () => {
+        const list = document.getElementById('transList');
+        if (list) list.innerHTML = '';
+        const filteredHistory = allTransactions().filter(historyMatchesFilters);
+        const filterSummary=document.getElementById('historyFilterSummary');
+        if(filterSummary){const out=filteredHistory.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.nominal||0),0),inc=filteredHistory.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.nominal||0),0);filterSummary.textContent=`${filteredHistory.length} transaksi · Masuk ${fmt(inc)} · Keluar ${fmt(out)}`;}
+
+        filteredHistory.forEach(t => {
+            if (!list) return;
+            const hasConflict=(store.conflicts||[]).some(c=>c.entityType===t.type&&c.entityId===t.id); const pending = hasConflict ? '<span style="color:var(--danger);font-weight:800">• Konflik sync</span>' : (t.pendingSync ? '<span style="color:var(--warning);font-weight:800">• Menunggu sync</span>' : '');
+            let title, sub, amount, amountClass;
+            if (t.type === 'expense') {
+                title = escapeHtml(t.kategori); sub = `${escapeHtml(t.tanggal)} <span>•</span> ${escapeHtml(t.dompet)} ${pending}`; amount = `- ${fmt(t.nominal)}`; amountClass = '';
+            } else if (t.type === 'income') {
+                title = escapeHtml(t.kategori); sub = `${escapeHtml(t.tanggal)} <span>•</span> ${escapeHtml(t.dompet)} ${pending}`; amount = `+ ${fmt(t.nominal)}`; amountClass = 'income';
+            } else {
+                title = 'Transfer'; sub = `${escapeHtml(t.tanggal)} <span>•</span> ${escapeHtml(t.dari)} → ${escapeHtml(t.ke)} ${pending}`; amount = fmt(t.nominal); amountClass = 'transfer';
+            }
+            list.innerHTML += `
+                <div class="t-item">
+                    <div class="t-info"><span class="t-cat-name">${title}</span><div class="t-sub-info">${sub}</div></div>
+                    <div class="t-amt ${amountClass}">${amount}</div>
+                    <div class="t-actions">
+                        <button class="t-action" onclick="editTransaction('${t.id}','${t.type}')" title="Edit"><i data-lucide="pencil"></i></button>
+                        <button class="t-action" onclick="removeTransaction('${t.id}','${t.type}')" title="Hapus"><i data-lucide="trash-2"></i></button>
+                    </div>
+                </div>`;
+        });
+        if (list && !filteredHistory.length) list.innerHTML = '<div style="padding:28px 5px; text-align:center; color:var(--text-dim); font-size:.8rem">Belum ada transaksi untuk filter ini.</div>';
+
+        const totalWallets = (store.wallets.Tunai || 0) + (store.wallets.Bank || 0) + (store.wallets['E-Wallet'] || 0);
+        const disposable = totalWallets - (store.goal || 0);
+        const totalBalanceEl = document.getElementById('total-balance'); if (totalBalanceEl) totalBalanceEl.innerText = fmt(disposable);
+        document.getElementById('goal-amount').innerText = fmt(store.goal || 0);
+        document.getElementById('w-cash').innerText = fmt(store.wallets.Tunai || 0);
+        document.getElementById('w-bank').innerText = fmt(store.wallets.Bank || 0);
+        document.getElementById('w-e').innerText = fmt(store.wallets['E-Wallet'] || 0);
+
+        const now = new Date();
+        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+        const insightCats = {}; let monthExpense = 0; let monthIncome = 0;
+        store.trans.forEach(t => {
+            if (t.tanggal?.startsWith(currentMonthKey)) {
+                insightCats[t.kategori] = (insightCats[t.kategori] || 0) + Number(t.nominal || 0);
+                monthExpense += Number(t.nominal || 0);
+            }
+        });
+        store.incomes.forEach(t => { if (t.tanggal?.startsWith(currentMonthKey)) monthIncome += Number(t.nominal || 0); });
+        const netCashflow = monthIncome - monthExpense;
+        const savingsRate = monthIncome > 0 ? (netCashflow / monthIncome) * 100 : null;
+
+        document.getElementById('month-income').innerText = fmt(monthIncome);
+        document.getElementById('month-expense').innerText = fmt(monthExpense);
+        const netEl = document.getElementById('month-net');
+        netEl.innerText = `${netCashflow >= 0 ? '+' : '-'} ${fmt(Math.abs(netCashflow))}`;
+        netEl.style.color = netCashflow >= 0 ? 'var(--success)' : 'var(--danger)';
+        document.getElementById('cashflow-month').innerText = now.toLocaleDateString('id-ID', { month:'short', year:'numeric' });
+        document.getElementById('cashflow-note').innerHTML = monthIncome > 0
+            ? `Savings rate bulan ini <b style="color:${savingsRate >= 0 ? 'var(--success)' : 'var(--danger)'}">${savingsRate.toFixed(0)}%</b>. Transfer antar-wallet tidak dihitung sebagai pemasukan/pengeluaran.`
+            : (monthExpense > 0 ? 'Belum ada pemasukan tercatat bulan ini. Transfer antar-wallet tidak memengaruhi cashflow.' : 'Belum ada data cashflow bulan ini.');
+
+        document.getElementById('chart-total-val').innerText = fmt(monthExpense);
+        const lastDay = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+        const remainingDays = lastDay - now.getDate() + 1;
+        const alerts = [];
+        for (const [c,v] of Object.entries(insightCats)) {
+            const lim = store.limits[c];
+            if (lim && v > lim) alerts.push(`<div style="margin-bottom:8px">⚠️ <b style="color:var(--danger)">${escapeHtml(c)}: ${fmt(v)}</b> (Lebih ${fmt(v-lim)})</div>`);
+            else if (lim && v >= lim*.8) alerts.push(`<div style="margin-bottom:8px">📢 <b>${escapeHtml(c)}: ${fmt(v)}</b> (Hampir Limit)</div>`);
+        }
+
+        const insight = buildSmartInsight(disposable, insightCats, remainingDays);
+        // v25.3.10: Health Pulse memakai sumber status/pace bulanan yang SAMA
+        // dengan kartu STATUS di Home. Dengan begitu AMAN/WASPADA/KRITIS, skor,
+        // warna, dan tempo tidak lagi dipengaruhi transaksi satu hari secara terpisah.
+        window.__agisFinancialPace = {
+            safeDaily:Number(insight.safeDaily)||0,
+            avg7:Number(insight.avg7)||0,
+            predictedEnd:Number(insight.predictedEnd)||0,
+            status:String(insight.status||'AMAN'),
+            disposable:Number(disposable)||0,
+            remainingDays:Number(remainingDays)||0
+        };
+        document.dispatchEvent(new CustomEvent('agis:financial-pace',{detail:window.__agisFinancialPace}));
+        const todayKey=localDateKey(); const todayRows=store.trans.filter(t=>t.tanggal===todayKey); const spentToday=todayRows.reduce((sum,t)=>sum+Number(t.nominal||0),0); const remainingSafe=Math.max(0,Math.floor(insight.safeDaily-spentToday));
+        const totalGoalTarget=(store.goals||[]).reduce((sum,g)=>sum+Math.max(0,Number(g.target)||0),0); const totalGoalSaved=(store.goals||[]).reduce((sum,g)=>sum+Math.max(0,Number(g.saved)||0),0); const goalPct=totalGoalTarget>0?Math.min(100,(totalGoalSaved/totalGoalTarget)*100):0;
+        const statusEl=document.getElementById('home-fin-status'); if(statusEl){statusEl.textContent=`${insight.statusIcon} ${insight.status}`;statusEl.style.color=insight.status==='AMAN'?'var(--success)':insight.status==='WASPADA'?'var(--warning)':'var(--danger)';}
+        const statusNote=document.getElementById('home-fin-status-note');if(statusNote)statusNote.textContent=insight.predictedEnd>=0?'Pace bulan ini masih tertahan.':'Prediksi akhir bulan mulai defisit.';
+        const safeEl=document.getElementById('home-safe-today');if(safeEl)safeEl.textContent=fmt(remainingSafe); const safeNote=document.getElementById('home-safe-note');if(safeNote)safeNote.textContent=`Batas ${fmt(Math.floor(insight.safeDaily))} · sudah keluar ${fmt(spentToday)}`;
+        const carry=updateCarryOver(insight.safeDaily); const carryEl=document.getElementById('home-carry-over');if(carryEl)carryEl.textContent=fmt(carry.balance); const carryNote=document.getElementById('home-carry-note');if(carryNote)carryNote.innerHTML=`Potensi hari ini <span class="carry-over-potential">+${fmt(carry.potential)}</span> · masuk setelah hari berganti. Keluarga & Pemberian tidak mengurangi carry-over.`;
+        const streak=calculateNoSpendStreak(); const streakEl=document.getElementById('home-no-spend-streak');if(streakEl)streakEl.textContent=`${streak} hari`; const streakNote=document.getElementById('home-no-spend-note');if(streakNote)streakNote.textContent=streak?`🔥 ${streak} hari tanpa belanja konsumtif berturut-turut`:'Ada pengeluaran konsumtif hari ini.';
+        const predEl=document.getElementById('home-eom-prediction'); const predNote=document.getElementById('home-eom-note'); if(predEl){if(insight.avg7>0){predEl.textContent=fmt(Math.max(0,Math.floor(insight.predictedEnd)));predEl.style.color=insight.predictedEnd>=0?'var(--success)':'var(--danger)';}else{predEl.textContent='Belum cukup data';predEl.style.color='var(--text-dim)';}} if(predNote)predNote.textContent=insight.avg7>0?(insight.predictedEnd>=0?`Estimasi sisa · pace ${fmt(Math.round(insight.avg7))}/hari`:`Defisit ${fmt(Math.abs(Math.floor(insight.predictedEnd)))} jika pace berlanjut`):'Butuh data pengeluaran untuk proyeksi.';
+        const recoveryTarget=readRecoveryTarget(); const recoveryValue=document.getElementById('home-recovery-value'); const recoveryNote=document.getElementById('home-recovery-note'); const recoveryBar=document.getElementById('home-recovery-bar'); if(recoveryTarget){const rp=recoveryProgress(recoveryTarget,readCarryOverState());if(recoveryValue)recoveryValue.textContent=`${fmt(rp.recovered)} / ${fmt(recoveryTarget.amount)}`;if(recoveryNote)recoveryNote.textContent=`${recoveryTarget.name} · ${rp.pct.toFixed(0)}% pulih · kurang ${fmt(rp.remaining)}`;if(recoveryBar)recoveryBar.style.width=`${rp.pct}%`;}else{if(recoveryValue)recoveryValue.textContent='Belum dibuat';if(recoveryNote)recoveryNote.textContent='Contoh: pulihkan Rp100k dari carry-over yang terkumpul.';if(recoveryBar)recoveryBar.style.width='0%';}
+        const spentEl=document.getElementById('home-spent-today');if(spentEl)spentEl.textContent=fmt(spentToday);const spentNote=document.getElementById('home-spent-note');if(spentNote)spentNote.textContent=`${todayRows.length} transaksi pengeluaran`;
+        const goalEl=document.getElementById('home-goal-progress');if(goalEl)goalEl.textContent=totalGoalTarget?`${goalPct.toFixed(0)}%`:'Belum ada';const syncNote=document.getElementById('home-sync-note');if(syncNote)syncNote.textContent=(store.conflicts||[]).length?`${store.conflicts.length} konflik sync`:userPendingOps()?`${userPendingOps()} perubahan menunggu sync`:'Sync bersih';
+
+        const predictionText = insight.avg7 > 0
+            ? (insight.predictedEnd >= 0 ? `${fmt(insight.predictedEnd)} tersisa setelah target tabungan.` : `defisit ${fmt(Math.abs(insight.predictedEnd))}; target tabungan berisiko.`)
+            : 'Belum cukup transaksi untuk membuat prediksi.';
+        const cashflowText = `${netCashflow >= 0 ? '+' : '-'}${fmt(Math.abs(netCashflow))}`;
+        const nearestGoal = [...(store.goals || [])].filter(g => Number(g.target) > 0).sort((a,b)=>(a.deadline||'9999').localeCompare(b.deadline||'9999'))[0];
+        const goalInsight = nearestGoal ? `<div class="insight-row">🎯 ${escapeHtml(nearestGoal.name)}: <b>${Math.min(100,((Number(nearestGoal.saved)||0)/(Number(nearestGoal.target)||1))*100).toFixed(0)}%</b> · kurang ${fmt(Math.max(0,(Number(nearestGoal.target)||0)-(Number(nearestGoal.saved)||0)))}</div>` : '';
+
+        document.getElementById('advisorContent').innerHTML = `
+            <div class="insight-status ${insight.statusClass}">${insight.statusIcon} ${insight.status}</div>
+            <div class="insight-row">💸 Batas aman dari saldo sekarang: <b style="color:var(--primary)">${fmt(Math.floor(insight.safeDaily))}/hari</b></div>
+            <div class="insight-row">💾 Budget tersimpan: <b style="color:var(--success)">${fmt(carry.balance)}</b> · potensi hari ini +${fmt(carry.potential)}</div>
+            <div class="insight-row">🔥 No-spend streak: <b>${streak} hari</b></div>
+            <div class="insight-row">💰 Cashflow bulan ini: <b style="color:${netCashflow >= 0 ? 'var(--success)' : 'var(--danger)'}">${cashflowText}</b></div>
+            <div class="insight-row">📈 Rata-rata pengeluaran 7 hari: <b>${fmt(Math.round(insight.avg7))}/hari</b></div>
+            <div class="insight-row">🔮 Prediksi akhir bulan: <b>${predictionText}</b></div>
+            <div class="insight-row">📊 ${insight.comparison}</div>
+            <div class="insight-row">🏷️ Terbesar bulan ini: ${insight.topText}</div>
+            ${goalInsight}
+            ${alerts.length ? `<div class="insight-divider">${alerts.join('')}</div>` : ''}
+        `;
+
+        updateChart(insightCats);
+        renderGoals();
+        renderRecurring();
+        renderConflicts();
+        renderAudit();
+        renderHealth();
+        updateSecurityUI();
+        lucide.createIcons();
+        hideSplash();
+    };
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>'"]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[ch]));
+    }
+    function escapeJs(value) {
+        return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' ');
+    }
+
+    function updateChart(data) {
+        const ctx = document.getElementById('pieChart').getContext('2d');
+        if(pieChart) pieChart.destroy();
+        pieChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: { labels: Object.keys(data), datasets: [{ data: Object.values(data), backgroundColor: ['#2dd4bf','#3b82f6','#f59e0b','#ef4444','#a855f7'], borderWidth: 0 }] },
+            options: { maintainAspectRatio: false, cutout: '78%', plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 10, font: {size: 10} } } } }
+        });
+    }
+
+    // --- CALCULATOR PRO LOGIC (tanpa eval) ---
+    let calcExpr = "";
+    window.toggleCalc = () => {
+        const c = document.getElementById('calc-container');
+        c.style.display = c.style.display === 'block' ? 'none' : 'block';
+    };
+    window.calcPush = (v) => { calcExpr += v; document.getElementById('calcDisplay').innerText = calcExpr; };
+    window.calcClear = () => { calcExpr = ""; document.getElementById('calcDisplay').innerText = "0"; };
+    window.calcPop = () => { calcExpr = calcExpr.slice(0,-1); document.getElementById('calcDisplay').innerText = calcExpr || "0"; };
+
+    function calculateExpression(expression) {
+        const tokens = expression.match(/\d*\.?\d+|[+\-*/]/g);
+        if (!tokens || tokens.join('') !== expression) throw new Error('Invalid expression');
+        const values = [];
+        const ops = [];
+        const prec = { '+':1, '-':1, '*':2, '/':2 };
+        const apply = () => {
+            const b = values.pop(), a = values.pop(), op = ops.pop();
+            if (!Number.isFinite(a) || !Number.isFinite(b)) throw new Error('Invalid operands');
+            if (op === '+') values.push(a + b);
+            else if (op === '-') values.push(a - b);
+            else if (op === '*') values.push(a * b);
+            else if (op === '/') {
+                if (b === 0) throw new Error('Division by zero');
+                values.push(a / b);
+            }
+        };
+        let expectNumber = true;
+        for (const token of tokens) {
+            if (/^\d/.test(token) || token.startsWith('.')) {
+                if (!expectNumber) throw new Error('Missing operator');
+                values.push(Number(token));
+                expectNumber = false;
+            } else {
+                if (expectNumber) throw new Error('Missing number');
+                while (ops.length && prec[ops[ops.length - 1]] >= prec[token]) apply();
+                ops.push(token);
+                expectNumber = true;
+            }
+        }
+        if (expectNumber) throw new Error('Trailing operator');
+        while (ops.length) apply();
+        if (values.length !== 1 || !Number.isFinite(values[0])) throw new Error('Invalid result');
+        return values[0];
+    }
+
+    window.calcEqual = () => {
+        try {
+            const res = calculateExpression(calcExpr);
+            document.getElementById('calcDisplay').innerText = res;
+            calcExpr = res.toString();
+            const inpDisplay = document.getElementById('t-amount-display');
+            const hiddenInp = document.getElementById('t-amount');
+            if(inpDisplay && hiddenInp) {
+                inpDisplay.value = new Intl.NumberFormat('id-ID').format(Math.round(res));
+                hiddenInp.value = Math.round(res);
+            }
+        } catch { document.getElementById('calcDisplay').innerText = "Err"; }
+    };
+
+    // --- DRAG & RESIZE LOGIC ---
+    const calc = document.getElementById('calc-container');
+    const header = document.getElementById('calcHeader');
+    const resizer = document.getElementById('calcResizer');
+
+    let isDragging = false, isResizing = false;
+    let startX, startY, startW, startH;
+
+    const onMove = (e) => {
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        if (isDragging) {
+            calc.style.left = (clientX - startX) + 'px';
+            calc.style.top = (clientY - startY) + 'px';
+            calc.style.right = 'auto'; calc.style.bottom = 'auto';
+        }
+        if (isResizing) {
+            calc.style.width = Math.max(200, startW + (clientX - startX)) + 'px';
+            calc.style.height = Math.max(350, startH + (clientY - startY)) + 'px';
+        }
+    };
+    const onEnd = () => { isDragging = isResizing = false; };
+
+    header.onmousedown = header.ontouchstart = (e) => {
+        isDragging = true;
+        startX = (e.touches ? e.touches[0].clientX : e.clientX) - calc.offsetLeft;
+        startY = (e.touches ? e.touches[0].clientY : e.clientY) - calc.offsetTop;
+    };
+    resizer.onmousedown = resizer.ontouchstart = (e) => {
+        isResizing = true;
+        startX = e.touches ? e.touches[0].clientX : e.clientX;
+        startY = e.touches ? e.touches[0].clientY : e.clientY;
+        startW = calc.offsetWidth; startH = calc.offsetHeight;
+        e.stopPropagation(); e.preventDefault();
+    };
+    document.onmousemove = document.ontouchmove = onMove;
+    document.onmouseup = document.ontouchend = onEnd;
+
+    window.exportToExcel = () => {
+        const rows = allTransactions().map(t => ({
+            Jenis: t.type === 'expense' ? 'Pengeluaran' : t.type === 'income' ? 'Pemasukan' : 'Transfer',
+            Tanggal: t.tanggal || '',
+            Kategori: t.type === 'transfer' ? 'Transfer' : (t.kategori || ''),
+            Wallet: t.type === 'transfer' ? `${t.dari} -> ${t.ke}` : (t.dompet || ''),
+            Nominal: Number(t.nominal || 0),
+            Status_Sync: (store.conflicts||[]).some(c=>c.entityType===t.type&&c.entityId===t.id)?'Konflik':(t.pendingSync?'Menunggu sync':'Tersinkron'),
+            Versi: Number(t.version||1),
+            Update_Terakhir: t.updatedAt ? new Date(Number(t.updatedAt)).toISOString() : ''
+        }));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Cashflow');
+        XLSX.writeFile(wb, `Agis_Report_v24_${document.getElementById('filterMonth').value || 'filtered'}.xlsx`);
+    };
+
+    function startRealtimeListeners() {
+        // Metadata changes membuat UI ikut merefleksikan cache Firestore dan pending writes.
+        db.collection('config').doc('wallets').onSnapshot({ includeMetadataChanges: true }, (s) => {
+            // Jangan timpa saldo optimistik selama masih ada transaksi di durable outbox.
+            if(s.exists && readOutbox().length === 0) {
+                store.wallets = normalizeWallets(s.data());
+                persistLocalSnapshot();
+            }
+            renderAll();
+        }, err => console.warn('Wallet listener:', err));
+
+        db.collection('config').doc('goal').onSnapshot({ includeMetadataChanges: true }, (s) => {
+            if(s.exists && readOutbox().length === 0) {
+                if ((store.goals || []).length) recomputeReservedGoal(false);
+                else store.goal = Number(s.data().amount) || 0;
+                persistLocalSnapshot();
+                migrateLegacyGoal();
+            }
+            renderAll();
+        }, err => console.warn('Goal listener:', err));
+
+        db.collection('config').doc('limits').onSnapshot({ includeMetadataChanges: true }, (s) => {
+            if(s.exists && readOutbox().length === 0) {
+                const raw=s.data()||{}; const {updatedAt,deviceId,...limitData}=raw; store.limits=limitData;
+                persistLocalSnapshot();
+            }
+            renderAll();
+        }, err => console.warn('Limits listener:', err));
+
+        db.collection('pengeluaran').orderBy('tanggal', 'desc').onSnapshot({ includeMetadataChanges: true }, (s) => {
+            const incoming = s.docs.map(d => ({id:d.id, ...d.data()}));
+            const emptyUnprimedOfflineCache = !navigator.onLine && s.metadata.fromCache && incoming.length === 0 && store.trans.length > 0;
+            if (!emptyUnprimedOfflineCache) { store.trans = readOutbox().length ? mergePendingCollection(incoming, 'expense') : incoming; persistLocalSnapshot(); }
+            renderAll();
+        }, err => console.warn('Expense listener:', err));
+
+        db.collection('pemasukan').orderBy('tanggal', 'desc').onSnapshot({ includeMetadataChanges: true }, (s) => {
+            const incoming = s.docs.map(d => ({id:d.id, ...d.data()}));
+            const emptyUnprimedOfflineCache = !navigator.onLine && s.metadata.fromCache && incoming.length === 0 && store.incomes.length > 0;
+            if (!emptyUnprimedOfflineCache) { store.incomes = readOutbox().length ? mergePendingCollection(incoming, 'income') : incoming; persistLocalSnapshot(); }
+            renderAll();
+        }, err => console.warn('Income listener:', err));
+
+        db.collection('transfer').orderBy('tanggal', 'desc').onSnapshot({ includeMetadataChanges: true }, (s) => {
+            const incoming = s.docs.map(d => ({id:d.id, ...d.data()}));
+            const emptyUnprimedOfflineCache = !navigator.onLine && s.metadata.fromCache && incoming.length === 0 && store.transfers.length > 0;
+            if (!emptyUnprimedOfflineCache) { store.transfers = readOutbox().length ? mergePendingCollection(incoming, 'transfer') : incoming; persistLocalSnapshot(); }
+            renderAll();
+        }, err => console.warn('Transfer listener:', err));
+
+        db.collection('goals').onSnapshot({ includeMetadataChanges: true }, (snap) => {
+            const incoming=snap.docs.map(d=>({id:d.id,...d.data()}));
+            const emptyUnprimedOfflineCache=!navigator.onLine&&snap.metadata.fromCache&&incoming.length===0&&(store.goals||[]).length>0;
+            if(!emptyUnprimedOfflineCache){store.goals=readOutbox().length?mergePendingCollection(incoming,'goalItem'):incoming;if(store.goals.length)recomputeReservedGoal(false);else migrateLegacyGoal();persistLocalSnapshot();}
+            renderAll();
+        },err=>console.warn('Goals listener:',err));
+
+        db.collection('recurring').onSnapshot({ includeMetadataChanges: true }, (snap) => {
+            const incoming=snap.docs.map(d=>({id:d.id,...d.data()}));
+            const emptyUnprimedOfflineCache=!navigator.onLine&&snap.metadata.fromCache&&incoming.length===0&&(store.recurring||[]).length>0;
+            if(!emptyUnprimedOfflineCache){store.recurring=readOutbox().length?mergePendingCollection(incoming,'recurring'):incoming;persistLocalSnapshot();}
+            renderAll(); processRecurringTransactions();
+        },err=>console.warn('Recurring listener:',err));
+    }
+
+    // Pulihkan mirror lokal SEBELUM Firestore mencoba konek. Jadi offline reload tidak mulai dari nol.
+    restoreLocalSnapshot();
+    migrateLegacyGoal();
+    renderAll();
+    processRecurringTransactions();
+
+    // Persistence diaktifkan sebelum listener Firestore dibuat. Jika gagal (mis. multi-tab),
+    // mirror localStorage tetap menjadi fallback dan listener cloud tetap dijalankan.
+    db.enablePersistence({ synchronizeTabs: true })
+        .catch((err) => {
+            if (err && err.code === 'failed-precondition') console.warn('Persistence: lebih dari satu tab aktif.');
+            else if (err && err.code === 'unimplemented') console.warn('Persistence tidak didukung browser ini.');
+            else console.warn('Persistence warning:', err);
+        })
+        .then(() => { startRealtimeListeners(); flushOutbox(); });
+
+    function updateNetworkStatus() {
+        const badge = document.getElementById('statusBadge');
+        if (!badge) return;
+        const online = navigator.onLine;
+        const pending = userPendingOps(); const conflicts=(store.conflicts||[]).length;
+        if (!online) badge.textContent = pending ? `Offline · ${pending} antre` : 'Offline';
+        else if (conflicts) badge.textContent = `Konflik · ${conflicts}`;
+        else if (syncInProgress || pending) badge.textContent = `Sync · ${pending}`;
+        else if (lastSyncError) badge.textContent = 'Sync gagal';
+        else badge.textContent = 'Online';
+        badge.classList.toggle('status-online', online && !lastSyncError && !conflicts);
+        badge.classList.toggle('status-offline', !online || !!lastSyncError || !!conflicts);
+    }
+    window.addEventListener('online', () => { updateNetworkStatus(); processRecurringTransactions(); flushOutbox(); });
+    window.addEventListener('offline', updateNetworkStatus);
+
+    window.addEventListener('load', () => {
+        const today = localDateKey();
+        const transactionDate = document.getElementById('t-date');
+        if (transactionDate) { transactionDate.value = today; transactionDate.dataset.autoDate = today; }
+        document.getElementById('filterMonth').value = today.slice(0, 7);
+        populateHistoryFilterOptions();
+        setTransactionType('expense');
+        renderAll();
+        if(localStorage.getItem('agis_privacy') === 'true') window.togglePrivacy();
+        if(localStorage.getItem('agis_theme') === 'light') document.body.classList.add('light-mode');
+        updateNetworkStatus();
+        updateSecurityUI();
+        if (pinEnabled()) lockApp();
+        processRecurringTransactions();
+        lucide.createIcons();
+        installV243Interactions();
+
+        // PWA registration sebelumnya belum ada di v19.8.
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./service-worker.js').catch(err => console.error('Service Worker:', err));
+        }
+    });
+
+
+    // v24.3: lightweight interaction layer. No finance/sync calculation is changed.
+    function updateInteractiveGreeting(){
+        const el=document.getElementById('interactiveGreeting'); if(!el)return;
+        const h=new Date().getHours();
+        const part=h<11?'Pagi':h<15?'Siang':h<18?'Sore':'Malam';
+        el.textContent=`${part}, Agis · pantau pace, bukan cuma saldo.`;
+    }
+    function installV243Interactions(){
+        updateInteractiveGreeting();
+        const advisor=document.querySelector('.advisor');
+        if(advisor && !advisor.dataset.v243){ advisor.dataset.v243='1'; advisor.addEventListener('click',e=>{ if(e.target.closest('button,a,input,select'))return; advisor.classList.toggle('expanded'); }); }
+        const rippleSelector='.btn-icon,.btn-primary,.btn-small,.mini-action,.recovery-action,.carry-over-reset,.nav-item,.type-btn,.t-action';
+        document.addEventListener('pointerdown',e=>{
+            const b=e.target.closest(rippleSelector); if(!b)return;
+            const r=b.getBoundingClientRect(), d=Math.max(r.width,r.height), x=e.clientX-r.left-d/2, y=e.clientY-r.top-d/2;
+            const span=document.createElement('span'); span.className='v243-ripple'; span.style.cssText=`width:${d}px;height:${d}px;left:${x}px;top:${y}px`; b.appendChild(span); setTimeout(()=>span.remove(),520);
+        },{passive:true});
+        const valueIds=['total-balance','goal-amount','w-cash','w-bank','w-e','home-safe-today','home-spent-today','home-carry-over','home-no-spend-streak','home-eom-prediction','month-income','month-expense','month-net'];
+        valueIds.forEach(id=>{ const el=document.getElementById(id); if(!el||el.dataset.v243obs)return; el.dataset.v243obs='1'; let last=el.textContent; new MutationObserver(()=>{ const now=el.textContent; if(now===last)return; last=now; el.classList.remove('v243-value-pulse'); void el.offsetWidth; el.classList.add('v243-value-pulse'); }).observe(el,{childList:true,subtree:true,characterData:true}); });
+    }
+</script>
+<script src="./v24-4-features.js"></script>
+<script src="./v24-5-automation.js?v=27.2.0"></script>
+<script src="./v25-features.js"></script>
+<script src="./v25-1-mobile.js"></script>
+<script src="./v25-2-clean-home.js"></script>
+<script src="./v25-3-health-pulse.js"></script>
+<script src="./v25-3-1-quick-transaction.js"></script>
+<script src="./v25-3-3-financial-plan.js?v=27.2.0"></script>
+<script src="./v25-3-10-health-engine.js"></script>
+<script src="./v25-5-17-easter-egg.js"></script>
+<script src="./v26-decision-lab.js?v=27.2.0"></script>
+<script src="./v27-tracking.js?v=27.2.0"></script>
+<script id="v2731-feature-switcher-inline">
+(() => {
+  'use strict';
+
+  const KEY = 'agis_finance_v273_planning_feature';
+  const FEATURES = [
+    { id:'decision', label:'Decision Lab', icon:'flask-conical', title:'Rencanakan keputusan', desc:'Analisis bisnis dan simulasi kredit sebelum uang benar-benar dipakai.', items:['Analisis bisnis','Simulasi kredit'] },
+    { id:'tracking', label:'Realisasi', icon:'activity', title:'Jalankan & pantau', desc:'Pantau penjualan, stok, target keuntungan, dan pembayaran cicilan dari data nyata.', items:['Tracking penjualan','Tracking stok','Tracking cicilan'] },
+    { id:'whatif', label:'What-if', icon:'sliders-horizontal', title:'Coba skenario cepat', desc:'Ubah angka sementara untuk melihat dampaknya tanpa mengubah data utama.', items:['Simulasi kondisi keuangan'] },
+    { id:'report', label:'Laporan', icon:'chart-no-axes-combined', title:'Lihat hasil tahunan', desc:'Ringkasan pemasukan, pengeluaran, net, dan tren setahun.', items:['Yearly Report'] }
+  ];
+
+  let active = readActive();
+  let observer = null;
+  let wrappingDone = false;
+  let applying = false;
+
+  function readActive(){
+    try{
+      const saved = localStorage.getItem(KEY);
+      return FEATURES.some(x=>x.id===saved) ? saved : 'decision';
+    }catch{return 'decision'}
+  }
+  function saveActive(id){
+    active = FEATURES.some(x=>x.id===id) ? id : 'decision';
+    try{localStorage.setItem(KEY,active)}catch{}
+  }
+  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+
+  function featureNodes(){
+    return {
+      decision: document.getElementById('v26-decision-lab'),
+      tracking: document.getElementById('v27-tracking'),
+      whatif: document.getElementById('v244-simulator-card'),
+      report: document.querySelector('#v2531-planning-host .v25-year-card')
+    };
+  }
+
+  function createSwitcher(){
+    const el=document.createElement('section');
+    el.id='v273-feature-switcher';
+    el.className='v273-feature-switcher';
+    el.innerHTML=`
+      <div class="v273-feature-head">
+        <div><small>FITUR PLANNING</small><b>Pilih yang mau dibuka</b><span>Geser menu, lalu pilih satu fitur. Halaman jadi lebih lega.</span></div>
+        <button class="v273-all-btn" type="button" data-v273-all aria-label="Lihat semua fitur"><i data-lucide="layout-grid"></i><span>Semua</span></button>
+      </div>
+      <div class="v273-tabs" role="tablist" aria-label="Fitur Financial Plan">
+        ${FEATURES.map(f=>`<button type="button" class="v273-tab" role="tab" data-v273-feature="${f.id}" aria-selected="false"><i data-lucide="${f.icon}"></i><span>${esc(f.label)}</span></button>`).join('')}
+      </div>`;
+    el.addEventListener('click',e=>{
+      const tab=e.target.closest('[data-v273-feature]');
+      if(tab){setFeature(tab.dataset.v273Feature,true);return}
+      if(e.target.closest('[data-v273-all]'))openAllFeatures();
+    });
+    el.addEventListener('keydown',e=>{
+      const tab=e.target.closest('[data-v273-feature]');
+      if(!tab||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
+      const tabs=[...el.querySelectorAll('[data-v273-feature]')];
+      let i=tabs.indexOf(tab);
+      if(e.key==='Home')i=0; else if(e.key==='End')i=tabs.length-1; else i=(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+      e.preventDefault();
+      tabs[i]?.focus();
+      setFeature(tabs[i]?.dataset.v273Feature||'decision',false);
+    });
+    return el;
+  }
+
+  function ensureSwitcher(){
+    const host=document.getElementById('v2531-planning-host');
+    if(!host)return null;
+    let switcher=document.getElementById('v273-feature-switcher');
+    if(!switcher)switcher=createSwitcher();
+    const plan=document.getElementById('v25-planning-card');
+    const desiredBefore=plan?.nextElementSibling||host.firstElementChild||null;
+    if(plan){
+      if(plan.nextElementSibling!==switcher)host.insertBefore(switcher,plan.nextElementSibling);
+    }else if(host.firstElementChild!==switcher){
+      host.insertBefore(switcher,host.firstElementChild||null);
+    }
+    return switcher;
+  }
+
+  function applyVisibility(){
+    if(applying)return;
+    applying=true;
+    try{
+      const switcher=ensureSwitcher();
+      if(!switcher)return;
+      const nodes=featureNodes();
+      Object.entries(nodes).forEach(([id,node])=>{
+        if(!node)return;
+        node.dataset.v273FeaturePanel=id;
+        const visible=id===active;
+        node.classList.toggle('v273-feature-hidden',!visible);
+        node.setAttribute('aria-hidden',visible?'false':'true');
+      });
+      switcher.querySelectorAll('[data-v273-feature]').forEach(btn=>{
+        const selected=btn.dataset.v273Feature===active;
+        btn.classList.toggle('active',selected);
+        btn.setAttribute('aria-selected',selected?'true':'false');
+      });
+      if(window.lucide?.createIcons)window.lucide.createIcons();
+    } finally { applying=false; }
+  }
+
+  function refreshVisiblePanel(){
+    // Sections can be rendered while hidden. Give responsive charts/layout a resize
+    // signal after a feature becomes visible, without touching their data/state.
+    const ping=()=>{try{window.dispatchEvent(new Event('resize'))}catch{}};
+    requestAnimationFrame(()=>{ping();setTimeout(ping,180)});
+  }
+
+  function focusActiveTab(smooth=true){
+    const btn=document.querySelector(`[data-v273-feature="${active}"]`);
+    if(btn)requestAnimationFrame(()=>btn.scrollIntoView?.({behavior:smooth?'smooth':'auto',inline:'center',block:'nearest'}));
+  }
+
+  function setFeature(id,scroll=false){
+    if(!FEATURES.some(x=>x.id===id))id='decision';
+    saveActive(id);
+    applyVisibility();
+    focusActiveTab(scroll);
+    refreshVisiblePanel();
+    if(scroll){
+      const switcher=document.getElementById('v273-feature-switcher');
+      const panel=featureNodes()[id];
+      requestAnimationFrame(()=>{
+        (panel||switcher)?.scrollIntoView?.({behavior:'smooth',block:'start'});
+      });
+    }
+    closeAllFeatures();
+  }
+
+  function ensureSheet(){
+    let wrap=document.getElementById('v273-feature-sheet');
+    if(wrap)return wrap;
+    wrap=document.createElement('div');
+    wrap.id='v273-feature-sheet';
+    wrap.className='v273-sheet-wrap';
+    wrap.hidden=true;
+    wrap.setAttribute('aria-hidden','true');
+    wrap.innerHTML=`
+      <div class="v273-sheet-backdrop" data-v273-close></div>
+      <section class="v273-sheet" role="dialog" aria-modal="true" aria-labelledby="v273-sheet-title">
+        <div class="v273-sheet-grab"></div>
+        <div class="v273-sheet-head"><div><small>FINANCIAL PLAN</small><h3 id="v273-sheet-title">Semua fitur</h3><p>Pilih satu. Fitur lain tetap tersimpan dan tidak dihapus.</p></div><button type="button" class="v273-sheet-close" data-v273-close aria-label="Tutup"><i data-lucide="x"></i></button></div>
+        <div class="v273-feature-list">
+          ${FEATURES.map(f=>`<button type="button" class="v273-feature-card" data-v273-open="${f.id}"><span class="v273-feature-icon"><i data-lucide="${f.icon}"></i></span><span class="v273-feature-copy"><b>${esc(f.label)}</b><strong>${esc(f.title)}</strong><small>${esc(f.desc)}</small><em>${f.items.map(esc).join(' · ')}</em></span><i class="v273-chevron" data-lucide="chevron-right"></i></button>`).join('')}
+        </div>
+      </section>`;
+    wrap.addEventListener('click',e=>{
+      const open=e.target.closest('[data-v273-open]');
+      if(open){setFeature(open.dataset.v273Open,true);return}
+      if(e.target.closest('[data-v273-close]'))closeAllFeatures();
+    });
+    document.body.appendChild(wrap);
+    if(window.lucide?.createIcons)window.lucide.createIcons();
+    return wrap;
+  }
+
+  let sheetReturnFocus=null;
+  function openAllFeatures(){
+    sheetReturnFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
+    const wrap=ensureSheet();
+    wrap.hidden=false;
+    wrap.setAttribute('aria-hidden','false');
+    document.body.classList.add('v273-sheet-open');
+    requestAnimationFrame(()=>{wrap.classList.add('open');wrap.querySelector('[data-v273-open]')?.focus?.()});
+  }
+  function closeAllFeatures(){
+    const wrap=document.getElementById('v273-feature-sheet');
+    if(!wrap||wrap.hidden)return;
+    wrap.classList.remove('open');
+    wrap.setAttribute('aria-hidden','true');
+    document.body.classList.remove('v273-sheet-open');
+    setTimeout(()=>{if(!wrap.classList.contains('open')){wrap.hidden=true;sheetReturnFocus?.focus?.();sheetReturnFocus=null}},180);
+  }
+
+  function wrapTrackingLaunch(){
+    if(wrappingDone)return;
+    const b=window.startBusinessTrackingV27,c=window.startCreditTrackingV27;
+    if(typeof b!=='function'||typeof c!=='function')return;
+    const wb=function(){const r=b.apply(this,arguments);setFeature('tracking',true);return r};
+    const wc=function(){const r=c.apply(this,arguments);setFeature('tracking',true);return r};
+    wb.__v273=true;wc.__v273=true;
+    window.startBusinessTrackingV27=wb;
+    window.startCreditTrackingV27=wc;
+    wrappingDone=true;
+  }
+
+  function installObserver(){
+    const host=document.getElementById('v2531-planning-host');
+    if(!host||observer)return;
+    observer=new MutationObserver(()=>{applyVisibility();wrapTrackingLaunch()});
+    observer.observe(host,{childList:true,subtree:false});
+  }
+
+  function init(){
+    ensureSheet();
+    applyVisibility();
+    focusActiveTab(false);
+    refreshVisiblePanel();
+    wrapTrackingLaunch();
+    installObserver();
+    [120,320,700,1200].forEach(ms=>setTimeout(()=>{applyVisibility();wrapTrackingLaunch()},ms));
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAllFeatures()});
+  }
+
+  window.setPlanningFeatureV273=setFeature;
+  window.openPlanningFeaturesV273=openAllFeatures;
+  window.closePlanningFeaturesV273=closeAllFeatures;
+
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});
+  else init();
+})();
+</script>
+<!-- AutoBudgetin v27.4.0: stability polish, resilient offline cache, inline feature switcher -->
+</body>
 </html>
