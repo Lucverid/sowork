@@ -1169,7 +1169,7 @@ Total Duration: ${c-l}ms`),G.resolve({didRun:!0,sequenceNumbersCollected:r,targe
         </div>
 
         <div class="inline-rule telegram-rule"><strong>Alur gratis:</strong> SoWork menyimpan data utama di Firestore Spark. Saat Admin mengubah Jadwal/Daily Check/Stock/Waste, browser mengirim snapshot terproteksi Firebase ID Token ke Cloudflare D1. Cron Cloudflare kemudian bisa mengingatkan Telegram walaupun SoWork sudah ditutup.</div>
-        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Kode yang sama bisa dipakai beberapa akun Telegram; pairing baru menambah penerima dan tidak mengganti akun yang sudah terhubung. Setelah itu command <code>/stock</code>, <code>/order</code>, <code>/waste</code>, dan <code>/check</code> aktif.</div>
+        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Kode yang sama bisa dipakai beberapa akun Telegram; pairing baru menambah penerima dan tidak mengganti akun yang sudah terhubung. Shortcut Telegram bersifat <strong>read-only</strong>: <code>/today</code>, <code>/stock</code>, <code>/order</code>, <code>/waste</code>, <code>/shift</code>, <code>/so</code>, <code>/incoming</code>, <code>/alert</code>, <code>/check</code>, dan <code>/menu</code>. Input/edit/hapus tetap hanya dari web SoWork.</div>
         <div class="inline-rule telegram-rule"><strong>WhatsApp:</strong> alert Telegram punya tombol “Teruskan ke WhatsApp”. Auto-send WA tanpa klik tetap membutuhkan WhatsApp Business API resmi.</div>
 
         <input type="hidden" name="telegramChatId" value="${Q(n?.chatId||e.telegramChatId||``)}"/>
