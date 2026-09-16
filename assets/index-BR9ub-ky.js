@@ -275,57 +275,57 @@ Total Duration: ${c-l}ms`),G.resolve({didRun:!0,sequenceNumbersCollected:r,targe
       <div class="mobile-menu-grid">
         ${e.map(([e,t,n])=>`<button class="mobile-menu-item ${X.page===e?`active`:``}" data-mobile-page="${e}"><span>${fA(n,20)}</span><strong>${Q(t)}</strong></button>`).join(``)}
       </div>
-    </section>`,document.body.appendChild(t);let n=()=>t.remove();t.querySelector(`.mobile-menu-close`)?.addEventListener(`click`,n),t.addEventListener(`click`,e=>{e.target===t&&n()}),t.querySelectorAll(`[data-mobile-page]`).forEach(e=>{e.addEventListener(`click`,()=>{let t=e.dataset.mobilePage;X.page===`schedule`&&t!==`schedule`&&(X.schedulePreview=null),X.page=t,n(),bA()})})}function SA(){let e=document.querySelector(`#network-status`);if(!e)return;let t=navigator.onLine;e.className=`network-pill ${t?`online`:`offline`}`,e.innerHTML=`<span></span>${t?`Online`:`Offline cache`}`}window.addEventListener(`online`,SA),window.addEventListener(`offline`,SA);function CA(e){return{dashboard:`Dashboard`,schedule:`Jadwal Kerja`,checklist:`Daily Checklist`,stock:`Stock`,opname:`Stock Opname`,order:`Order Planner`,waste:`Waste`,calculator:`Kalkulator Kerja`,reports:`Laporan Pribadi`,data:`Data & Sheet`,settings:`Settings`}[e]||`SoWork`}function wA(e){return{dashboard:`Ringkasan operasional hari ini`,schedule:`Shift, role, fairness & lembur`,checklist:`Task harian berdasarkan shift dan role`,stock:`Master barang, alert & pergerakan stok`,opname:`Input stok aktual & histori SO`,order:`Prediksi kebutuhan dan waktu order`,waste:`Input harian, trend & waste intelligence`,calculator:`Tool hitung operasional`,reports:`Catatan kerja pribadi`,data:`Export, import & template spreadsheet`,settings:`Workspace, profil & default sistem`}[e]||`Operations workspace`}function TA(){let e=document.querySelector(`#page-content`);if(e){if(!PT(X.profile)&&![`dashboard`,`schedule`,`checklist`].includes(X.page)){X.page=`dashboard`,bA();return}return X.page===`dashboard`?EA(e):X.page===`schedule`?HA(e):X.page===`checklist`?nj(e):X.page===`stock`?pj(e):X.page===`opname`?gj(e):X.page===`order`?_j(e):X.page===`waste`?Aj(e):X.page===`calculator`?Pj(e):X.page===`reports`?Mj(e):X.page===`data`?Fj(e):X.page===`settings`?zj(e):$j(e)}}function EA(e){let t=cM(new Date),n=X.schedules.filter(e=>e.date===t),r=X.checklist.filter(e=>e.active!==!1),i=X.profile?.name?.split(` `)[0]||`User`,a=PT(X.profile),o=a?lD(X.stockItems,X.stockOpnames,X.stockMovements):[],s=a?uD(o):[],c=s.filter(e=>e.status===`Kritis`),l=a?qD(X.wasteItems,X.wasteDays,t.slice(0,7),t):{alerts:[],analytics:null};e.innerHTML=`
+    </section>`,document.body.appendChild(t);let n=()=>t.remove();t.querySelector(`.mobile-menu-close`)?.addEventListener(`click`,n),t.addEventListener(`click`,e=>{e.target===t&&n()}),t.querySelectorAll(`[data-mobile-page]`).forEach(e=>{e.addEventListener(`click`,()=>{let t=e.dataset.mobilePage;X.page===`schedule`&&t!==`schedule`&&(X.schedulePreview=null),X.page=t,n(),bA()})})}function SA(){let e=document.querySelector(`#network-status`);if(!e)return;let t=navigator.onLine;e.className=`network-pill ${t?`online`:`offline`}`,e.innerHTML=`<span></span>${t?`Online`:`Offline cache`}`}window.addEventListener(`online`,SA),window.addEventListener(`offline`,SA);function CA(e){return{dashboard:`Dashboard`,schedule:`Jadwal Kerja`,checklist:`Daily Checklist`,stock:`Stock`,opname:`Stock Opname`,order:`Order Planner`,waste:`Waste`,calculator:`Kalkulator Kerja`,reports:`Laporan Pribadi`,data:`Data & Sheet`,settings:`Settings`}[e]||`SoWork`}function wA(e){return{dashboard:`Ringkasan operasional hari ini`,schedule:`Shift, role, fairness & lembur`,checklist:`Task harian berdasarkan shift dan role`,stock:`Master barang, alert & pergerakan stok`,opname:`Input stok aktual & histori SO`,order:`Prediksi kebutuhan dan waktu order`,waste:`Input harian, trend & waste intelligence`,calculator:`Tool hitung operasional`,reports:`Catatan kerja pribadi`,data:`Export, import & template spreadsheet`,settings:`Workspace, profil & default sistem`}[e]||`Operations workspace`}function TA(){let e=document.querySelector(`#page-content`);if(e){if(!PT(X.profile)&&![`dashboard`,`schedule`,`checklist`].includes(X.page)){X.page=`dashboard`,bA();return}return X.page===`dashboard`?EA(e):X.page===`schedule`?HA(e):X.page===`checklist`?nj(e):X.page===`stock`?pj(e):X.page===`opname`?gj(e):X.page===`order`?_j(e):X.page===`waste`?Aj(e):X.page===`calculator`?Pj(e):X.page===`reports`?Mj(e):X.page===`data`?Fj(e):X.page===`settings`?zj(e):$j(e)}}function EA(e){let t=new Date,n=cM(t),r=new Date(t);r.setDate(r.getDate()+1);let i=cM(r),a=X.schedules.filter(e=>e.date===n),o=X.schedules.filter(e=>e.date===i),s=String(X.profile?.name||``).trim(),c=[s,s.split(/\s+/)[0]].map(e=>e.trim().toLocaleLowerCase(`id-ID`)).filter(Boolean),l=e=>c.includes(String(e||``).trim().toLocaleLowerCase(`id-ID`)),u=new Intl.DateTimeFormat(`id-ID`,{weekday:`long`,day:`2-digit`,month:`short`}).format(r),d=X.checklist.filter(e=>e.active!==!1),f=X.profile?.name?.split(` `)[0]||`User`,p=PT(X.profile),m=p?lD(X.stockItems,X.stockOpnames,X.stockMovements):[],h=p?uD(m):[],g=h.filter(e=>e.status===`Kritis`),_=p?qD(X.wasteItems,X.wasteDays,n.slice(0,7),n):{alerts:[],analytics:null};e.innerHTML=`
     <section class="welcome-card">
       <div>
         <span class="overline">${sM()}</span>
-        <h1>Halo, ${Q(i)}.</h1>
-        <p>${a?`Pantau operasional hari ini dari satu dashboard.`:`Cek jadwal dan daily checklist hari ini dengan cepat.`}</p>
+        <h1>Halo, ${Q(f)}.</h1>
+        <p>${p?`Pantau operasional hari ini dari satu dashboard.`:`Cek jadwal dan daily checklist hari ini dengan cepat.`}</p>
       </div>
       <div class="date-card">
         <strong>${new Intl.DateTimeFormat(`id-ID`,{day:`2-digit`}).format(new Date)}</strong>
         <span>${new Intl.DateTimeFormat(`id-ID`,{month:`short`,year:`numeric`}).format(new Date)}</span>
         <small>${new Intl.DateTimeFormat(`id-ID`,{weekday:`long`}).format(new Date)}</small>
-        ${a?`<button id="export-dashboard" class="secondary compact dashboard-export-btn">Export</button>`:``}
+        ${p?`<button id="export-dashboard" class="secondary compact dashboard-export-btn">Export</button>`:``}
       </div>
     </section>
 
     <div class="metric-grid">
       <article class="metric-card metric-schedule">
         <span class="metric-label">Jadwal hari ini</span>
-        <strong>${n.length}</strong>
+        <strong>${a.length}</strong>
         <small>penempatan crew</small>
       </article>
       <article class="metric-card metric-check">
         <span class="metric-label">Daily checklist</span>
-        <strong>${r.length}</strong>
+        <strong>${d.length}</strong>
         <small>item aktif</small>
       </article>
       <article class="metric-card metric-access">
         <span class="metric-label">Mode akses</span>
-        <strong class="text-value">${a?`Full`:`Read`}</strong>
-        <small>${a?`Admin operations`:`Viewer only`}</small>
+        <strong class="text-value">${p?`Full`:`Read`}</strong>
+        <small>${p?`Admin operations`:`Viewer only`}</small>
       </article>
-      ${a?`<article class="metric-card metric-stock ${c.length?`metric-alert`:``}">
+      ${p?`<article class="metric-card metric-stock ${g.length?`metric-alert`:``}">
         <span class="metric-label">Alert stok</span>
-        <strong>${s.length}</strong>
-        <small>${c.length?`${c.length} item kritis`:`Tidak ada stok kritis`}</small>
+        <strong>${h.length}</strong>
+        <small>${g.length?`${g.length} item kritis`:`Tidak ada stok kritis`}</small>
       </article>`:``}
-      ${a?`<article class="metric-card metric-waste ${l.alerts.length?`metric-alert`:``}">
+      ${p?`<article class="metric-card metric-waste ${_.alerts.length?`metric-alert`:``}">
         <span class="metric-label">Waste warning</span>
-        <strong>${l.alerts.length}</strong>
-        <small>${l.alerts.length?`perlu kontrol prep`:`pola waste stabil`}</small>
+        <strong>${_.alerts.length}</strong>
+        <small>${_.alerts.length?`perlu kontrol prep`:`pola waste stabil`}</small>
       </article>`:``}
     </div>
 
-    ${a&&s.length?`
+    ${p&&h.length?`
       <article class="panel stock-home-alert">
         <div class="panel-head">
           <div><span class="overline">STOCK ALERT</span><h3>Perlu perhatian</h3></div>
           <button class="text-button" data-jump="stock">Buka Stock</button>
         </div>
         <div class="home-alert-list">
-          ${s.slice(0,6).map(e=>`
+          ${h.slice(0,6).map(e=>`
             <div class="home-alert-row">
               <span class="stock-status-dot ${Ej(e.status)}"></span>
               <div class="grow"><strong>${Q(e.name)}</strong><small>${Q(e.status)} · ${Oj(e.currentQty)} ${Q(e.unit)}${Number.isFinite(e.daysCover)?` · ~${e.daysCover.toFixed(1)} hari`:``}</small></div>
@@ -336,14 +336,14 @@ Total Duration: ${c-l}ms`),G.resolve({didRun:!0,sequenceNumbersCollected:r,targe
       </article>
     `:``}
 
-    ${a&&l.alerts.length?`
+    ${p&&_.alerts.length?`
       <article class="panel waste-home-alert">
         <div class="panel-head">
           <div><span class="overline">WASTE CONTROL</span><h3>Peringatan produksi</h3></div>
           <button class="text-button" data-jump="waste">Buka Waste</button>
         </div>
         <div class="home-alert-list">
-          ${l.alerts.slice(0,4).map(e=>`
+          ${_.alerts.slice(0,4).map(e=>`
             <div class="home-alert-row">
               <span class="waste-alert-dot ${e.severity}"></span>
               <div class="grow"><strong>${Q(e.title)}</strong><small>${Q(e.message)}</small></div>
@@ -353,28 +353,43 @@ Total Duration: ${c-l}ms`),G.resolve({didRun:!0,sequenceNumbersCollected:r,targe
     `:``}
 
     <div class="content-grid">
-      <article class="panel">
+      <article class="panel dashboard-shift-panel">
         <div class="panel-head">
           <div><span class="overline">TODAY</span><h3>Shift Hari Ini</h3></div>
-          <button class="text-button" data-jump="schedule">Lihat jadwal</button>
+          <button class="text-button" data-jump="schedule" data-schedule-date="${Q(n)}">Lihat jadwal</button>
         </div>
         <div class="compact-list">
-          ${n.length?n.map(e=>`
-            <div class="compact-row">
+          ${a.length?a.map(e=>`
+            <div class="compact-row ${l(e.crewName)?`is-current-crew`:``}">
               <span class="shift-badge ${uM(e.shift)}">${Q(e.shift)}</span>
-              <div class="grow"><strong>${Q(e.crewName)}</strong><small>${Q(e.role||`Belum ada role`)}</small></div>
+              <div class="grow"><strong>${Q(e.crewName)}${l(e.crewName)?` <span class="current-crew-chip">Kamu</span>`:``}</strong><small>${Q(e.role||(e.shift===`Libur`?`Tidak ada jadwal kerja`:`Belum ada role`))}</small></div>
             </div>
           `).join(``):dM(`Belum ada jadwal untuk hari ini.`)}
         </div>
       </article>
 
-      <article class="panel">
+      <article class="panel dashboard-shift-panel tomorrow-shift-panel">
+        <div class="panel-head">
+          <div><span class="overline">TOMORROW</span><h3>Shift Besok</h3><small class="dashboard-next-date">${Q(u)}</small></div>
+          <button class="text-button" data-jump="schedule" data-schedule-date="${Q(i)}">Lihat jadwal</button>
+        </div>
+        <div class="compact-list">
+          ${o.length?o.map(e=>`
+            <div class="compact-row ${l(e.crewName)?`is-current-crew`:``}">
+              <span class="shift-badge ${uM(e.shift)}">${Q(e.shift)}</span>
+              <div class="grow"><strong>${Q(e.crewName)}${l(e.crewName)?` <span class="current-crew-chip">Kamu</span>`:``}</strong><small>${Q(e.role||(e.shift===`Libur`?`Tidak ada jadwal kerja`:`Belum ada role`))}</small></div>
+            </div>
+          `).join(``):dM(`Belum ada jadwal untuk besok.`)}
+        </div>
+      </article>
+
+      <article class="panel dashboard-checklist-panel">
         <div class="panel-head">
           <div><span class="overline">CHECKLIST</span><h3>Daily Check</h3></div>
           <button class="text-button" data-jump="checklist">Lihat semua</button>
         </div>
         <div class="compact-list">
-          ${r.length?r.slice(0,8).map(e=>`
+          ${d.length?d.slice(0,8).map(e=>`
             <div class="compact-row checklist-row">
               <span class="check-box"></span>
               <div class="grow"><strong>${Q(e.title)}</strong><small>${Q(rj(e).shift)}</small></div>
@@ -383,7 +398,7 @@ Total Duration: ${c-l}ms`),G.resolve({didRun:!0,sequenceNumbersCollected:r,targe
         </div>
       </article>
     </div>
-  `,document.querySelector(`#export-dashboard`)?.addEventListener(`click`,()=>zO({stockAnalytics:o,wasteAlerts:l.alerts,todaySchedule:n,filename:`SoWork-Dashboard-${t}.xlsx`})),document.querySelectorAll(`[data-jump]`).forEach(e=>{e.onclick=()=>{let n=e.dataset.jump;n===`schedule`&&(X.schedulePreview=null,X.scheduleMonth=DA(t)||X.scheduleMonth||ZA()),X.page=n,bA()}})}function DA(e){let t=QA(e);return t?(t.getDate()>25&&t.setMonth(t.getMonth()+1),`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,`0`)}`):null}function OA(e=[]){let t=e.map(e=>String(e?.date||``)).filter(e=>/^\d{4}-\d{2}-\d{2}$/.test(e)).sort();return t.length?DA(t[t.length-1]):null}function kA(e){let t=e?.updatedAt;if(!t)return 0;if(typeof t?.toMillis==`function`)try{return Number(t.toMillis())||0}catch{}if(Number.isFinite(Number(t?.seconds)))return Number(t.seconds)*1e3+Math.floor(Number(t.nanoseconds||0)/1e6);let n=t instanceof Date?t.getTime():Date.parse(String(t));return Number.isFinite(n)?n:0}function AA(e=[]){let t=(e||[]).filter(e=>/^\d{4}-\d{2}-\d{2}$/.test(String(e?.date||``))).map(e=>({row:e,updated:kA(e)})).sort((e,t)=>t.updated-e.updated);return t.length&&t[0].updated>0?DA(t[0].row.date):OA(e)}function jA(e){return/^\d{4}-(0[1-9]|1[0-2])$/.test(String(e||``))}async function MA(e,t=!0){if(!jA(e))return!1;let n={...X.appSettings,scheduleLastSavedMonth:e,scheduleLastSavedIncludeCarryover:t!==!1,scheduleLastSavedAt:new Date().toISOString()};return await pO(n),X.appSettings={...dO,...n},X.scheduleMonth=e,X.scheduleIncludeCarryover=t!==!1,X.schedulePeriodRestored=!0,!0}function NA(){if(X.schedulePeriodRestored||!X.scheduleLoaded||PT(X.profile)&&!X.appSettingsLoaded)return;let e=X.appSettings?.scheduleLastSavedMonth;jA(e)?(X.scheduleMonth=e,X.scheduleIncludeCarryover=X.appSettings?.scheduleLastSavedIncludeCarryover!==!1):X.scheduleMonth=AA(X.schedules)||ZA(),X.schedulePeriodRestored=!0}function PA(e,t=!0){let[n,r]=String(e||ZA()).split(`-`).map(Number),i=t?new Date(n,r-2,26):new Date(n,r-1,1),a=new Date(n,r-1,25);return{start:cM(i),end:cM(a)}}function FA(e,t=0){let[n,r]=String(e||ZA()).split(`-`).map(Number);if(!n||!r||r<1||r>12)return ZA();let i=new Date(n,r-1+Number(t||0),1);return`${i.getFullYear()}-${String(i.getMonth()+1).padStart(2,`0`)}`}var IA=[`Senin`,`Selasa`,`Rabu`,`Kamis`,`Jumat`,`Sabtu`,`Minggu`];function LA(e,t){let n=String(t||``).trim();return n?IA.filter(t=>(e?.offDays?.[t]||[]).includes(n)):[]}function RA(e,t,n=null){let r=e||{name:``,gender:`Pria`,active:!0},i=LA(n,r.name),a=i[0]||``,o=i.slice(1),s=[``,...IA].map(e=>`<option value="${e}" ${a===e?`selected`:``}>${e||`Belum diatur`}</option>`).join(``),c=o.length?`<small class="crew-offday-preserved">${o.length} libur tambahan dari data lama tetap dipertahankan: ${Q(o.join(`, `))}</small>`:``;return`
+  `,document.querySelector(`#export-dashboard`)?.addEventListener(`click`,()=>zO({stockAnalytics:m,wasteAlerts:_.alerts,todaySchedule:a,filename:`SoWork-Dashboard-${n}.xlsx`})),document.querySelectorAll(`[data-jump]`).forEach(e=>{e.onclick=()=>{let t=e.dataset.jump;t===`schedule`&&(X.schedulePreview=null,X.scheduleMonth=DA(e.dataset.scheduleDate||n)||X.scheduleMonth||ZA()),X.page=t,bA()}})}function DA(e){let t=QA(e);return t?(t.getDate()>25&&t.setMonth(t.getMonth()+1),`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,`0`)}`):null}function OA(e=[]){let t=e.map(e=>String(e?.date||``)).filter(e=>/^\d{4}-\d{2}-\d{2}$/.test(e)).sort();return t.length?DA(t[t.length-1]):null}function kA(e){let t=e?.updatedAt;if(!t)return 0;if(typeof t?.toMillis==`function`)try{return Number(t.toMillis())||0}catch{}if(Number.isFinite(Number(t?.seconds)))return Number(t.seconds)*1e3+Math.floor(Number(t.nanoseconds||0)/1e6);let n=t instanceof Date?t.getTime():Date.parse(String(t));return Number.isFinite(n)?n:0}function AA(e=[]){let t=(e||[]).filter(e=>/^\d{4}-\d{2}-\d{2}$/.test(String(e?.date||``))).map(e=>({row:e,updated:kA(e)})).sort((e,t)=>t.updated-e.updated);return t.length&&t[0].updated>0?DA(t[0].row.date):OA(e)}function jA(e){return/^\d{4}-(0[1-9]|1[0-2])$/.test(String(e||``))}async function MA(e,t=!0){if(!jA(e))return!1;let n={...X.appSettings,scheduleLastSavedMonth:e,scheduleLastSavedIncludeCarryover:t!==!1,scheduleLastSavedAt:new Date().toISOString()};return await pO(n),X.appSettings={...dO,...n},X.scheduleMonth=e,X.scheduleIncludeCarryover=t!==!1,X.schedulePeriodRestored=!0,!0}function NA(){if(X.schedulePeriodRestored||!X.scheduleLoaded||PT(X.profile)&&!X.appSettingsLoaded)return;let e=X.appSettings?.scheduleLastSavedMonth;jA(e)?(X.scheduleMonth=e,X.scheduleIncludeCarryover=X.appSettings?.scheduleLastSavedIncludeCarryover!==!1):X.scheduleMonth=AA(X.schedules)||ZA(),X.schedulePeriodRestored=!0}function PA(e,t=!0){let[n,r]=String(e||ZA()).split(`-`).map(Number),i=t?new Date(n,r-2,26):new Date(n,r-1,1),a=new Date(n,r-1,25);return{start:cM(i),end:cM(a)}}function FA(e,t=0){let[n,r]=String(e||ZA()).split(`-`).map(Number);if(!n||!r||r<1||r>12)return ZA();let i=new Date(n,r-1+Number(t||0),1);return`${i.getFullYear()}-${String(i.getMonth()+1).padStart(2,`0`)}`}var IA=[`Senin`,`Selasa`,`Rabu`,`Kamis`,`Jumat`,`Sabtu`,`Minggu`];function LA(e,t){let n=String(t||``).trim();return n?IA.filter(t=>(e?.offDays?.[t]||[]).includes(n)):[]}function RA(e,t,n=null){let r=e||{name:``,gender:`Pria`,active:!0},i=LA(n,r.name),a=i[0]||``,o=i.slice(1),s=[``,...IA].map(e=>`<option value="${e}" ${a===e?`selected`:``}>${e||`Belum diatur`}</option>`).join(``),c=o.length?`<small class="crew-offday-preserved">${o.length} libur tambahan dari data lama tetap dipertahankan: ${Q(o.join(`, `))}</small>`:``;return`
     <div class="schedule-crew-rule-row" data-crew-rule-row="${t}" data-original-crew-name="${Q(r.name||``)}">
       <label class="crew-rule-field crew-name-field"><span>Nama crew</span><input name="crew_name_${t}" value="${Q(r.name||``)}" placeholder="Nama crew" /></label>
       <label class="crew-rule-field"><span>Gender</span><select name="crew_gender_${t}">
@@ -1545,7 +1560,7 @@ Total Duration: ${c-l}ms`),G.resolve({didRun:!0,sequenceNumbersCollected:r,targe
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.7.30 Stock Opname Batch Delete</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.7.31 Dashboard Shift Besok</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>
