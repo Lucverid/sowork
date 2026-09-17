@@ -1,7 +1,7 @@
 {
   "name": "sowork",
   "private": true,
-  "version": "1.7.1",
+  "version": "1.8.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,10 @@
     "cf:init-db": "wrangler d1 execute DB --remote --file=cloudflare-worker/schema.sql --config cloudflare-worker/wrangler.jsonc",
     "cf:deploy": "wrangler deploy --config cloudflare-worker/wrangler.jsonc",
     "cf:dev": "wrangler dev --config cloudflare-worker/wrangler.jsonc",
-    "deploy": "gh-pages -d dist -r https://github.com/Lucverid/sowork.git"
+    "deploy": "gh-pages -d dist -r https://github.com/Lucverid/sowork.git",
+    "deploy:rules": "npx firebase-tools deploy --only firestore:rules --project sowork-ab04d",
+    "deploy:all": "npm run build && npm run deploy:rules && npm run deploy",
+    "verify:planning": "node scripts/verify-planning-v183.mjs"
   },
   "dependencies": {
     "firebase": "latest",

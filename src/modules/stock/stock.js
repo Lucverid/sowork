@@ -59,6 +59,7 @@ export function watchStockSettings(callback, onError) {
       telegramNotifyDailyCheck: true,
       telegramNotifyOpsReminder: true,
       telegramNotifyStockReceipt: true,
+      telegramNotifyStockOpname: true,
       telegramOpsReminderHour: 20,
       defaultLeadTimeDays: 2,
       defaultTargetCoverageDays: 7
@@ -251,6 +252,239 @@ export async function saveStockReceiptBatch({
     itemCount: normalized.length,
     totalQty: normalized.reduce((sum, row) => sum + row.qty, 0),
     rows: normalized
+  };
+}
+
+function normalizeStockReceiptRows(rows = []) {
+  const normalized = [];
+  const seen = new Set();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const itemId = String(row?.itemId || "").trim();
+    if (!itemId) continue;
+    if (seen.has(itemId)) throw new Error(`${row?.itemName || itemId}: barang yang sama tidak boleh dua kali dalam satu kiriman.`);
+    seen.add(itemId);
+
+    const cartonSize = Math.max(0, Number(row?.cartonSize || 0));
+    const cartons = Math.max(0, Number(row?.cartons || 0));
+    const looseQty = Math.max(0, Number(row?.looseQty || 0));
+    const qty = cartons > 0 && cartonSize > 0 ? (cartons * cartonSize) + looseQty : looseQty;
+    if (!(qty > 0)) throw new Error(`${row?.itemName || itemId}: jumlah barang masuk harus lebih dari 0.`);
+
+    normalized.push({
+      itemId,
+      itemName: String(row?.itemName || ""),
+      unit: String(row?.unit || "PCS"),
+      cartonSize,
+      cartons,
+      looseQty,
+      qty
+    });
+  }
+  return normalized;
+}
+
+async function loadReceiptRowsForMutation({ batchId = "", movementIds = [] } = {}) {
+  const snap = await getDocs(collection(db, "stockMovements"));
+  const allRows = snap.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() }));
+  const idSet = new Set((Array.isArray(movementIds) ? movementIds : []).map(String));
+  const safeBatchId = String(batchId || "").trim();
+  const targets = allRows.filter(row => row?.type === "IN" && (
+    (safeBatchId && String(row?.batchId || "") === safeBatchId)
+    || (!safeBatchId && idSet.has(String(row?.id || "")))
+  ));
+  return { allRows, targets };
+}
+
+async function loadReceiptItemState(itemIds = []) {
+  const ids = [...new Set(itemIds.map(String).filter(Boolean))];
+  const pairs = await Promise.all(ids.map(async itemId => {
+    const snap = await getDoc(doc(db, "items", itemId));
+    return [itemId, snap.exists() ? { id: snap.id, ...snap.data() } : null];
+  }));
+  return new Map(pairs);
+}
+
+function receiptContributesToCurrent(date, item) {
+  if (!item) return false;
+  const lastOpnameDate = String(item?.lastOpnameDate || "");
+  return !lastOpnameDate || String(date || "") > lastOpnameDate;
+}
+
+function sumReceiptContribution(rows, itemState) {
+  const out = new Map();
+  for (const row of rows || []) {
+    const itemId = String(row?.itemId || "");
+    if (!itemId || !receiptContributesToCurrent(row?.date, itemState.get(itemId))) continue;
+    out.set(itemId, (out.get(itemId) || 0) + Math.max(0, Number(row?.qty || 0)));
+  }
+  return out;
+}
+
+function latestInboundDate(allRows, targetIds, itemId, replacementRows = []) {
+  const dates = allRows
+    .filter(row => row?.type === "IN" && String(row?.itemId || "") === itemId && !targetIds.has(String(row?.id || "")))
+    .map(row => String(row?.date || ""))
+    .filter(Boolean);
+  replacementRows
+    .filter(row => String(row?.itemId || "") === itemId)
+    .forEach(row => { if (row?.date) dates.push(String(row.date)); });
+  return dates.sort().pop() || "";
+}
+
+/**
+ * Replaces one inbound batch while preserving current-stock correctness.
+ * This powers CRUD from the Barang Masuk history UI. For legacy/import rows
+ * without a batchId, pass movementIds; the first edit upgrades them into a
+ * normal batch so subsequent CRUD stays consistent.
+ */
+export async function updateStockReceiptBatch({
+  batchId = "",
+  movementIds = [],
+  date,
+  destination = "Gudang Utama",
+  supplier = "",
+  note = "",
+  rows = [],
+  actor = {}
+} = {}) {
+  const safeDate = String(date || "").trim();
+  if (!safeDate) throw new Error("Tanggal barang masuk wajib diisi.");
+  const normalized = normalizeStockReceiptRows(rows);
+  if (!normalized.length) throw new Error("Batch harus memiliki minimal 1 barang. Gunakan Hapus Batch jika ingin menghapus semuanya.");
+
+  const { allRows, targets } = await loadReceiptRowsForMutation({ batchId, movementIds });
+  if (!targets.length) throw new Error("Data barang masuk yang akan diedit tidak ditemukan atau sudah berubah.");
+
+  const targetIds = new Set(targets.map(row => String(row.id)));
+  const safeBatchId = String(batchId || targets.find(row => row?.batchId)?.batchId || `INB_${safeDate}_${crypto.randomUUID()}`)
+    .replace(/[^a-zA-Z0-9_-]+/g, "-");
+  const safeSupplier = String(supplier || "").trim();
+  const safeNote = String(note || "").trim();
+  const safeDestination = String(destination || "Gudang Utama").trim() || "Gudang Utama";
+
+  const impactedIds = [...new Set([
+    ...targets.map(row => String(row?.itemId || "")),
+    ...normalized.map(row => row.itemId)
+  ].filter(Boolean))];
+  const itemState = await loadReceiptItemState(impactedIds);
+  for (const row of normalized) {
+    if (!itemState.get(row.itemId)) throw new Error(`${row.itemName || row.itemId}: master barang tidak ditemukan.`);
+  }
+
+  const oldContribution = sumReceiptContribution(targets, itemState);
+  const normalizedWithDate = normalized.map(row => ({ ...row, date: safeDate }));
+  const newContribution = sumReceiptContribution(normalizedWithDate, itemState);
+  const existingByItem = new Map(targets.map(row => [String(row?.itemId || ""), row]));
+  const reusedIds = new Set();
+  const movementRows = normalized.map((row, index) => {
+    const existing = existingByItem.get(row.itemId);
+    const movementId = existing?.id || `${safeBatchId}_${String(index + 1).padStart(3, "0")}_${row.itemId}`;
+    if (existing?.id) reusedIds.add(String(existing.id));
+    return { ...row, movementId, existing, index: index + 1 };
+  });
+
+  const operationCount = targets.length + movementRows.length + impactedIds.length;
+  if (operationCount > 430) throw new Error("Batch terlalu besar untuk diedit sekaligus. Pecah kiriman menjadi beberapa batch terlebih dahulu.");
+
+  const batch = writeBatch(db);
+  for (const oldRow of targets) {
+    if (!reusedIds.has(String(oldRow.id))) batch.delete(oldRow.ref || doc(db, "stockMovements", oldRow.id));
+  }
+
+  const commonCreatedAt = targets.find(row => row?.createdAt)?.createdAt || serverTimestamp();
+  const commonCreatedByUid = String(targets.find(row => row?.createdByUid)?.createdByUid || actor?.uid || "");
+  const commonCreatedByName = String(targets.find(row => row?.createdByName)?.createdByName || actor?.name || "");
+
+  movementRows.forEach(row => {
+    const item = itemState.get(row.itemId);
+    batch.set(doc(db, "stockMovements", row.movementId), {
+      batchId: safeBatchId,
+      batchIndex: row.index,
+      batchSize: movementRows.length,
+      itemId: row.itemId,
+      itemName: row.itemName,
+      type: "IN",
+      source: "STOCK_RECEIPT_BATCH",
+      date: safeDate,
+      qty: row.qty,
+      cartons: row.cartons,
+      looseQty: row.looseQty,
+      cartonSize: row.cartonSize,
+      unit: row.unit,
+      destination: safeDestination,
+      supplier: safeSupplier,
+      note: safeNote,
+      affectsCurrentStock: receiptContributesToCurrent(safeDate, item),
+      createdAt: row.existing?.createdAt || commonCreatedAt,
+      createdByUid: String(row.existing?.createdByUid || commonCreatedByUid),
+      createdByName: String(row.existing?.createdByName || commonCreatedByName),
+      updatedAt: serverTimestamp(),
+      updatedByUid: String(actor?.uid || ""),
+      updatedByName: String(actor?.name || "")
+    });
+  });
+
+  for (const itemId of impactedIds) {
+    const item = itemState.get(itemId);
+    if (!item) continue;
+    const delta = (newContribution.get(itemId) || 0) - (oldContribution.get(itemId) || 0);
+    const update = {
+      lastDeliveryDate: latestInboundDate(allRows, targetIds, itemId, normalizedWithDate),
+      updatedAt: serverTimestamp(),
+      receiptEditedAt: serverTimestamp(),
+      receiptEditedByUid: String(actor?.uid || ""),
+      receiptEditedByName: String(actor?.name || "")
+    };
+    if (Math.abs(delta) > 1e-9) update.currentQty = increment(delta);
+    batch.set(doc(db, "items", itemId), update, { merge: true });
+  }
+
+  await batch.commit();
+  return {
+    batchId: safeBatchId,
+    date: safeDate,
+    destination: safeDestination,
+    supplier: safeSupplier,
+    note: safeNote,
+    itemCount: normalized.length,
+    totalQty: normalized.reduce((sum, row) => sum + row.qty, 0),
+    rows: normalized
+  };
+}
+
+export async function removeStockReceiptBatch({ batchId = "", movementIds = [], actor = {} } = {}) {
+  const { allRows, targets } = await loadReceiptRowsForMutation({ batchId, movementIds });
+  if (!targets.length) return { removedDocuments: 0, itemCount: 0, restoredQty: 0 };
+
+  const targetIds = new Set(targets.map(row => String(row.id)));
+  const impactedIds = [...new Set(targets.map(row => String(row?.itemId || "")).filter(Boolean))];
+  const itemState = await loadReceiptItemState(impactedIds);
+  const oldContribution = sumReceiptContribution(targets, itemState);
+  const operationCount = targets.length + impactedIds.length;
+  if (operationCount > 430) throw new Error("Batch terlalu besar untuk dihapus sekaligus.");
+
+  const batch = writeBatch(db);
+  targets.forEach(row => batch.delete(row.ref || doc(db, "stockMovements", row.id)));
+  for (const itemId of impactedIds) {
+    const item = itemState.get(itemId);
+    if (!item) continue;
+    const qty = oldContribution.get(itemId) || 0;
+    const update = {
+      lastDeliveryDate: latestInboundDate(allRows, targetIds, itemId, []),
+      updatedAt: serverTimestamp(),
+      receiptDeletedAt: serverTimestamp(),
+      receiptDeletedByUid: String(actor?.uid || ""),
+      receiptDeletedByName: String(actor?.name || "")
+    };
+    if (qty > 0) update.currentQty = increment(-qty);
+    batch.set(doc(db, "items", itemId), update, { merge: true });
+  }
+  await batch.commit();
+
+  return {
+    removedDocuments: targets.length,
+    itemCount: impactedIds.length,
+    restoredQty: [...oldContribution.values()].reduce((sum, qty) => sum + qty, 0)
   };
 }
 
@@ -453,7 +687,10 @@ export async function removeDailyStockUsageDay(date, actor = {}) {
 
 export async function saveStockOpname(date, rows, actor = {}) {
   if (!date || !rows?.length) throw new Error("Tanggal dan data SO wajib diisi.");
-  const chunks = chunk(rows, 180);
+  const safeRows = rows.filter(row => row?.itemId);
+  if (!safeRows.length) throw new Error("Batch Stock Opname tidak memiliki barang valid.");
+  const batchId = String(actor?.batchId || `SO_${date}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  const chunks = chunk(safeRows.map((row, index) => ({ ...row, __batchIndex: index })), 180);
   for (const part of chunks) {
     const batch = writeBatch(db);
     for (const row of part) {
@@ -465,6 +702,10 @@ export async function saveStockOpname(date, rows, actor = {}) {
         date,
         itemId: row.itemId,
         itemName: String(row.itemName || ""),
+        batchId,
+        batchIndex: Number(row.__batchIndex || 0),
+        batchSize: safeRows.length,
+        batchSavedBy: String(actor.name || ""),
         primaryLocation: String(row.primaryLocation || "Gudang Utama"),
         primaryQty,
         secondaryLocation: String(row.secondaryLocation || "Gudang 2"),
@@ -493,6 +734,12 @@ export async function saveStockOpname(date, rows, actor = {}) {
     }
     await batch.commit();
   }
+  return {
+    batchId,
+    date: String(date),
+    itemCount: safeRows.length,
+    rows: safeRows.map(({ __batchIndex, ...row }) => row)
+  };
 }
 
 
@@ -546,6 +793,7 @@ export async function saveStockSettings(settings) {
     telegramNotifyDailyCheck: settings.telegramNotifyDailyCheck !== false,
     telegramNotifyOpsReminder: settings.telegramNotifyOpsReminder !== false,
     telegramNotifyStockReceipt: settings.telegramNotifyStockReceipt !== false,
+    telegramNotifyStockOpname: settings.telegramNotifyStockOpname !== false,
     telegramOpsReminderHour: [18, 20].includes(Number(settings.telegramOpsReminderHour)) ? Number(settings.telegramOpsReminderHour) : 20,
     defaultLeadTimeDays: Math.max(0, Number(settings.defaultLeadTimeDays || 2)),
     defaultTargetCoverageDays: Math.max(1, Number(settings.defaultTargetCoverageDays || 7)),

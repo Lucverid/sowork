@@ -3,6 +3,7 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   orderBy,
   query,
@@ -18,6 +19,19 @@ export function watchSchedules(callback, onError) {
   return onSnapshot(q, snap => {
     callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
   }, onError);
+}
+
+export async function loadSchedules() {
+  const q = query(collection(db, "schedules"), orderBy("date", "asc"));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// Import/replace harus menampilkan hasil server, bukan snapshot IndexedDB lama.
+export async function loadSchedulesFromServer() {
+  const q = query(collection(db, "schedules"), orderBy("date", "asc"));
+  const snap = await getDocsFromServer(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 export async function saveSchedule(entry) {
@@ -52,6 +66,44 @@ export async function saveSchedule(entry) {
   return id;
 }
 
+
+export async function upsertSchedules(entries = []) {
+  const normalized = new Map();
+  for (const entry of entries || []) {
+    const date = String(entry?.date || "").trim();
+    const crewName = String(entry?.crewName || "").trim();
+    const shift = String(entry?.shift || "").trim();
+    if (!date || !crewName || !shift) continue;
+    const id = `${date}_${slug(crewName)}`;
+    const role = shift === "Libur" ? "" : String(entry?.role || "").trim();
+    const overtime = Boolean(entry?.overtime) && shift !== "Libur";
+    normalized.set(id, {
+      date,
+      shift,
+      crewName,
+      gender: String(entry?.gender || "").trim(),
+      role,
+      notes: String(entry?.notes || "").trim(),
+      overtime,
+      overtimeType: overtime ? String(entry?.overtimeType || "Buka").trim() : "",
+      overtimeNote: overtime ? String(entry?.overtimeNote || "").trim() : "",
+      source: entry?.source || "excel-import",
+      generated: entry?.generated === true,
+      updatedAt: serverTimestamp()
+    });
+  }
+
+  const items = [...normalized.entries()];
+  for (let i = 0; i < items.length; i += 350) {
+    const batch = writeBatch(db);
+    for (const [id, data] of items.slice(i, i + 350)) {
+      batch.set(doc(db, "schedules", id), data, { merge: true });
+    }
+    await batch.commit();
+  }
+  return items.length;
+}
+
 export function removeSchedule(id) {
   return deleteDoc(doc(db, "schedules", id));
 }
@@ -69,13 +121,15 @@ export function saveScheduleRules(rules) {
   }, { merge: true });
 }
 
-export async function replaceScheduleRange(startDate, endDate, entries) {
+export async function replaceScheduleRange(startDate, endDate, entries, options = {}) {
   const q = query(
     collection(db, "schedules"),
     where("date", ">=", startDate),
     where("date", "<=", endDate)
   );
-  const existing = await getDocs(q);
+  // Wajib baca server. getDocs() bisa mengembalikan cache lama saat persistence aktif,
+  // sehingga dokumen legacy pada rentang import tidak ikut terhapus.
+  const existing = await getDocsFromServer(q);
   const operations = [];
 
   existing.docs.forEach(snap => operations.push({ type: "delete", ref: snap.ref }));
@@ -94,8 +148,8 @@ export async function replaceScheduleRange(startDate, endDate, entries) {
         overtime: Boolean(entry.overtime) && shift !== "Libur",
         overtimeType: entry.overtime ? (entry.overtimeType || "Buka") : "",
         overtimeNote: entry.overtime ? (entry.overtimeNote || "") : "",
-        source: "auto",
-        generated: true,
+        source: entry.source || "auto",
+        generated: entry.generated === true,
         updatedAt: serverTimestamp()
       }
     });
@@ -109,6 +163,52 @@ export async function replaceScheduleRange(startDate, endDate, entries) {
     }
     await batch.commit();
   }
+
+  if (options?.verifyServer) {
+    const expected = new Map();
+    for (const entry of entries || []) {
+      const key = `${String(entry?.date || "").trim()}|${String(entry?.crewName || "").trim().toLowerCase()}`;
+      expected.set(key, {
+        shift: String(entry?.shift || ""),
+        role: entry?.shift === "Libur" ? "" : String(entry?.role || "").trim(),
+        overtime: Boolean(entry?.overtime) && entry?.shift !== "Libur"
+      });
+    }
+    let verifySnap;
+    try { verifySnap = await getDocsFromServer(q); }
+    catch (err) {
+      const wrapped = new Error("Data import sudah dikirim, tetapi SoWork belum bisa memverifikasi hasilnya langsung dari server Firestore. Pastikan internet aktif lalu coba lagi.");
+      wrapped.cause = err;
+      throw wrapped;
+    }
+    const actual = new Map();
+    const duplicateKeys = [];
+    for (const snap of verifySnap.docs) {
+      const row = snap.data() || {};
+      const key = `${String(row.date || "").trim()}|${String(row.crewName || "").trim().toLowerCase()}`;
+      if (actual.has(key)) duplicateKeys.push(key);
+      actual.set(key, { id: snap.id, ...row });
+    }
+    const mismatch = [];
+    // Bandingkan jumlah dokumen mentah, bukan Map.size saja. Map bisa menyembunyikan
+    // dokumen duplikat legacy dengan tanggal+crew yang sama.
+    if (verifySnap.docs.length !== expected.size) mismatch.push(`jumlah dokumen server ${verifySnap.docs.length}, seharusnya ${expected.size}`);
+    if (duplicateKeys.length) mismatch.push(`duplikat legacy: ${[...new Set(duplicateKeys)].slice(0,3).join(", ")}`);
+    for (const [key, want] of expected) {
+      const got = actual.get(key);
+      if (!got) { mismatch.push(`${key} tidak ditemukan`); continue; }
+      const gotRole = got.shift === "Libur" ? "" : String(got.role || "").trim();
+      if (String(got.shift || "") !== want.shift || gotRole !== want.role || Boolean(got.overtime) !== want.overtime) {
+        mismatch.push(`${key} berbeda`);
+      }
+      if (mismatch.length >= 6) break;
+    }
+    if (mismatch.length) throw new Error(`Verifikasi Firestore gagal: ${mismatch.join("; ")}. Import tidak dianggap selesai agar data salah tidak tersembunyi.`);
+    const serverEntries = verifySnap.docs.map(snap => ({ id: snap.id, ...snap.data() }));
+    return { written: expected.size, verified: true, serverEntries };
+  }
+
+  return { written: entries?.length || 0, verified: false };
 }
 
 function slug(value) {

@@ -13,7 +13,7 @@ import { db } from "../../firebase/config.js";
 const SETTINGS_COLLECTION = "settings";
 const BACKUP_KIND = "SOWORK_BACKUP";
 const POLICY_DOC = "backupPolicy";
-const APP_VERSION = "1.7.3";
+const APP_VERSION = "1.8.1";
 
 const DEFAULT_POLICY = {
   autoBackupEnabled: true,
@@ -72,7 +72,10 @@ export async function createBackupSnapshot(context = {}, options = {}) {
   const counts = {
     crew: Array.isArray(data.scheduleRules?.crew) ? data.scheduleRules.crew.length : 0,
     stockItems: Array.isArray(data.stockItems) ? data.stockItems.length : 0,
-    wasteItems: Array.isArray(data.wasteItems) ? data.wasteItems.length : 0
+    wasteItems: Array.isArray(data.wasteItems) ? data.wasteItems.length : 0,
+    productionRecipes: Array.isArray(data.productionRecipes) ? data.productionRecipes.length : 0,
+    productRecipes: Array.isArray(data.productRecipes) ? data.productRecipes.length : 0,
+    salesMappings: Array.isArray(data.salesMappings) ? data.salesMappings.length : 0
   };
 
   const payload = {
@@ -145,6 +148,10 @@ export async function restoreBackupSnapshot(snapshot) {
   const rules = data.scheduleRules && typeof data.scheduleRules === "object" ? data.scheduleRules : null;
   const stockItems = Array.isArray(data.stockItems) ? data.stockItems : [];
   const wasteItems = Array.isArray(data.wasteItems) ? data.wasteItems : [];
+  const productionRecipes = Array.isArray(data.productionRecipes) ? data.productionRecipes : [];
+  const productRecipes = Array.isArray(data.productRecipes) ? data.productRecipes : [];
+  const salesMappings = Array.isArray(data.salesMappings) ? data.salesMappings : [];
+  const salesRecords = Array.isArray(data.salesRecords) ? data.salesRecords : [];
   const appSettings = data.appSettings && typeof data.appSettings === "object" ? data.appSettings : null;
   const stockSettings = data.stockSettings && typeof data.stockSettings === "object" ? data.stockSettings : null;
 
@@ -185,6 +192,31 @@ export async function restoreBackupSnapshot(snapshot) {
     await batch.commit();
   }
 
+  const planningGroups = [
+    { type: "productionRecipe", prefix: "production", idKey: "recipeId", rows: productionRecipes },
+    { type: "productRecipe", prefix: "product", idKey: "recipeId", rows: productRecipes },
+    { type: "salesMapping", prefix: "mapping", idKey: "mappingId", rows: salesMappings },
+    { type: "salesRecord", prefix: "sales", idKey: "salesId", rows: salesRecords }
+  ];
+  for (const group of planningGroups) {
+    for (let i = 0; i < group.rows.length; i += 150) {
+      const batch = writeBatch(db);
+      for (const item of group.rows.slice(i, i + 150)) {
+        const id = String(item?.[group.idKey] || item?.id || "").trim();
+        if (!id) continue;
+        const value = plainObject_(item);
+        delete value.id;
+        batch.set(doc(db, "planning", `${group.prefix}__${id}`), {
+          ...value,
+          type: group.type,
+          [group.idKey]: id,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
+      await batch.commit();
+    }
+  }
+
   // Merge-only: secret Apps Script, pairing Telegram, dan item baru tidak pernah dihapus.
   if (appSettings) {
     await setDoc(doc(db, SETTINGS_COLLECTION, "app"), {
@@ -203,7 +235,11 @@ export async function restoreBackupSnapshot(snapshot) {
   return {
     crew: Array.isArray(rules?.crew) ? rules.crew.length : 0,
     stockItems: stockItems.length,
-    wasteItems: wasteItems.length
+    wasteItems: wasteItems.length,
+    productionRecipes: productionRecipes.length,
+    productRecipes: productRecipes.length,
+    salesMappings: salesMappings.length,
+    salesRecords: salesRecords.length
   };
 }
 
@@ -212,6 +248,10 @@ function buildSafeSnapshot_(context = {}) {
     scheduleRules: plainObject_(context.scheduleRules || {}),
     stockItems: plainArray_(context.stockItems || []),
     wasteItems: plainArray_(context.wasteItems || []),
+    productionRecipes: plainArray_(context.productionRecipes || []),
+    productRecipes: plainArray_(context.productRecipes || []),
+    salesMappings: plainArray_(context.salesMappings || []),
+    salesRecords: plainArray_(context.salesRecords || []),
     appSettings: safeAppSettings_(context.appSettings || {}),
     stockSettings: safeStockSettings_(context.stockSettings || {})
   };
@@ -230,7 +270,8 @@ function safeStockSettings_(value) {
   return pick_(source, [
     "telegramEnabled", "cloudflareWorkerUrl", "telegramNotifyLowStock", "telegramNotifyOrderDue",
     "telegramNotifyWasteHigh", "telegramNotifyWasteRiskDay", "telegramNotifyDailyCheck",
-    "telegramNotifyOpsReminder", "telegramNotifyStockReceipt", "telegramOpsReminderHour",
+    "telegramNotifyOpsReminder", "telegramNotifyStockReceipt", "telegramNotifyStockOpname",
+    "telegramNotifyPlanningSummary", "telegramNotifySalesImport", "telegramNotifyStockVariance", "telegramOpsReminderHour",
     "defaultLeadTimeDays", "defaultTargetCoverageDays", "notifyCriticalOnly", "notifyLowStock",
     "whatsappTemplateName", "whatsappTemplateLanguage"
   ]);

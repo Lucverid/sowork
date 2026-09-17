@@ -1,11 +1,11 @@
 import "./style.css";
 import { getUserProfile, isAdmin, login, logout, observeAuth, registerViewer } from "./auth/auth.js";
-import { watchSchedules, saveSchedule, removeSchedule, watchScheduleRules, saveScheduleRules, replaceScheduleRange } from "./modules/schedule/schedule.js";
-import { DEFAULT_SCHEDULE_RULES, SCHEDULE_PRESETS, applySchedulePreset, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries, validateRules } from "./modules/schedule/generator.js";
+import { watchSchedules, loadSchedules, loadSchedulesFromServer, saveSchedule, removeSchedule, watchScheduleRules, saveScheduleRules, replaceScheduleRange } from "./modules/schedule/schedule.js";
+import { DEFAULT_SCHEDULE_RULES, SCHEDULE_PRESETS, applySchedulePreset, buildScheduleBaselinePreview, cleanNames, generateSchedule, normalizeRules, suggestNextOffRotation, summarizeScheduleEntries, validateRules } from "./modules/schedule/generator.js";
 import { exportScheduleWorkbook, exportScheduleSheetReadyWorkbook } from "./modules/schedule/export.js";
 import { sendScheduleToGoogleSheet, testGoogleSheetConnection, normalizeAppsScriptUrl, extractSpreadsheetId } from "./modules/schedule/googleSheet.js";
 import { watchChecklist, saveChecklistItem, removeChecklistItem, watchChecklistCompletions, saveChecklistCompletion } from "./modules/checklist/checklist.js";
-import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveStockReceiptBatch, saveDailyStockUsage, removeDailyStockUsageDay, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
+import { watchStockItems, watchStockMovements, watchStockOpnames, watchStockSettings, saveStockItem, removeStockItem, saveStockReceipt, saveStockReceiptBatch, updateStockReceiptBatch, removeStockReceiptBatch, saveDailyStockUsage, removeDailyStockUsageDay, saveStockOpname, removeStockOpnameDay, saveStockSettings, seedStockReference, normalizeWhatsappNumber, qtyFromCartonInput, cartonBreakdown } from "./modules/stock/stock.js";
 import { buildStockAnalytics, stockAlertRows, buildWhatsappAlertMessage, calculateTheoreticalStock, buildStockReconciliation } from "./modules/stock/analytics.js";
 import { watchWasteItems, watchWasteDays, saveWasteItem, archiveWasteItem, restoreWasteItem, permanentDeleteWasteItem, saveWasteDay, removeWasteDay, seedWasteReference } from "./modules/waste/waste.js";
 import { buildWasteAnalytics, wasteDashboardAlerts } from "./modules/waste/analytics.js";
@@ -15,9 +15,11 @@ import { DEFAULT_APP_SETTINGS, watchAppSettings, saveAppSettings, updateProfileN
 import { cleanupBackupSnapshots, createBackupSnapshot, ensureAutomaticBackup, getBackupPolicy, listBackupSnapshots, restoreBackupSnapshot, saveBackupPolicy, testFirebaseConnection } from "./modules/system/stability.js";
 import {
   chooseExcelFile, exportAllWorkbook, exportCalculatorWorkbook, exportChecklistWorkbook, exportDashboardWorkbook,
-  exportOrderPlannerWorkbook, exportReportsWorkbook, exportStockOpnameWorkbook, exportStockWorkbook, importFeatureWorkbook
+  exportOrderPlannerWorkbook, exportReportsWorkbook, exportStockOpnameWorkbook, exportStockWorkbook, importFeatureWorkbook, previewFeatureWorkbook
 } from "./modules/datahub/datahub.js";
-import { getTelegramWorkerStatus, normalizeWorkerUrl, sendTelegramStockReceiptBatch, sendTelegramTest, setupTelegramWebhook, syncTelegramSnapshot, unpairTelegram } from "./modules/telegram/cloudflare.js";
+import { getTelegramWorkerStatus, normalizeWorkerUrl, sendTelegramPlanningEvent, sendTelegramStockOpname, sendTelegramStockReceiptBatch, sendTelegramTest, setupTelegramWebhook, syncTelegramSnapshot, unpairTelegram } from "./modules/telegram/cloudflare.js";
+import { watchPlanningData, saveProductionRecipe, removeProductionRecipe, saveProductRecipe, removeProductRecipe, saveSalesMapping, removeSalesMapping, saveSalesRecord, removeSalesRecord, chooseSalesFile, importSalesFile, downloadSalesTemplate, resolveProductRecipe } from "./modules/planning/planning.js";
+import { buildPlanningAnalytics, buildSalesMappingStats, buildWasteEquivalentSummary, calculateWasteConversion } from "./modules/planning/analytics.js";
 
 const app = document.querySelector("#app");
 
@@ -33,12 +35,15 @@ let state = {
   schedulePreview: null,
   scheduleMonth: null,
   scheduleIncludeCarryover: true,
+  schedulePeriodRestored: false,
+  appSettingsLoaded: false,
   scheduleLoaded: false,
   scheduleError: "",
+  scheduleImportLock: null,
   stockItems: [],
   stockMovements: [],
   stockOpnames: [],
-  stockSettings: { whatsappNumber: "", autoWhatsappEnabled: false, notifyCriticalOnly: true, notifyLowStock: false, whatsappTemplateName: "stock_alert_sowork", whatsappTemplateLanguage: "id", telegramEnabled: false, cloudflareWorkerUrl: "", telegramChatId: "", telegramAllowedUserId: "", telegramPairCode: "", telegramWhatsappNumber: "", telegramNotifyLowStock: true, telegramNotifyOrderDue: true, telegramNotifyWasteHigh: true, telegramNotifyWasteRiskDay: true, telegramNotifyDailyCheck: true, telegramNotifyOpsReminder: true, telegramNotifyStockReceipt: true, telegramOpsReminderHour: 20, defaultLeadTimeDays: 2, defaultTargetCoverageDays: 7 },
+  stockSettings: { whatsappNumber: "", autoWhatsappEnabled: false, notifyCriticalOnly: true, notifyLowStock: false, whatsappTemplateName: "stock_alert_sowork", whatsappTemplateLanguage: "id", telegramEnabled: false, cloudflareWorkerUrl: "", telegramChatId: "", telegramAllowedUserId: "", telegramPairCode: "", telegramWhatsappNumber: "", telegramNotifyLowStock: true, telegramNotifyOrderDue: true, telegramNotifyWasteHigh: true, telegramNotifyWasteRiskDay: true, telegramNotifyDailyCheck: true, telegramNotifyOpsReminder: true, telegramNotifyStockReceipt: true, telegramNotifyStockOpname: true, telegramNotifyPlanningSummary: true, telegramNotifySalesImport: true, telegramNotifyStockVariance: true, telegramOpsReminderHour: 20, defaultLeadTimeDays: 2, defaultTargetCoverageDays: 7 },
   stockSearch: "",
   stockStatusFilter: "Semua",
   opnameDate: null,
@@ -47,8 +52,16 @@ let state = {
   opnameFilter: "Semua",
   stockUsageDate: null,
   stockUsageMonth: null,
+  stockReceiptDate: null,
+  stockReceiptMonth: null,
   wasteItems: [],
   wasteDays: [],
+  productionRecipes: [],
+  productRecipes: [],
+  salesMappings: [],
+  salesRecords: [],
+  planningLoaded: false,
+  planningError: "",
   wasteMonth: null,
   wasteDate: null,
   personalReports: [],
@@ -63,7 +76,7 @@ let state = {
   backupSnapshots: [],
   backupCenterLoading: false,
   backupCenterLoaded: false,
-  backupDataReady: { rules: false, stock: false, waste: false, app: false, stockSettings: false },
+  backupDataReady: { rules: false, stock: false, waste: false, planning: false, app: false, stockSettings: false },
   autoBackupTimer: null,
   autoBackupChecked: false,
   cloudflareSyncTimer: null,
@@ -232,7 +245,7 @@ function friendlyError(err) {
   if (code.includes("invalid-credential")) return "Email atau password salah.";
   if (code.includes("email-already-in-use")) return "Email sudah terdaftar.";
   if (code.includes("weak-password")) return "Password terlalu lemah.";
-  if (code.includes("permission-denied")) return "Akses ditolak oleh Firestore Rules.";
+  if (code.includes("permission-denied")) return "Akses ditolak oleh Firestore Rules. Untuk Planning Order, pastikan firestore.rules v1.8.3 sudah dideploy ke project sowork-ab04d.";
   if (code.includes("network-request-failed")) {
     return "Firebase tidak bisa dijangkau setelah 3 percobaan. Coba ganti jaringan / matikan VPN atau Private DNS, lalu tekan Coba Masuk Lagi.";
   }
@@ -451,7 +464,9 @@ function renderShell() {
 
   document.querySelectorAll("[data-page]").forEach(btn => {
     btn.onclick = () => {
-      state.page = btn.dataset.page;
+      const nextPage = btn.dataset.page;
+      if (state.page === "schedule" && nextPage !== "schedule") state.schedulePreview = null;
+      state.page = nextPage;
       document.querySelector("#mobile-menu-sheet")?.remove();
       renderShell();
     };
@@ -483,7 +498,9 @@ function openMobileMenu() {
   sheet.addEventListener("click", e => { if (e.target === sheet) close(); });
   sheet.querySelectorAll("[data-mobile-page]").forEach(btn => {
     btn.addEventListener("click", () => {
-      state.page = btn.dataset.mobilePage;
+      const nextPage = btn.dataset.mobilePage;
+      if (state.page === "schedule" && nextPage !== "schedule") state.schedulePreview = null;
+      state.page = nextPage;
       close();
       renderShell();
     });
@@ -561,8 +578,19 @@ function renderPage() {
 }
 
 function renderDashboard(target) {
-  const today = localDateKey(new Date());
+  const now = new Date();
+  const today = localDateKey(now);
+  const tomorrowDate = new Date(now);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = localDateKey(tomorrowDate);
   const todaySchedule = state.schedules.filter(x => x.date === today);
+  const tomorrowSchedule = state.schedules.filter(x => x.date === tomorrow);
+  const profileName = String(state.profile?.name || "").trim();
+  const crewIdentityCandidates = [profileName, profileName.split(/\s+/)[0]]
+    .map(value => value.trim().toLocaleLowerCase("id-ID"))
+    .filter(Boolean);
+  const isCurrentCrew = crewName => crewIdentityCandidates.includes(String(crewName || "").trim().toLocaleLowerCase("id-ID"));
+  const tomorrowLabel = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "2-digit", month: "short" }).format(tomorrowDate);
   const activeCheck = state.checklist.filter(x => x.active !== false);
   const displayName = state.profile?.name?.split(" ")[0] || "User";
   const admin = isAdmin(state.profile);
@@ -649,22 +677,37 @@ function renderDashboard(target) {
     ` : ""}
 
     <div class="content-grid">
-      <article class="panel">
+      <article class="panel dashboard-shift-panel">
         <div class="panel-head">
           <div><span class="overline">TODAY</span><h3>Shift Hari Ini</h3></div>
-          <button class="text-button" data-jump="schedule">Lihat jadwal</button>
+          <button class="text-button" data-jump="schedule" data-schedule-date="${escapeHtml(today)}">Lihat jadwal</button>
         </div>
         <div class="compact-list">
           ${todaySchedule.length ? todaySchedule.map(s => `
-            <div class="compact-row">
+            <div class="compact-row ${isCurrentCrew(s.crewName) ? "is-current-crew" : ""}">
               <span class="shift-badge ${shiftClass(s.shift)}">${escapeHtml(s.shift)}</span>
-              <div class="grow"><strong>${escapeHtml(s.crewName)}</strong><small>${escapeHtml(s.role || "Belum ada role")}</small></div>
+              <div class="grow"><strong>${escapeHtml(s.crewName)}${isCurrentCrew(s.crewName) ? ` <span class="current-crew-chip">Kamu</span>` : ""}</strong><small>${escapeHtml(s.role || (s.shift === "Libur" ? "Tidak ada jadwal kerja" : "Belum ada role"))}</small></div>
             </div>
           `).join("") : emptyState("Belum ada jadwal untuk hari ini.")}
         </div>
       </article>
 
-      <article class="panel">
+      <article class="panel dashboard-shift-panel tomorrow-shift-panel">
+        <div class="panel-head">
+          <div><span class="overline">TOMORROW</span><h3>Shift Besok</h3><small class="dashboard-next-date">${escapeHtml(tomorrowLabel)}</small></div>
+          <button class="text-button" data-jump="schedule" data-schedule-date="${escapeHtml(tomorrow)}">Lihat jadwal</button>
+        </div>
+        <div class="compact-list">
+          ${tomorrowSchedule.length ? tomorrowSchedule.map(s => `
+            <div class="compact-row ${isCurrentCrew(s.crewName) ? "is-current-crew" : ""}">
+              <span class="shift-badge ${shiftClass(s.shift)}">${escapeHtml(s.shift)}</span>
+              <div class="grow"><strong>${escapeHtml(s.crewName)}${isCurrentCrew(s.crewName) ? ` <span class="current-crew-chip">Kamu</span>` : ""}</strong><small>${escapeHtml(s.role || (s.shift === "Libur" ? "Tidak ada jadwal kerja" : "Belum ada role"))}</small></div>
+            </div>
+          `).join("") : emptyState("Belum ada jadwal untuk besok.")}
+        </div>
+      </article>
+
+      <article class="panel dashboard-checklist-panel">
         <div class="panel-head">
           <div><span class="overline">CHECKLIST</span><h3>Daily Check</h3></div>
           <button class="text-button" data-jump="checklist">Lihat semua</button>
@@ -690,7 +733,13 @@ function renderDashboard(target) {
 
   document.querySelectorAll("[data-jump]").forEach(btn => {
     btn.onclick = () => {
-      state.page = btn.dataset.jump;
+      const nextPage = btn.dataset.jump;
+      if (nextPage === "schedule") {
+        state.schedulePreview = null;
+        const targetDate = btn.dataset.scheduleDate || today;
+        state.scheduleMonth = scheduleMonthForDate(targetDate) || state.scheduleMonth || defaultScheduleMonth();
+      }
+      state.page = nextPage;
       renderShell();
     };
   });
@@ -708,11 +757,79 @@ function latestScheduleMonth(entries = []) {
   return dates.length ? scheduleMonthForDate(dates[dates.length - 1]) : null;
 }
 
+function scheduleUpdatedMillis(entry) {
+  const value = entry?.updatedAt;
+  if (!value) return 0;
+  if (typeof value?.toMillis === "function") {
+    try { return Number(value.toMillis()) || 0; } catch (_) {}
+  }
+  if (Number.isFinite(Number(value?.seconds))) {
+    return Number(value.seconds) * 1000 + Math.floor(Number(value.nanoseconds || 0) / 1e6);
+  }
+  const parsed = value instanceof Date ? value.getTime() : Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mostRecentlySavedScheduleMonth(entries = []) {
+  const candidates = (entries || [])
+    .filter(row => /^\d{4}-\d{2}-\d{2}$/.test(String(row?.date || "")))
+    .map(row => ({ row, updated: scheduleUpdatedMillis(row) }))
+    .sort((a, b) => b.updated - a.updated);
+  if (candidates.length && candidates[0].updated > 0) return scheduleMonthForDate(candidates[0].row.date);
+  return latestScheduleMonth(entries);
+}
+
+function validScheduleMonthKey(value) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ""));
+}
+
+async function persistLastSavedSchedulePeriod(monthKey, includeCarryover = true) {
+  if (!validScheduleMonthKey(monthKey)) return false;
+  const next = {
+    ...state.appSettings,
+    scheduleLastSavedMonth: monthKey,
+    scheduleLastSavedIncludeCarryover: includeCarryover !== false,
+    scheduleLastSavedAt: new Date().toISOString()
+  };
+  await saveAppSettings(next);
+  state.appSettings = { ...DEFAULT_APP_SETTINGS, ...next };
+  state.scheduleMonth = monthKey;
+  state.scheduleIncludeCarryover = includeCarryover !== false;
+  state.schedulePeriodRestored = true;
+  return true;
+}
+
+function restoreSchedulePeriodPreference() {
+  if (state.schedulePeriodRestored) return;
+  if (!state.scheduleLoaded) return;
+
+  // Viewer tidak perlu menunggu settings admin; gunakan periode data yang paling
+  // baru disimpan. Admin menunggu settings/app agar pilihan periode tersimpan
+  // lintas reload/device bisa diprioritaskan.
+  if (isAdmin(state.profile) && !state.appSettingsLoaded) return;
+
+  const savedMonth = state.appSettings?.scheduleLastSavedMonth;
+  if (validScheduleMonthKey(savedMonth)) {
+    state.scheduleMonth = savedMonth;
+    state.scheduleIncludeCarryover = state.appSettings?.scheduleLastSavedIncludeCarryover !== false;
+  } else {
+    state.scheduleMonth = mostRecentlySavedScheduleMonth(state.schedules) || defaultScheduleMonth();
+  }
+  state.schedulePeriodRestored = true;
+}
+
 function scheduleRangeKeys(monthKey, includeCarryover = true) {
   const [year, month] = String(monthKey || defaultScheduleMonth()).split("-").map(Number);
   const start = includeCarryover ? new Date(year, month - 2, 26) : new Date(year, month - 1, 1);
   const end = new Date(year, month - 1, 25);
   return { start: localDateKey(start), end: localDateKey(end) };
+}
+
+function shiftScheduleMonthKey(monthKey, delta = 0) {
+  const [year, month] = String(monthKey || defaultScheduleMonth()).split("-").map(Number);
+  if (!year || !month || month < 1 || month > 12) return defaultScheduleMonth();
+  const date = new Date(year, month - 1 + Number(delta || 0), 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function schedulesForPeriod(entries, monthKey, includeCarryover = true) {
@@ -723,15 +840,36 @@ function schedulesForPeriod(entries, monthKey, includeCarryover = true) {
   });
 }
 
-function scheduleCrewRuleRowHtml(crew, index) {
+const SCHEDULE_WEEK_DAYS = ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"];
+
+function scheduleCrewOffDays(rules, crewName) {
+  const name = String(crewName || "").trim();
+  if (!name) return [];
+  return SCHEDULE_WEEK_DAYS.filter(day => (rules?.offDays?.[day] || []).includes(name));
+}
+
+function scheduleCrewOffDay(rules, crewName) {
+  return scheduleCrewOffDays(rules, crewName)[0] || "";
+}
+
+function scheduleCrewRuleRowHtml(crew, index, rules = null) {
   const row = crew || { name: "", gender: "Pria", active: true };
+  const existingOffDays = scheduleCrewOffDays(rules, row.name);
+  const selectedOffDay = existingOffDays[0] || "";
+  const preservedExtraOffDays = existingOffDays.slice(1);
+  const offDayOptions = ["", ...SCHEDULE_WEEK_DAYS]
+    .map(day => `<option value="${day}" ${selectedOffDay === day ? "selected" : ""}>${day || "Belum diatur"}</option>`).join("");
+  const preservedHint = preservedExtraOffDays.length
+    ? `<small class="crew-offday-preserved">${preservedExtraOffDays.length} libur tambahan dari data lama tetap dipertahankan: ${escapeHtml(preservedExtraOffDays.join(", "))}</small>`
+    : "";
   return `
-    <div class="schedule-crew-rule-row" data-crew-rule-row="${index}">
-      <input name="crew_name_${index}" value="${escapeHtml(row.name || "")}" placeholder="Nama crew" />
-      <select name="crew_gender_${index}">
+    <div class="schedule-crew-rule-row" data-crew-rule-row="${index}" data-original-crew-name="${escapeHtml(row.name || "")}">
+      <label class="crew-rule-field crew-name-field"><span>Nama crew</span><input name="crew_name_${index}" value="${escapeHtml(row.name || "")}" placeholder="Nama crew" /></label>
+      <label class="crew-rule-field"><span>Gender</span><select name="crew_gender_${index}">
         <option value="Pria" ${row.gender === "Pria" ? "selected" : ""}>Pria</option>
         <option value="Wanita" ${row.gender === "Wanita" ? "selected" : ""}>Wanita</option>
-      </select>
+      </select></label>
+      <label class="crew-rule-field crew-offday-field"><span>Hari libur</span><select name="crew_off_${index}">${offDayOptions}</select>${preservedHint}</label>
       <label class="crew-active-toggle"><input name="crew_active_${index}" type="checkbox" ${row.active !== false ? "checked" : ""}/><span>Aktif</span></label>
       <button class="danger compact crew-remove-rule" type="button" data-remove-crew="${index}" title="Hapus crew dari rules">Hapus</button>
     </div>`;
@@ -766,11 +904,27 @@ function readScheduleRulesForm(form, previousRules) {
     };
   }).filter(row => row.name);
 
-  const offDays = {};
+  const scheduleDays = SCHEDULE_WEEK_DAYS;
+  const offDays = Object.fromEntries(scheduleDays.map(day => [day, []]));
+  [...form.querySelectorAll("[data-crew-rule-row]")].forEach(row => {
+    const index = row.dataset.crewRuleRow;
+    const name = String(fd.get(`crew_name_${index}`) || "").trim();
+    const offDay = String(fd.get(`crew_off_${index}`) || "");
+    if (!name) return;
+
+    // v1.7.5: the editor exposes one primary weekly day off, but older rule data
+    // may contain multiple days for one crew. Preserve those extra days so a
+    // normal Save Rules action can never silently delete historical settings.
+    const originalName = String(row.dataset.originalCrewName || name).trim();
+    const previousOffDays = scheduleCrewOffDays(previousRules, originalName);
+    const previousPrimary = previousOffDays[0] || "";
+    const preservedExtras = previousOffDays.filter(day => day !== previousPrimary);
+    const nextOffDays = [...new Set([offDay, ...preservedExtras].filter(day => scheduleDays.includes(day)))];
+    nextOffDays.forEach(day => offDays[day].push(name));
+  });
   const formations = {};
   const dayConstraints = {};
-  for (const day of ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]) {
-    offDays[day] = cleanNames(fd.get(`off_${day}`));
+  for (const day of scheduleDays) {
     formations[day] = {
       S1: Number(fd.get(`formation_${day}_S1`) || 0),
       Middle: Number(fd.get(`formation_${day}_Middle`) || 0),
@@ -808,6 +962,7 @@ function renderSchedule(target) {
   state.scheduleIncludeCarryover = includeCarryover;
   const targetStart = includeCarryover ? new Date(selectedYear, selectedMonth - 2, 26) : new Date(selectedYear, selectedMonth - 1, 1);
   const targetEnd = new Date(selectedYear, selectedMonth - 1, 25);
+  const selectedRange = scheduleRangeKeys(selected, includeCarryover);
   const periodSchedules = (state.schedules || []).filter(s => {
     const d = parseLocalDate(s?.date);
     return d && d >= targetStart && d <= targetEnd;
@@ -819,6 +974,10 @@ function renderSchedule(target) {
     ? (preview?.summary || summarizeScheduleEntries(scheduleForGrid, (rules.crew || []).filter(x => x.active !== false).map(x => x.name)))
     : null;
   const activeCrew = rules.crew.filter(x => x.active !== false);
+  const displayedDateCount = new Set(scheduleForGrid.map(x => x?.date).filter(Boolean)).size;
+  const displayedCrewCount = new Set(scheduleForGrid.map(x => x?.crewName).filter(Boolean)).size;
+  const displayedOvertimeCount = scheduleForGrid.filter(x => x?.overtime).length;
+  const displayedLiburCount = scheduleForGrid.filter(x => x?.shift === "Libur").length;
 
   target.innerHTML = `
     <section class="page-intro">
@@ -829,21 +988,37 @@ function renderSchedule(target) {
     ${admin ? `
       <article class="panel scheduler-panel">
         <div class="panel-head">
-          <div><span class="overline">KONTROL JADWAL</span><h3>Generate Jadwal</h3></div>
+          <div><span class="overline">KONTROL JADWAL</span><h3>Generate Jadwal</h3><p class="schedule-subcopy">Pilih bulan, cek validasi rules, lalu simpan jadwal yang sudah lolos fairness.</p></div>
           <span class="count-pill">${activeCrew.length} crew aktif · ${includeCarryover ? "26 → 25" : "1 → 25"}</span>
         </div>
 
         <div class="scheduler-top-grid">
-          <label>Bulan jadwal
-            <input id="schedule-month" type="month" value="${escapeHtml(selected)}" />
-          </label>
-          <label class="toggle-label">
-            <span>Periode transisi</span>
-            <span class="switch-line"><input id="carryover-toggle" type="checkbox" ${includeCarryover ? "checked" : ""} /> Sertakan 26–akhir bulan sebelumnya</span>
-          </label>
-          <div class="generator-actions">
-            <button id="generate-schedule" class="primary">Preview + Validasi</button>
-            ${preview?.entries?.length ? `<button id="save-generated" class="secondary">Simpan Jadwal</button>` : ""}
+          <div class="schedule-period-card">
+            <span class="schedule-control-label">Bulan & tahun jadwal</span>
+            <div class="schedule-month-control">
+              <button id="schedule-prev-month" class="secondary schedule-month-nav" type="button" aria-label="Bulan sebelumnya">‹</button>
+              <label class="schedule-month-picker" title="Klik untuk memilih bulan dan tahun">
+                <span class="schedule-month-display">${escapeHtml(monthTitle(selected))}</span>
+                <span class="schedule-month-calendar" aria-hidden="true"></span>
+                <input id="schedule-month" type="month" value="${escapeHtml(selected)}" aria-label="Pilih bulan dan tahun jadwal" />
+              </label>
+              <button id="schedule-next-month" class="secondary schedule-month-nav" type="button" aria-label="Bulan berikutnya">›</button>
+            </div>
+            <button id="schedule-current-month" class="text-button schedule-current-period" type="button">Ke periode sekarang</button>
+          </div>
+          <div class="schedule-cycle-card">
+            <span class="schedule-control-label">Siklus tanggal</span>
+            <label class="switch-line"><input id="carryover-toggle" type="checkbox" ${includeCarryover ? "checked" : ""} /> Periode 26 bulan lalu → 25 bulan terpilih</label>
+            <div class="schedule-date-range-preview">
+              <div><span>Mulai</span><strong>${escapeHtml(formatDate(selectedRange.start))}</strong></div>
+              <span class="schedule-range-arrow">→</span>
+              <div><span>Selesai</span><strong>${escapeHtml(formatDate(selectedRange.end))}</strong></div>
+            </div>
+            <small>${includeCarryover ? "Contoh: pilih September 2026 = 26 Agustus 2026 sampai 25 September 2026." : "Mode 1–25: hanya tanggal 1 sampai 25 pada bulan yang dipilih."}</small>
+          </div>
+          <div class="generator-actions schedule-generator-actions">
+            <button id="generate-schedule" class="primary"><span>Preview + Validasi</span></button>
+            ${preview?.entries?.length ? `<button id="save-generated" class="secondary"><span>Simpan Jadwal</span></button>` : ""}
           </div>
         </div>
 
@@ -853,7 +1028,7 @@ function renderSchedule(target) {
 
       <article class="panel schedule-rules-panel">
         <div class="panel-head">
-          <div><span class="overline">ADMIN RULE ENGINE</span><h3>Crew & Rules Generator</h3><p class="muted small-copy">Crew nonaktif tidak ikut generate tetapi histori jadwal lama tetap tersimpan.</p></div>
+          <div><span class="overline">ADMIN RULE ENGINE</span><h3>Crew & Rules Generator</h3><p class="schedule-subcopy">Tata crew, hari libur, formasi, dan role dalam satu panel yang lebih rapi dan tetap aman untuk generator.</p></div>
           <button id="suggest-rotation" class="text-button" type="button">Putar libur</button>
         </div>
 
@@ -864,30 +1039,30 @@ function renderSchedule(target) {
 
         <form id="rules-form" class="rules-form flexible-rules-form">
           <section class="rule-editor-section">
-            <div class="rule-editor-heading"><div><strong>Crew</strong><span>Aktif/nonaktif, nama, dan gender bisa diubah kapan saja.</span></div><button id="add-rule-crew" class="secondary compact" type="button">+ Crew</button></div>
+            <div class="rule-editor-heading"><div><strong>Crew & Hari Libur</strong><span>Atur nama, gender, status aktif, dan hari libur mingguan untuk setiap crew.</span></div><button id="add-rule-crew" class="secondary compact" type="button">+ Crew</button></div>
             <div id="schedule-crew-rule-list" class="schedule-crew-rule-list">
-              ${rules.crew.map((crew, index) => scheduleCrewRuleRowHtml(crew, index)).join("")}
+              ${rules.crew.map((crew, index) => scheduleCrewRuleRowHtml(crew, index, rules)).join("")}
             </div>
+            <div class="offday-help"><strong>Pengaturan hari libur</strong><span>Hari yang dipilih otomatis masuk ke rule generator. Data lama yang memiliki lebih dari satu hari libur tetap dipertahankan saat Rules disimpan. Jika kebutuhan shift berubah, validator akan memberi tahu bila jumlah crew yang masuk tidak cocok dengan formasi.</span></div>
           </section>
 
           <section class="rule-editor-section">
             <div class="rule-editor-heading"><div><strong>Formasi & constraint per hari</strong><span>Jumlah shift harus sama dengan crew aktif dikurangi crew libur pada hari tersebut.</span></div></div>
             <div class="schedule-rules-table-wrap">
               <table class="schedule-rules-table">
-                <thead><tr><th>Hari</th><th>S1</th><th>Middle</th><th>S2</th><th>Min pria S2</th><th>Gender S1</th><th>Gender Middle</th><th>Crew libur</th></tr></thead>
+                <thead><tr><th>Hari</th><th>S1</th><th>Middle</th><th>S2</th><th>Min pria S2</th><th>Gender S1</th><th>Gender Middle</th></tr></thead>
                 <tbody>
                   ${["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"].map(day => {
                     const f = rules.formations[day];
                     const c = rules.dayConstraints[day];
                     return `<tr>
-                      <td><strong>${day}</strong></td>
-                      <td><input name="formation_${day}_S1" type="number" min="0" max="20" value="${f.S1}" /></td>
-                      <td><input name="formation_${day}_Middle" type="number" min="0" max="20" value="${f.Middle}" /></td>
-                      <td><input name="formation_${day}_S2" type="number" min="0" max="20" value="${f.S2}" /></td>
-                      <td><input name="constraint_${day}_minMaleS2" type="number" min="0" max="20" value="${c.minMaleS2}" /></td>
-                      <td><select name="constraint_${day}_s1Gender">${scheduleGenderRuleOptions(c.s1Gender)}</select></td>
-                      <td><select name="constraint_${day}_middleGender">${scheduleGenderRuleOptions(c.middleGender)}</select></td>
-                      <td><input name="off_${day}" value="${escapeHtml((rules.offDays[day] || []).join(", "))}" placeholder="Nama, Nama" /></td>
+                      <td data-label="Hari"><strong>${day}</strong></td>
+                      <td data-label="S1"><input name="formation_${day}_S1" type="number" min="0" max="20" value="${f.S1}" /></td>
+                      <td data-label="Middle"><input name="formation_${day}_Middle" type="number" min="0" max="20" value="${f.Middle}" /></td>
+                      <td data-label="S2"><input name="formation_${day}_S2" type="number" min="0" max="20" value="${f.S2}" /></td>
+                      <td data-label="Min pria S2"><input name="constraint_${day}_minMaleS2" type="number" min="0" max="20" value="${c.minMaleS2}" /></td>
+                      <td data-label="Gender S1"><select name="constraint_${day}_s1Gender">${scheduleGenderRuleOptions(c.s1Gender)}</select></td>
+                      <td data-label="Gender Middle"><select name="constraint_${day}_middleGender">${scheduleGenderRuleOptions(c.middleGender)}</select></td>
                     </tr>`;
                   }).join("")}
                 </tbody>
@@ -896,11 +1071,11 @@ function renderSchedule(target) {
           </section>
 
           <section class="rule-editor-section">
-            <div class="rule-editor-heading"><div><strong>Role per shift</strong><span>Pisahkan dengan koma. Generator membagi role seadil mungkin.</span></div></div>
+            <div class="rule-editor-heading"><div><strong>Role per shift</strong><span>S1 dan S2 wajib memakai role berbeda untuk setiap crew pada shift yang sama. Middle hanya Kitchen / Bar.</span></div></div>
             <div class="edit-grid schedule-role-rules">
-              <label>Role S1<input name="roles_S1" value="${escapeHtml((rules.rolesByShift.S1 || []).join(", "))}" /></label>
-              <label>Role Middle<input name="roles_Middle" value="${escapeHtml((rules.rolesByShift.Middle || []).join(", "))}" /></label>
-              <label>Role S2<input name="roles_S2" value="${escapeHtml((rules.rolesByShift.S2 || []).join(", "))}" /></label>
+              <label class="schedule-role-card"><span>Role S1 · wajib unik</span><input name="roles_S1" value="${escapeHtml((rules.rolesByShift.S1 || []).join(", "))}" /><small>Dipakai untuk crew Shift 1. Hindari role kembar dalam shift yang sama.</small></label>
+              <label class="schedule-role-card"><span>Role Middle · Kitchen / Bar</span><input name="roles_Middle" value="${escapeHtml((rules.rolesByShift.Middle || []).join(", "))}" /><small>Middle hanya mendukung area operasional: Kitchen atau Bar.</small></label>
+              <label class="schedule-role-card"><span>Role S2 · wajib unik</span><input name="roles_S2" value="${escapeHtml((rules.rolesByShift.S2 || []).join(", "))}" /><small>Dipakai untuk crew Shift 2. Weekend 3 orang akan dibagi ke 3 role berbeda.</small></label>
             </div>
           </section>
 
@@ -916,7 +1091,7 @@ function renderSchedule(target) {
 
     <article class="panel schedule-grid-panel">
       <div class="panel-head schedule-head-actions">
-        <div><span class="overline">MONTHLY VIEW</span><h3>${escapeHtml(monthTitle(selected))}</h3></div>
+        <div class="schedule-title-stack"><span class="overline">MONTHLY VIEW</span><div class="schedule-title-line"><h3>${escapeHtml(monthTitle(selected))}</h3><span class="schedule-source-pill ${preview?.entries?.length ? "preview" : "saved"}">${preview?.entries?.length ? "Preview" : "Data tersimpan"}</span></div><p class="schedule-subcopy">${displayedDateCount || 0} hari tampil · ${displayedCrewCount || 0} crew · ${scheduleForGrid.length || 0} entry${displayedOvertimeCount ? ` · lembur ${displayedOvertimeCount}` : ""}${displayedLiburCount ? ` · libur ${displayedLiburCount}` : ""}</p>${preview?.entries?.length ? `<p class="schedule-preview-warning">${preview?.baselineExact ? "Preview mengikuti jadwal yang sudah tersimpan pada periode ini. Menyimpan ulang tidak mengubah susunan shift atau role." : "Dashboard tetap memakai jadwal tersimpan sampai tombol <strong>Simpan Jadwal</strong> ditekan."}</p>` : ""}</div>
         <div class="schedule-toolbar">
           <div class="legend-inline">
             <span><i class="legend-dot s1"></i>S1</span><span><i class="legend-dot middle"></i>Middle</span><span><i class="legend-dot s2"></i>S2</span><span><i class="legend-dot libur"></i>Libur</span><span><i class="legend-dot lembur"></i>Lembur</span>
@@ -939,6 +1114,20 @@ function renderSchedule(target) {
     renderShell();
   };
 
+  const moveScheduleMonth = delta => {
+    const current = document.querySelector("#schedule-month")?.value || state.scheduleMonth || defaultScheduleMonth();
+    state.scheduleMonth = shiftScheduleMonthKey(current, delta);
+    state.schedulePreview = null;
+    renderShell();
+  };
+  document.querySelector("#schedule-prev-month")?.addEventListener("click", () => moveScheduleMonth(-1));
+  document.querySelector("#schedule-next-month")?.addEventListener("click", () => moveScheduleMonth(1));
+  document.querySelector("#schedule-current-month")?.addEventListener("click", () => {
+    state.scheduleMonth = defaultScheduleMonth();
+    state.schedulePreview = null;
+    renderShell();
+  });
+
   const carryToggle = document.querySelector("#carryover-toggle");
   if (carryToggle) carryToggle.onchange = () => {
     state.scheduleIncludeCarryover = carryToggle.checked;
@@ -952,7 +1141,7 @@ function renderSchedule(target) {
   document.querySelector("#add-rule-crew")?.addEventListener("click", () => {
     const list = document.querySelector("#schedule-crew-rule-list");
     const nextIndex = Math.max(-1, ...[...list.querySelectorAll("[data-crew-rule-row]")].map(row => Number(row.dataset.crewRuleRow || 0))) + 1;
-    list.insertAdjacentHTML("beforeend", scheduleCrewRuleRowHtml({ name: "", gender: "Pria", active: true }, nextIndex));
+    list.insertAdjacentHTML("beforeend", scheduleCrewRuleRowHtml({ name: "", gender: "Pria", active: true }, nextIndex, state.scheduleRules));
     list.querySelector(`[data-crew-rule-row="${nextIndex}"] input`)?.focus();
   });
 
@@ -976,16 +1165,6 @@ function renderSchedule(target) {
     if (name && !confirm(`Hapus ${label} dari rules jadwal? Histori jadwal lama tetap tersimpan dan tidak akan ikut terhapus.`)) return;
 
     row.remove();
-
-    // Bersihkan referensi libur agar crew yang dihapus tidak menjadi ghost rule / error validator.
-    if (name && rulesForm) {
-      for (const day of ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]) {
-        const input = rulesForm.elements.namedItem(`off_${day}`);
-        if (!input) continue;
-        const nextNames = cleanNames(input.value).filter(existing => existing !== name);
-        input.value = nextNames.join(", ");
-      }
-    }
 
     state.schedulePreview = null;
     showToast(`${label} dihapus dari rules. Tekan Simpan Rules untuk menyimpan perubahan.`, "info", "Crew dihapus");
@@ -1037,7 +1216,25 @@ function renderSchedule(target) {
       showToast(err?.message || "Rules tidak bisa dibaca.", "error", "Preview gagal");
       return;
     }
-    const result = generateSchedule({ year, month, includeCarryover: carry, rules: currentRules });
+    const previewRange = scheduleRangeKeys(`${year}-${String(month).padStart(2, "0")}`, carry);
+    const savedRows = (state.schedules || []).filter(row => {
+      const date = String(row?.date || "");
+      return date >= previewRange.start && date <= previewRange.end;
+    });
+    let result;
+    if (savedRows.length > 0) {
+      result = buildScheduleBaselinePreview({ entries: savedRows, range: previewRange, rules: currentRules });
+      if (!result.complete) {
+        result = {
+          ...result,
+          entries: [],
+          errors: [...(result.errors || []), "Jadwal tersimpan pada periode ini belum lengkap. Lengkapi data periode tersebut sebelum generate ulang agar susunan yang sudah ada tetap aman."],
+          summary: null
+        };
+      }
+    } else {
+      result = generateSchedule({ year, month, includeCarryover: carry, rules: currentRules });
+    }
     state.schedulePreview = { ...result, includeCarryover: carry };
     renderShell();
   });
@@ -1046,14 +1243,22 @@ function renderSchedule(target) {
   if (saveBtn) saveBtn.onclick = async () => {
     const p = state.schedulePreview;
     if (!p?.entries?.length || !p.range) return;
-    if (!confirm(`Simpan jadwal ${p.range.start} s/d ${p.range.end}? Data lama pada rentang ini akan diganti.`)) return;
+    const confirmText = p.baselineExact
+      ? `Simpan ulang jadwal ${p.range.start} s/d ${p.range.end} sesuai data tersimpan? Susunan shift/role tidak akan diacak.`
+      : `Simpan jadwal ${p.range.start} s/d ${p.range.end}? Data lama pada rentang ini akan diganti.`;
+    if (!confirm(confirmText)) return;
     saveBtn.disabled = true;
     saveBtn.textContent = "Menyimpan...";
     try {
       await saveScheduleRules(state.scheduleRules);
       await replaceScheduleRange(p.range.start, p.range.end, p.entries);
       state.schedulePreview = null;
-      showToast("Jadwal otomatis berhasil disimpan. Rules yang dipakai ikut disimpan.", "success", "Jadwal tersimpan");
+      try {
+        await persistLastSavedSchedulePeriod(selected, Boolean(p.includeCarryover ?? state.scheduleIncludeCarryover));
+      } catch (prefErr) {
+        console.warn("Schedule period preference gagal disimpan:", prefErr);
+      }
+      showToast(p.baselineExact ? "Jadwal berhasil disimpan ulang tanpa mengubah susunan shift atau role." : "Jadwal otomatis berhasil disimpan. Dashboard dan Jadwal akan memakai data tersimpan yang sama.", "success", "Jadwal tersimpan");
     } catch (err) {
       showToast(friendlyError(err), "error", "Jadwal gagal disimpan");
       saveBtn.disabled = false;
@@ -1061,7 +1266,7 @@ function renderSchedule(target) {
     }
   };
 
-  document.querySelector("#add-schedule")?.addEventListener("click", () => openScheduleEditor(null, rules, selected));
+  document.querySelector("#add-schedule")?.addEventListener("click", () => openScheduleEditor(null, rules, selected, selectedRange));
   document.querySelector("#import-schedule")?.addEventListener("click", () => runExcelImport("schedule"));
   document.querySelector("#send-schedule-sheet")?.addEventListener("click", () => {
     openGoogleSheetScheduleModal({ entries: scheduleForGrid, rules, periodLabel: monthTitle(selected), selectedMonth: selected });
@@ -1082,7 +1287,7 @@ function renderSchedule(target) {
   document.querySelectorAll("[data-edit-schedule]").forEach(btn => {
     btn.onclick = () => {
       const item = (state.schedules || []).find(x => x.id === btn.dataset.editSchedule);
-      if (item) openScheduleEditor(item, rules, selected);
+      if (item) openScheduleEditor(item, rules, selected, selectedRange);
     };
   });
 }
@@ -1107,7 +1312,7 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
       </div>
       <form id="google-sheet-schedule-form" class="settings-form">
         <div class="google-sheet-status ${config.googleSheetWebAppUrl ? "connected" : ""}">
-          <div><strong>${config.googleSheetWebAppUrl ? "Apps Script siap" : "Apps Script belum diatur"}</strong><span>${config.googleSheetWebAppUrl ? "Merge, warna, border, dan freeze pane dibuat langsung di Google Sheet." : "Isi Web App URL sekali. Template script sudah disertakan di project v1.6.3."}</span></div>
+          <div><strong>${config.googleSheetWebAppUrl ? "Apps Script siap" : "Apps Script belum diatur"}</strong><span>${config.googleSheetWebAppUrl ? "Jadwal, rekap per crew, serta data import-safe dibuat langsung di Google Sheet." : "Isi Web App URL sekali. Template script sudah disertakan di project v1.6.3."}</span></div>
           <span class="status-pill">${config.googleSheetWebAppUrl ? "Ready" : "Setup"}</span>
         </div>
         <label>Apps Script Web App URL
@@ -1122,7 +1327,7 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
         <label>Nama tab
           <input name="sheetName" value="${escapeHtml(defaultSheetName)}" maxlength="90" required />
         </label>
-        <div class="inline-rule google-sheet-rule"><strong>Yang dilakukan:</strong> SoWork membuat/menimpa tab ini, merge A1:A2 sampai D1:D2, mempertahankan warna shift, border, ukuran kolom, wrap text, serta freeze 2 baris + 4 kolom.</div>
+        <div class="inline-rule google-sheet-rule"><strong>Yang dilakukan:</strong> SoWork membuat/menimpa tab jadwal ini, membuat rekap jumlah S1/S2/Middle/Libur/Lembur per crew, serta data mentah tersembunyi agar XLSX bisa di-import kembali ke SoWork.</div>
         <div id="google-sheet-live-status" class="google-sheet-live-status idle"><strong>Belum diuji</strong><span>Tes koneksi dulu untuk memastikan Secret Token dan Spreadsheet benar.</span></div>
         <details class="google-sheet-setup"><summary>Setup pertama kali</summary><div><span>1. Buka script.google.com → New project.</span><span>2. Paste <code>google-apps-script/Code.gs</code>.</span><span>3. Script Properties → buat <code>SOWORK_SECRET</code>.</span><span>4. Deploy sebagai Web app: Execute as Me, access Anyone.</span><span>5. Copy URL <code>/exec</code>, lalu samakan Secret Token di sini.</span></div></details>
         <div class="form-foot google-sheet-actions">
@@ -1221,7 +1426,7 @@ function openGoogleSheetScheduleModal({ entries = [], rules, periodLabel = "Jadw
         }
       });
       setSheetStatus("success", "Jadwal berhasil dikirim ✓", `Apps Script mengonfirmasi tab “${result?.sheetName || cfg.sheetName}” sudah diperbarui.`);
-      showToast(`Jadwal berhasil dikirim ke tab “${result?.sheetName || cfg.sheetName}” dengan merge asli.`, "success", "Google Sheet diperbarui");
+      showToast(`Jadwal + rekap berhasil dikirim ke tab utama. Data import balik juga siap.`, "success", "Google Sheet diperbarui");
     } catch (err) {
       setSheetStatus("error", "Pengiriman gagal", err?.message || "Apps Script menolak atau gagal memproses jadwal.");
       showToast(err?.message || "Gagal mengirim jadwal ke Google Sheet.", "error", "Google Sheet gagal");
@@ -1246,9 +1451,11 @@ function ruleSummaryCards(rules) {
 
 function renderPreviewMessage(preview) {
   if (preview.errors?.length) {
-    return `<div class="validation-box error"><strong>Jadwal belum bisa dibuat</strong>${preview.errors.map(x => `<span>${escapeHtml(x)}</span>`).join("")}</div>`;
+    return `<div class="validation-box error"><strong>Jadwal belum bisa dibuat</strong>${preview.errors.map(x => `<span>${escapeHtml(x)}</span>`).join("")}${preview.warnings?.map(x => `<span>${escapeHtml(x)}</span>`).join("") || ""}</div>`;
   }
-  return `<div class="validation-box success"><strong>Preview siap</strong><span>${escapeHtml(preview.range.start)} → ${escapeHtml(preview.range.end)} · Fairness shift ${preview.summary.fairnessScore}/100 · fairness role ${preview.summary.roleFairnessScore}/100 · total ${preview.summary.overallFairnessScore}/100</span>${preview.warnings?.map(x => `<span>${escapeHtml(x)}</span>`).join("") || ""}</div>`;
+  const headline = "Preview siap";
+  const sourceInfo = preview.baselineExact ? ` · ${preview.savedEntryCount || preview.entries?.length || 0} entry mengikuti jadwal tersimpan` : "";
+  return `<div class="validation-box success"><strong>${headline}</strong><span>${escapeHtml(preview.range.start)} → ${escapeHtml(preview.range.end)} · Fairness shift ${preview.summary.fairnessScore}/100 · fairness role ${preview.summary.roleFairnessScore}/100 · total ${preview.summary.overallFairnessScore}/100${escapeHtml(sourceInfo)}</span>${preview.warnings?.map(x => `<span>${escapeHtml(x)}</span>`).join("") || ""}</div>`;
 }
 
 function renderOvertimeWarning(entries) {
@@ -1282,8 +1489,26 @@ function renderScheduleMatrix(entries, rules, editable = false) {
   });
   const rows = [...byDate.entries()].sort(([a],[b]) => a.localeCompare(b));
 
+  const mobileCards = rows.map(([date, map]) => `
+    <section class="schedule-day-card">
+      <div class="schedule-day-card-head"><strong>${escapeHtml(shortDate(date))}</strong><span>${escapeHtml(dayNameFromDate(date))}</span></div>
+      <div class="schedule-day-crew-grid">
+        ${crew.map(name => {
+          const item = map[name];
+          if (!item) return `<div class="schedule-mobile-cell is-empty"><span class="schedule-mobile-person">${escapeHtml(name)}</span><span class="schedule-mobile-role"><strong>—</strong></span><small>Belum ada jadwal</small></div>`;
+          const statusClass = item.overtime ? "lembur" : shiftClass(item.shift);
+          const primaryText = item.shift === "Libur" ? "Libur" : (item.role || "Belum ada role");
+          const meta = item.overtime ? `${item.shift} · Lembur ${item.overtimeType || ""}` : item.shift;
+          const inner = `<span class="schedule-mobile-person">${escapeHtml(name)}</span><span class="schedule-mobile-role"><i class="status-icon ${statusClass}"></i><strong>${escapeHtml(primaryText)}</strong></span><small>${escapeHtml(meta)}</small>`;
+          return editable && item.id
+            ? `<button class="schedule-mobile-cell tone-${statusClass}" data-edit-schedule="${escapeHtml(item.id)}" title="Edit jadwal ${escapeHtml(name)}">${inner}</button>`
+            : `<div class="schedule-mobile-cell tone-${statusClass}">${inner}</div>`;
+        }).join("")}
+      </div>
+    </section>`).join("");
+
   return `
-    <div class="schedule-matrix-wrap">
+    <div class="schedule-matrix-wrap schedule-desktop-matrix">
       <table class="schedule-matrix role-matrix">
         <thead><tr><th>Tanggal</th>${crew.map(n => `<th>${escapeHtml(n)}</th>`).join("")}</tr></thead>
         <tbody>
@@ -1297,14 +1522,15 @@ function renderScheduleMatrix(entries, rules, editable = false) {
                 const primaryText = item.shift === "Libur" ? "Libur" : (item.role || "Belum ada role");
                 const meta = item.overtime ? `${item.shift} · Lembur ${item.overtimeType || ""}` : item.shift;
                 const content = `<span class="role-cell-main"><i class="status-icon ${statusClass}" title="${escapeHtml(meta)}"></i><strong>${escapeHtml(primaryText)}</strong></span><small>${escapeHtml(meta)}</small>${item.overtimeNote ? `<em title="${escapeHtml(item.overtimeNote)}">⚠ catatan</em>` : ""}`;
-                return `<td>${editable && item.id ? `<button class="role-cell ${item.overtime ? "has-overtime" : ""}" data-edit-schedule="${escapeHtml(item.id)}" title="Edit jadwal ${escapeHtml(name)}">${content}</button>` : `<div class="role-cell static ${item.overtime ? "has-overtime" : ""}">${content}</div>`}</td>`;
+                return `<td>${editable && item.id ? `<button class="role-cell tone-${statusClass} ${item.overtime ? "has-overtime" : ""}" data-edit-schedule="${escapeHtml(item.id)}" title="Edit jadwal ${escapeHtml(name)}">${content}</button>` : `<div class="role-cell static tone-${statusClass} ${item.overtime ? "has-overtime" : ""}">${content}</div>`}</td>`;
               }).join("")}
             </tr>
           `).join("")}
         </tbody>
       </table>
     </div>
-    ${editable ? `<p class="matrix-tip">Klik sel jadwal untuk mengubah shift, role, lembur, catatan, atau menghapus jadwal.</p>` : ""}
+    <div class="schedule-mobile-list">${mobileCards}</div>
+    ${editable ? `<p class="matrix-tip">Klik jadwal untuk mengubah shift, role, lembur, catatan, atau menghapus jadwal.</p>` : ""}
   `;
 }
 
@@ -1326,12 +1552,14 @@ function renderOvertimeHistory(allSchedules) {
   `;
 }
 
-function openScheduleEditor(item, rules, selectedMonth) {
+function openScheduleEditor(item, rules, selectedMonth, periodRange = null) {
   document.querySelector("#schedule-editor-modal")?.remove();
   const activeCrew = (rules.crew || []).filter(x => x.active !== false).map(x => x.name);
   const crew = item?.crewName && !activeCrew.includes(item.crewName) ? [...activeCrew, item.crewName] : activeCrew;
   const [year, month] = selectedMonth.split("-").map(Number);
-  const fallbackDate = `${year}-${String(month).padStart(2, "0")}-01`;
+  const safeRange = periodRange || scheduleRangeKeys(selectedMonth, true);
+  const todayKey = localDateKey(new Date());
+  const fallbackDate = todayKey >= safeRange.start && todayKey <= safeRange.end ? todayKey : safeRange.start;
   const current = item || {
     id: "",
     date: fallbackDate,
@@ -1352,7 +1580,7 @@ function openScheduleEditor(item, rules, selectedMonth) {
       <div class="modal-head"><div><span class="overline">ADMIN CRUD</span><h3>${item ? "Edit Jadwal" : "Tambah Jadwal"}</h3></div><button type="button" class="modal-close" aria-label="Tutup">×</button></div>
       <form id="schedule-edit-form" class="edit-form">
         <div class="edit-grid">
-          <label>Tanggal<input name="date" type="date" value="${escapeHtml(current.date || fallbackDate)}" required /></label>
+          <label>Tanggal<input name="date" type="date" min="${escapeHtml(safeRange.start)}" max="${escapeHtml(safeRange.end)}" value="${escapeHtml(current.date || fallbackDate)}" required /><small class="field-help">Periode aktif: ${escapeHtml(formatDate(safeRange.start))} – ${escapeHtml(formatDate(safeRange.end))}</small></label>
           <label>Crew<select name="crewName">${crew.map(name => `<option ${name === current.crewName ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select></label>
           <label>Shift<select name="shift"><option ${current.shift === "S1" ? "selected" : ""}>S1</option><option ${current.shift === "Middle" ? "selected" : ""}>Middle</option><option ${current.shift === "S2" ? "selected" : ""}>S2</option><option ${current.shift === "Libur" ? "selected" : ""}>Libur</option></select></label>
           <label>Role<select name="role" id="schedule-role"></select></label>
@@ -1391,7 +1619,7 @@ function openScheduleEditor(item, rules, selectedMonth) {
     roleSelect.innerHTML = options.map(role => `<option value="${escapeHtml(role)}" ${role === desired ? "selected" : ""}>${escapeHtml(role || "Tidak ada role")}</option>`).join("");
     roleSelect.disabled = shift === "Libur";
     if (shift === "Middle") {
-      middleNote.textContent = `Role Middle mengikuti Rules Admin: ${(rules.rolesByShift?.Middle || []).join(", ") || "belum diatur"}.`;
+      middleNote.textContent = `Middle hanya boleh Kitchen / Bar. Role aktif: ${(rules.rolesByShift?.Middle || []).join(", ") || "belum diatur"}.`;
       middleNote.classList.remove("hidden");
     } else {
       middleNote.classList.add("hidden");
@@ -1424,6 +1652,20 @@ function openScheduleEditor(item, rules, selectedMonth) {
     const shift = fd.get("shift");
     const role = shift === "Libur" ? "" : String(fd.get("role") || "");
     if (shift !== "Libur" && !role) return alert(`Role untuk ${shift} belum diatur di Rules Admin.`);
+    if (shift === "Middle" && !/^(bar|kitchen(?:\s*[-/]?\s*bar)?)$/i.test(role.trim())) {
+      return alert("Middle hanya boleh memakai role Kitchen / Bar.");
+    }
+    if ((shift === "S1" || shift === "S2") && role) {
+      const duplicateRole = (state.schedules || []).find(row =>
+        row.id !== item?.id &&
+        String(row.date || "") === String(fd.get("date") || "") &&
+        row.shift === shift &&
+        String(row.role || "").trim().toLowerCase() === role.trim().toLowerCase()
+      );
+      if (duplicateRole) {
+        return alert(`${shift} tanggal ${fd.get("date")} sudah memakai role ${role} untuk ${duplicateRole.crewName}. Role dalam ${shift} tidak boleh sama.`);
+      }
+    }
     if (overtimeCheck.checked && !String(fd.get("overtimeNote") || "").trim()) return alert("Catatan lembur wajib diisi.");
     const crewName = fd.get("crewName");
     const gender = rules.crew?.find(x => x.name === crewName)?.gender || item?.gender || "";
@@ -1442,6 +1684,12 @@ function openScheduleEditor(item, rules, selectedMonth) {
         source: item?.source || "manual",
         generated: item?.generated === true
       });
+      try {
+        const savedMonth = state.scheduleMonth || scheduleMonthForDate(fd.get("date")) || defaultScheduleMonth();
+        await persistLastSavedSchedulePeriod(savedMonth, state.scheduleIncludeCarryover);
+      } catch (prefErr) {
+        console.warn("Schedule period preference gagal disimpan:", prefErr);
+      }
       showToast(`Jadwal ${crewName} ${formatDate(fd.get("date"))} berhasil disimpan.`, "success", "Jadwal tersimpan");
       close();
     } catch (err) {
@@ -1839,9 +2087,12 @@ function applyOpnameFilter() {
   const summary = document.querySelector("#opname-visible-count");
   if (summary) summary.textContent = String(visible);
   const saveCount = document.querySelector("#opname-save-count");
-  if (saveCount) saveCount.textContent = `${visible} barang tampil`;
+  if (saveCount) {
+    const total = Number(saveCount.dataset.batchTotal || visible || 0);
+    saveCount.textContent = `${total} barang dalam 1 batch · ${visible} sedang tampil`;
+  }
   const saveBar = document.querySelector("#opname-save-bar");
-  if (saveBar) saveBar.hidden = visible === 0;
+  if (saveBar) saveBar.hidden = false;
   const empty = document.querySelector("#opname-filter-empty");
   if (empty) empty.hidden = visible !== 0;
 }
@@ -1889,6 +2140,133 @@ function buildStockUsageCalendar(usageRows, monthKey) {
     <div class="usage-calendar-grid">${cells.join("")}</div>`;
 }
 
+
+function buildStockReceiptBatches(movements = []) {
+  const inbound = (movements || []).filter(row => row?.type === "IN");
+  const grouped = new Map();
+
+  inbound.forEach((row, index) => {
+    const explicitBatchId = String(row?.batchId || "").trim();
+    const fallbackId = String(row?.id || `${row?.date || ""}_${row?.itemId || ""}_${index}`);
+    const key = explicitBatchId ? `batch:${explicitBatchId}` : `legacy:${fallbackId}`;
+    let batch = grouped.get(key);
+    if (!batch) {
+      batch = {
+        key,
+        batchId: explicitBatchId,
+        date: String(row?.date || ""),
+        destination: String(row?.destination || "Gudang Utama"),
+        supplier: String(row?.supplier || ""),
+        note: String(row?.note || ""),
+        createdByName: String(row?.createdByName || ""),
+        createdAtSeconds: Number(row?.createdAt?.seconds || 0),
+        rows: []
+      };
+      grouped.set(key, batch);
+    }
+    batch.rows.push(row);
+    batch.createdAtSeconds = Math.max(batch.createdAtSeconds, Number(row?.createdAt?.seconds || 0));
+    if (!batch.supplier && row?.supplier) batch.supplier = String(row.supplier);
+    if (!batch.note && row?.note) batch.note = String(row.note);
+  });
+
+  return [...grouped.values()]
+    .map(batch => ({ ...batch, rows: batch.rows.slice().sort((a,b) => Number(a?.batchIndex || 0) - Number(b?.batchIndex || 0) || String(a?.itemName || "").localeCompare(String(b?.itemName || ""), "id")) }))
+    .sort((a,b) => String(b.date || "").localeCompare(String(a.date || "")) || b.createdAtSeconds - a.createdAtSeconds || String(b.key).localeCompare(String(a.key)));
+}
+
+function latestReceiptDateInMonth(batches = [], monthKey = "") {
+  return (batches || []).find(batch => String(batch?.date || "").startsWith(monthKey))?.date || "";
+}
+
+function buildStockReceiptCalendar(batches, monthKey, selectedDate) {
+  const today = localDateKey(new Date());
+  const safeMonth = /^\d{4}-\d{2}$/.test(String(monthKey || "")) ? monthKey : today.slice(0, 7);
+  const [year, month] = safeMonth.split("-").map(Number);
+  const totalDays = new Date(year, month, 0).getDate();
+  const firstDay = new Date(year, month - 1, 1).getDay();
+  const mondayOffset = (firstDay + 6) % 7;
+  const byDate = new Map();
+
+  (batches || []).forEach(batch => {
+    if (!batch?.date || !String(batch.date).startsWith(safeMonth)) return;
+    const current = byDate.get(batch.date) || { batches: 0, items: 0 };
+    current.batches += 1;
+    current.items += Number(batch.rows?.length || 0);
+    byDate.set(batch.date, current);
+  });
+
+  const cells = [];
+  for (let i = 0; i < mondayOffset; i += 1) cells.push('<span class="usage-calendar-day is-empty" aria-hidden="true"></span>');
+  for (let day = 1; day <= totalDays; day += 1) {
+    const dateKey = `${safeMonth}-${String(day).padStart(2, "0")}`;
+    const stats = byDate.get(dateKey);
+    const isToday = dateKey === today;
+    const isSelected = dateKey === selectedDate;
+    cells.push(`
+      <button type="button" class="usage-calendar-day receipt-calendar-day ${stats ? "has-usage" : ""} ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""}" data-open-receipt-date="${escapeHtml(dateKey)}" aria-label="${escapeHtml(formatDate(dateKey))}${stats ? `, ${stats.batches} kiriman, ${stats.items} item` : ", belum ada barang masuk"}">
+        <span class="usage-calendar-number">${day}</span>
+        ${stats ? `<span class="usage-calendar-badge">${stats.batches}</span><small>${stats.items} item</small>` : `<small>${isToday ? "hari ini" : ""}</small>`}
+      </button>`);
+  }
+
+  return `
+    <div class="usage-calendar-weekdays" aria-hidden="true">
+      ${["Sen","Sel","Rab","Kam","Jum","Sab","Min"].map(x => `<span>${x}</span>`).join("")}
+    </div>
+    <div class="usage-calendar-grid">${cells.join("")}</div>`;
+}
+
+function buildStockReceiptPreview(batches = [], selectedDate = "") {
+  const dayBatches = (batches || []).filter(batch => batch.date === selectedDate);
+  const title = escapeHtml(formatDate(selectedDate));
+  if (!dayBatches.length) {
+    return `
+      <div class="receipt-preview-head">
+        <div><span class="overline">PREVIEW TANGGAL</span><h4>${title}</h4><p class="muted">Belum ada barang masuk pada tanggal ini.</p></div>
+        <button type="button" class="primary compact" data-receipt-add-for-date="${escapeHtml(selectedDate)}">+ Catat untuk tanggal ini</button>
+      </div>`;
+  }
+
+  const totalItems = dayBatches.reduce((sum, batch) => sum + batch.rows.length, 0);
+  return `
+    <div class="receipt-preview-head">
+      <div><span class="overline">PREVIEW TANGGAL</span><h4>${title}</h4><p class="muted">${dayBatches.length} kiriman · ${totalItems} item tercatat</p></div>
+      <button type="button" class="primary compact" data-receipt-add-for-date="${escapeHtml(selectedDate)}">+ Tambah kiriman</button>
+    </div>
+    <div class="receipt-history-batches">
+      ${dayBatches.map((batch, index) => `
+        <details class="receipt-history-batch" ${index === 0 ? "open" : ""}>
+          <summary>
+            <span class="receipt-batch-summary-main">
+              <strong>${escapeHtml(batch.supplier || batch.destination || "Kiriman")}</strong>
+              <small>${escapeHtml(batch.destination || "Gudang Utama")}${batch.note ? ` · ${escapeHtml(batch.note)}` : ""}</small>
+            </span>
+            <span class="receipt-batch-count">${batch.rows.length} barang</span>
+          </summary>
+          <div class="receipt-history-meta">
+            ${batch.batchId ? `<span>Batch: <strong>${escapeHtml(batch.batchId)}</strong></span>` : `<span>Data lama / import</span>`}
+            ${batch.createdByName ? `<span>Dicatat oleh ${escapeHtml(batch.createdByName)}</span>` : ""}
+          </div>
+          <div class="receipt-history-actions">
+            <button type="button" class="secondary compact" data-receipt-action="edit-batch" data-receipt-batch-key="${escapeHtml(batch.key)}" data-receipt-batch-id="${escapeHtml(batch.batchId || "")}">Edit Batch</button>
+            <button type="button" class="danger compact" data-receipt-action="delete-batch" data-receipt-batch-key="${escapeHtml(batch.key)}" data-receipt-batch-id="${escapeHtml(batch.batchId || "")}">Hapus Batch</button>
+          </div>
+          <div class="receipt-history-items">
+            ${batch.rows.map(row => `
+              <div class="receipt-history-item">
+                <span><strong>${escapeHtml(row.itemName || stockItemName(row.itemId))}</strong><small>${escapeHtml(row.unit || state.stockItems.find(x => x.id === row.itemId)?.unit || "PCS")}</small></span>
+                <b>${escapeHtml(formatMovementQty(row))}</b>
+                <span class="receipt-history-item-actions">
+                  <button type="button" class="secondary compact" data-receipt-action="edit-item" data-receipt-movement-id="${escapeHtml(row.id || "")}" data-receipt-batch-key="${escapeHtml(batch.key)}" data-receipt-batch-id="${escapeHtml(batch.batchId || "")}">Edit</button>
+                  <button type="button" class="danger compact" data-receipt-action="delete-item" data-receipt-movement-id="${escapeHtml(row.id || "")}" data-receipt-batch-key="${escapeHtml(batch.key)}" data-receipt-batch-id="${escapeHtml(batch.batchId || "")}">Hapus</button>
+                </span>
+              </div>`).join("")}
+          </div>
+        </details>`).join("")}
+    </div>`;
+}
+
 function shiftMonthKey(monthKey, offset) {
   const today = localDateKey(new Date());
   const safeMonth = /^\d{4}-\d{2}$/.test(String(monthKey || "")) ? monthKey : today.slice(0, 7);
@@ -1907,13 +2285,18 @@ function renderStock(target) {
   const lowCount = analytics.filter(x => x.status === "Menipis").length;
   const fastCount = analytics.filter(x => x.velocity === "Fast").length;
   const status = state.stockStatusFilter || "Semua";
-  const deliveries = state.stockMovements.filter(x => x.type === "IN").slice(0, 18);
+  const receiptBatches = buildStockReceiptBatches(state.stockMovements);
   const usageRows = state.stockMovements.filter(x => x.type === "OUT" || x.source === "DAILY_USAGE_DAY");
   const todayKey = localDateKey(new Date());
   const usageMonth = state.stockUsageMonth || todayKey.slice(0, 7);
   state.stockUsageMonth = usageMonth;
   const monthUsageRows = usageRows.filter(x => String(x.date || "").startsWith(usageMonth));
   const usageDaysRecorded = new Set(monthUsageRows.filter(x => x.source === "DAILY_USAGE_DAY" || x.type === "OUT").map(x => x.date)).size;
+  const receiptMonth = state.stockReceiptMonth || todayKey.slice(0, 7);
+  state.stockReceiptMonth = receiptMonth;
+  const selectedReceiptDate = state.stockReceiptDate || latestReceiptDateInMonth(receiptBatches, receiptMonth) || todayKey;
+  state.stockReceiptDate = selectedReceiptDate;
+  const monthReceiptBatches = receiptBatches.filter(batch => String(batch.date || "").startsWith(receiptMonth));
 
   target.innerHTML = `
     <section class="page-intro">
@@ -1954,6 +2337,7 @@ function renderStock(target) {
     <nav class="stock-workspace-switch" aria-label="Akses cepat Stock">
       <button type="button" data-stock-jump="stock-usage-section"><span>${iconSvg("calendar", 17)}</span><strong>Penggunaan</strong><small>Input harian</small></button>
       <button type="button" data-stock-jump="stock-master-section"><span>${iconSvg("box", 17)}</span><strong>Data Stock</strong><small>Cari & pantau</small></button>
+      <button type="button" data-stock-jump="stock-receipt-section"><span>${iconSvg("truck", 17)}</span><strong>Barang Masuk</strong><small>Kalender & histori</small></button>
     </nav>
 
     <article id="stock-usage-section" class="panel stock-usage-history-panel usage-calendar-panel stock-daily-panel">
@@ -1980,7 +2364,7 @@ function renderStock(target) {
       <div class="panel-head stock-panel-head">
         <div><span class="overline">DATA STOCK</span><h3>Daftar Stock <span id="stock-visible-count" class="inline-count">${analytics.length} / ${analytics.length}</span></h3></div>
         <div class="stock-primary-actions">
-          <button id="add-stock-receipt" class="primary compact">+ Barang Masuk</button>
+          <button id="open-stock-receipt-workspace" class="primary compact">Barang Masuk</button>
           <details class="stock-more-actions">
             <summary class="secondary compact">Lainnya</summary>
             <div class="stock-more-menu">
@@ -2049,14 +2433,31 @@ function renderStock(target) {
       </div>
     </article>
 
-    <article class="panel delivery-history-panel">
-      <div class="panel-head"><div><span class="overline">INBOUND</span><h3>Barang Masuk Terbaru</h3></div><span class="count-pill">${state.stockMovements.filter(x => x.type === "IN").length} kiriman</span></div>
-      ${deliveries.length ? `<div class="delivery-list">${deliveries.map(row => `
-        <div class="delivery-row">
-          <div><strong>${escapeHtml(row.itemName || stockItemName(row.itemId))}</strong><span>${escapeHtml(formatDate(row.date))} · ${escapeHtml(formatMovementQty(row))}</span></div>
-          <div class="history-note"><strong>${escapeHtml(row.destination || "Gudang Utama")}</strong><span>${escapeHtml(row.supplier || row.note || "Tanpa catatan")}</span></div>
+    <article id="stock-receipt-section" class="panel delivery-history-panel receipt-calendar-panel">
+      <div class="stock-section-title receipt-section-title">
+        <div>
+          <span class="overline">BARANG MASUK</span>
+          <h3>Kalender & Histori Kiriman</h3>
+          <p class="muted small-copy">Pilih tanggal untuk melihat kembali kiriman yang pernah dicatat. Batch maupun item di dalamnya bisa diedit atau dihapus tanpa membuat data baru.</p>
         </div>
-      `).join("")}</div>` : emptyState("Belum ada histori barang masuk.")}
+        <div class="receipt-section-actions">
+          <button id="open-receipt-today" class="secondary compact" type="button">Hari ini</button>
+          <button id="add-stock-receipt" class="primary compact" type="button">+ Catat Kiriman</button>
+        </div>
+      </div>
+      <div class="usage-calendar-toolbar stock-calendar-toolbar receipt-calendar-toolbar">
+        <button id="receipt-prev-month" class="secondary usage-month-button" type="button" aria-label="Bulan sebelumnya">‹</button>
+        <div class="usage-calendar-month">
+          <strong>${escapeHtml(formatMonthKey(receiptMonth))}</strong>
+          <span>${monthReceiptBatches.length} kiriman · ${monthReceiptBatches.reduce((sum, batch) => sum + batch.rows.length, 0)} item tercatat</span>
+        </div>
+        <button id="receipt-next-month" class="secondary usage-month-button" type="button" aria-label="Bulan berikutnya">›</button>
+      </div>
+      ${buildStockReceiptCalendar(receiptBatches, receiptMonth, selectedReceiptDate)}
+      <p class="stock-calendar-hint">Tanggal yang memiliki tanda berarti ada barang masuk. Tap tanggal untuk membuka preview histori.</p>
+      <div class="receipt-history-preview">
+        ${buildStockReceiptPreview(receiptBatches, selectedReceiptDate)}
+      </div>
     </article>
 
   `;
@@ -2080,7 +2481,33 @@ function renderStock(target) {
   document.querySelector("#import-stock")?.addEventListener("click", () => openStockImportChoice());
   document.querySelector("#export-stock")?.addEventListener("click", () => exportStockWorkbook({ items: state.stockItems, movements: state.stockMovements, opnames: state.stockOpnames, analytics, filename: `SoWork-Stock-${localDateKey(new Date())}.xlsx` }));
   document.querySelector("#add-stock-item")?.addEventListener("click", () => openStockItemEditor(null));
-  document.querySelector("#add-stock-receipt")?.addEventListener("click", () => openStockReceiptEditor());
+  document.querySelector("#open-stock-receipt-workspace")?.addEventListener("click", () => {
+    document.getElementById("stock-receipt-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  document.querySelector("#add-stock-receipt")?.addEventListener("click", () => openStockReceiptEditor(state.stockReceiptDate || localDateKey(new Date())));
+  document.querySelector("#open-receipt-today")?.addEventListener("click", () => {
+    const today = localDateKey(new Date());
+    state.stockReceiptDate = today;
+    state.stockReceiptMonth = today.slice(0, 7);
+    renderStock(target);
+  });
+  document.querySelector("#receipt-prev-month")?.addEventListener("click", () => {
+    state.stockReceiptMonth = shiftMonthKey(receiptMonth, -1);
+    state.stockReceiptDate = latestReceiptDateInMonth(receiptBatches, state.stockReceiptMonth) || `${state.stockReceiptMonth}-01`;
+    renderStock(target);
+  });
+  document.querySelector("#receipt-next-month")?.addEventListener("click", () => {
+    state.stockReceiptMonth = shiftMonthKey(receiptMonth, 1);
+    state.stockReceiptDate = latestReceiptDateInMonth(receiptBatches, state.stockReceiptMonth) || `${state.stockReceiptMonth}-01`;
+    renderStock(target);
+  });
+  document.querySelectorAll("[data-open-receipt-date]").forEach(btn => btn.addEventListener("click", () => {
+    state.stockReceiptDate = btn.dataset.openReceiptDate;
+    renderStock(target);
+    requestAnimationFrame(() => document.getElementById("stock-receipt-section")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }));
+  document.querySelectorAll("[data-receipt-add-for-date]").forEach(btn => btn.addEventListener("click", () => openStockReceiptEditor(btn.dataset.receiptAddForDate)));
+  bindStockReceiptCrudActions(document.querySelector("#stock-receipt-section"));
   document.querySelector("#open-usage-today")?.addEventListener("click", () => openDailyStockUsageEditor(localDateKey(new Date())));
   document.querySelector("#usage-prev-month")?.addEventListener("click", () => {
     state.stockUsageMonth = shiftMonthKey(usageMonth, -1);
@@ -2229,7 +2656,7 @@ function renderStockOpname(target) {
       <div>
         <span class="overline">STOCK OPNAME</span>
         <h1>Stock fisik, lebih cepat dicek.</h1>
-        <p>Pilih tanggal, cari barang, lalu isi jumlah di tiap lokasi. Selisih terhadap stok sistem langsung terlihat.</p>
+        <p>Pilih tanggal lalu hitung seluruh barang aktif. Semua item disimpan bersama sebagai satu batch Stock Opname dan Telegram dikirim satu kali setelah batch berhasil.</p>
       </div>
       <div class="opname-top-actions">
         <button id="opname-add-item" class="primary compact">+ Barang</button>
@@ -2271,7 +2698,7 @@ function renderStockOpname(target) {
           <small>${savedCount ? `${savedCount}/${allItems.length} item aktif sudah tersimpan` : historicalSavedCount ? `${historicalSavedCount} snapshot histori tersimpan` : "Belum ada SO tersimpan pada tanggal ini"}</small>
         </div>
         <div class="opname-selected-actions-pro">
-          ${savedCount ? `<button id="delete-opname-day" type="button" class="text-danger-button">Hapus SO tanggal ini</button>` : ""}
+          ${historicalSavedCount ? `<button id="delete-opname-day" type="button" class="text-danger-button">Hapus Batch SO</button>` : ""}
           <label class="opname-date-fallback"><span>Pilih manual</span><input id="opname-date" type="date" value="${escapeHtml(date)}" /></label>
         </div>
       </div>
@@ -2302,13 +2729,18 @@ function renderStockOpname(target) {
       <div><span>Tersimpan</span><strong>${historicalSavedCount}</strong></div>
     </div>
 
+    <div class="opname-batch-banner">
+      <div><strong>1 sesi = 1 batch Stock Opname</strong><span>${allItems.length} barang aktif akan disimpan bersama. Search dan filter hanya mengubah tampilan, bukan isi batch.</span></div>
+      <span class="opname-batch-pill">${savedCount === allItems.length && allItems.length ? "Batch tersimpan" : "Batch belum lengkap"}</span>
+    </div>
+
     <form id="opname-form" class="opname-form-modern">
       <div class="opname-list opname-list-modern">
         ${allItems.map(item => {
           const row = existing[item.id] || {};
           const hasExisting = Boolean(existing[item.id]);
-          const q1 = row.primaryQty ?? item.lastPrimaryQty ?? item.currentQty ?? 0;
-          const q2 = row.secondaryQty ?? item.lastSecondaryQty ?? 0;
+          const q1 = hasExisting ? (row.primaryQty ?? 0) : "";
+          const q2 = hasExisting ? (row.secondaryQty ?? 0) : "";
           const total = Number(q1 || 0) + Number(q2 || 0);
           const recon = reconciliationByItem[item.id];
           const theoretical = calculateTheoreticalStock(item, date, state.stockOpnames, state.stockMovements);
@@ -2343,7 +2775,7 @@ function renderStockOpname(target) {
                   <span class="opname-location-label">Lokasi 1</span>
                   <input class="opname-location-input" name="loc1_${escapeHtml(item.id)}" value="${escapeHtml(row.primaryLocation || item.primaryLocation || "Gudang Utama")}" aria-label="Nama lokasi 1 ${escapeHtml(item.name)}" />
                   <div class="opname-qty-box">
-                    <input class="qty-input" inputmode="decimal" name="q1_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(q1 || 0)}" aria-label="Jumlah lokasi 1 ${escapeHtml(item.name)}" />
+                    <input class="qty-input" inputmode="decimal" name="q1_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${q1 === "" ? "" : Number(q1 || 0)}" aria-label="Jumlah lokasi 1 ${escapeHtml(item.name)}" />
                     <b>${escapeHtml(item.unit || "PCS")}</b>
                   </div>
                 </label>
@@ -2351,7 +2783,7 @@ function renderStockOpname(target) {
                   <span class="opname-location-label">Lokasi 2</span>
                   <input class="opname-location-input" name="loc2_${escapeHtml(item.id)}" value="${escapeHtml(row.secondaryLocation || item.secondaryLocation || "Gudang 2")}" aria-label="Nama lokasi 2 ${escapeHtml(item.name)}" />
                   <div class="opname-qty-box">
-                    <input class="qty-input" inputmode="decimal" name="q2_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${Number(q2 || 0)}" aria-label="Jumlah lokasi 2 ${escapeHtml(item.name)}" />
+                    <input class="qty-input" inputmode="decimal" name="q2_${escapeHtml(item.id)}" type="number" min="0" step="0.01" value="${q2 === "" ? "" : Number(q2 || 0)}" aria-label="Jumlah lokasi 2 ${escapeHtml(item.name)}" />
                     <b>${escapeHtml(item.unit || "PCS")}</b>
                   </div>
                 </label>
@@ -2372,10 +2804,10 @@ function renderStockOpname(target) {
         <div id="opname-save-bar" class="sticky-save-bar opname-save-bar-modern">
           <div class="save-bar-copy">
             <strong>SO ${escapeHtml(formatDate(date))}</strong>
-            <span id="opname-save-count">${allItems.length} barang tampil</span>
+            <span id="opname-save-count" data-batch-total="${allItems.length}">${allItems.length} barang dalam 1 batch</span>
             ${saveStateMarkup("opname-save-state", savedCount ? "saved" : "idle", savedCount ? `${savedCount} item sudah tersimpan` : "Belum ada SO tersimpan", "Perubahan input akan ditandai otomatis")}
           </div>
-          <button class="primary">Simpan SO</button>
+          <button class="primary">Simpan Semua SO</button>
         </div>
       ` : ""}
     </form>
@@ -2410,20 +2842,29 @@ function renderStockOpname(target) {
   }));
 
   document.querySelector("#delete-opname-day")?.addEventListener("click", async () => {
-    const dayRows = state.stockOpnames.filter(x => x.date === date);
-    if (!dayRows.length) return showToast("Tidak ada data SO pada tanggal ini.", "info", "Stock Opname");
-    if (!confirm(`Hapus Stock Opname ${formatDate(date)} (${dayRows.length} item)? Stok sistem akan dipulihkan dengan aman bila ini snapshot terakhir.`)) return;
+    const dayRows = state.stockOpnames.filter(x => String(x.date || "") === String(date));
+    if (!dayRows.length) return showToast("Tidak ada batch SO pada tanggal ini.", "info", "Stock Opname");
+
+    const batchIds = [...new Set(dayRows.map(row => String(row.batchId || "").trim()).filter(Boolean))];
+    const batchLabel = batchIds.length === 1 ? `1 batch · ${dayRows.length} item` : `${dayRows.length} snapshot`;
+    if (!confirm(`Hapus seluruh Stock Opname ${formatDate(date)} (${batchLabel})? Semua item pada tanggal ini akan dihapus sekaligus. Stok sistem dipulihkan dengan aman bila batch ini adalah snapshot terakhir.`)) return;
+
     const btn = document.querySelector("#delete-opname-day");
-    if (btn) { btn.disabled = true; btn.textContent = "Menghapus..."; }
+    if (btn) { btn.disabled = true; btn.textContent = "Menghapus Batch..."; }
     try {
       const restores = buildOpnameRestoreRows(date);
-      await removeStockOpnameDay(date, restores);
-      showToast(`Stock Opname ${formatDate(date)} dihapus. ${restores.length ? "Stok sistem terkait sudah dipulihkan." : "Snapshot historis dihapus tanpa mengubah stok aktif."}`, "success", "Stock Opname dihapus");
+      const removedCount = await removeStockOpnameDay(date, restores);
+
+      // v1.7.30: update state langsung supaya kalender & panel tidak menunggu snapshot realtime.
+      state.stockOpnames = state.stockOpnames.filter(x => String(x.date || "") !== String(date));
       state.opnameFilter = "Semua";
-      scheduleRender(["opname", "stock", "order", "dashboard"]);
+
+      showToast(`Batch Stock Opname ${formatDate(date)} dihapus sekaligus (${Number(removedCount || dayRows.length)} item). ${restores.length ? "Stok sistem terkait sudah dipulihkan." : "Snapshot historis dihapus tanpa mengubah stok aktif."}`, "success", "Batch SO dihapus");
+      renderShell();
+      scheduleRender(["stock", "order", "dashboard"]);
     } catch (err) {
-      if (btn) { btn.disabled = false; btn.textContent = "Hapus SO tanggal ini"; }
-      showToast(err?.message || friendlyError(err), "error", "Gagal menghapus Stock Opname");
+      if (btn) { btn.disabled = false; btn.textContent = "Hapus Batch SO"; }
+      showToast(err?.message || friendlyError(err), "error", "Gagal menghapus Batch SO");
     }
   });
 
@@ -2483,10 +2924,18 @@ function renderStockOpname(target) {
 
   document.querySelector("#opname-form")?.addEventListener("submit", async e => {
     e.preventDefault();
-    const visibleIds = new Set([...e.currentTarget.querySelectorAll("[data-opname-row]:not([hidden])")].map(card => card.dataset.opnameRow));
-    const submitItems = allItems.filter(item => visibleIds.has(item.id));
+    const submitItems = allItems.slice();
     if (!submitItems.length) return;
     const fd = new FormData(e.currentTarget);
+    const missingItems = submitItems.filter(item => {
+      const q1 = String(fd.get(`q1_${item.id}`) ?? "").trim();
+      const q2 = String(fd.get(`q2_${item.id}`) ?? "").trim();
+      return q1 === "" && q2 === "";
+    });
+    if (missingItems.length) {
+      const names = missingItems.slice(0, 5).map(item => item.name).join(", ");
+      return showToast(`Masih ada ${missingItems.length} barang belum dihitung${names ? `: ${names}${missingItems.length > 5 ? ", ..." : ""}` : ""}. Isi minimal salah satu lokasi dengan jumlah fisik (boleh 0) sebelum menyimpan batch.`, "warning", "Batch SO belum lengkap");
+    }
     const rows = submitItems.map(item => ({
       itemId: item.id,
       itemName: item.name,
@@ -2517,19 +2966,50 @@ function renderStockOpname(target) {
       })()
     }));
 
-    if (!confirm(`Simpan Stock Opname ${formatDate(date)} untuk ${rows.length} barang? Stok sistem akan dikoreksi ke stok fisik.`)) return;
+    if (!confirm(`Simpan 1 batch Stock Opname ${formatDate(date)} berisi ${rows.length} barang? Semua stok sistem akan dikoreksi ke stok fisik setelah seluruh batch berhasil.`)) return;
     const saveButton = e.currentTarget.querySelector("#opname-save-bar button");
-    const oldLabel = saveButton?.textContent || "Simpan SO";
+    const oldLabel = saveButton?.textContent || "Simpan Semua SO";
     if (saveButton) { saveButton.disabled = true; saveButton.textContent = "Menyimpan..."; }
     setSaveState("#opname-save-state", "saving", "Menyimpan...", `${rows.length} item sedang diproses`);
     try {
-      await saveStockOpname(date, rows, {
+      const savedBatch = await saveStockOpname(date, rows, {
         uid: state.user?.uid,
         name: state.profile?.name || state.user?.email
       });
+
+      // v1.7.29: seluruh item disimpan sebagai satu batch, lalu kirim satu ringkasan Telegram.
+      scheduleCloudflareSync(0);
+      const opnameWorkerUrl = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
+      if (state.stockSettings?.telegramEnabled === true && state.stockSettings?.telegramNotifyStockOpname !== false && opnameWorkerUrl) {
+        try {
+          const delivery = await sendTelegramStockOpname(opnameWorkerUrl, {
+            eventId: savedBatch?.batchId || `SO_${date}_${Date.now()}`,
+            batchId: savedBatch?.batchId || "",
+            date,
+            rows: rows.map(row => ({
+              itemId: row.itemId,
+              itemName: row.itemName,
+              totalQty: Math.max(0, Number(row.primaryQty || 0)) + Math.max(0, Number(row.secondaryQty || 0)),
+              unit: row.unit || "PCS",
+              systemQtyBeforeOpname: row.systemQtyBeforeOpname,
+              varianceQty: row.varianceQty,
+              variancePct: row.variancePct,
+              accuracyPct: row.accuracyPct,
+              reconciliationStatus: row.reconciliationStatus
+            })),
+            createdByName: state.profile?.name || state.user?.email || "Admin"
+          });
+          if (!delivery?.skipped) {
+            showToast(`Ringkasan Stock Opname dikirim ke ${Number(delivery?.sent || 0)} penerima Telegram.`, "success", "Telegram terkirim");
+          }
+        } catch (telegramError) {
+          showToast(`Stock Opname sudah tersimpan, tapi Telegram gagal: ${telegramError?.message || telegramError}`, "warning", "Telegram belum terkirim");
+        }
+      }
+
       if (saveButton) saveButton.textContent = "Tersimpan ✓";
       setSaveState("#opname-save-state", "saved", "Tersimpan ✓", `Terakhir disimpan ${savedTimeLabel()}`);
-      showToast(`Stock Opname ${formatDate(date)} berhasil disimpan untuk ${rows.length} barang.`, "success", "Stock Opname tersimpan");
+      showToast(`1 batch Stock Opname ${formatDate(date)} berhasil disimpan (${rows.length} barang).`, "success", "Batch Stock Opname tersimpan");
       setTimeout(() => scheduleRender(["opname"]), 250);
     } catch (err) {
       setSaveState("#opname-save-state", "error", "Gagal disimpan", err?.message || friendlyError(err));
@@ -2543,45 +3023,219 @@ function renderStockOpname(target) {
 function renderOrderPlanner(target) {
   const admin = isAdmin(state.profile);
   if (!admin) return renderPlaceholder(target);
-  const analytics = buildStockAnalytics(state.stockItems, state.stockOpnames, state.stockMovements);
+
+  const context = {
+    stockItems: state.stockItems,
+    stockMovements: state.stockMovements,
+    stockOpnames: state.stockOpnames,
+    wasteItems: state.wasteItems,
+    wasteDays: state.wasteDays,
+    productionRecipes: state.productionRecipes,
+    productRecipes: state.productRecipes,
+    salesMappings: state.salesMappings,
+    salesRecords: state.salesRecords
+  };
+  const analytics = buildPlanningAnalytics(context);
   const recommended = analytics.filter(x => x.recommendedQty > 0 || x.status !== "Aman");
+  const salesStats = buildSalesMappingStats(state.salesRecords, state.productRecipes, state.salesMappings);
+  const recentSales = state.salesRecords.slice(0, 30);
 
   target.innerHTML = `
-    <section class="page-intro">
-      <div><span class="overline">SMART REORDER</span><h1>Order Planner</h1><p>Setelah minimal 2 snapshot SO berbeda tanggal, SoWork mulai menghitung laju pemakaian. Dengan 3+ snapshot, prediksi tanggal habis dan waktu order jadi lebih stabil.</p></div>
-      <div class="action-row"><button id="export-order" class="secondary">Export Excel</button><span class="access-tag">PREDICTIVE</span></div>
+    <section class="page-intro planning-v2-intro">
+      <div><span class="overline">PLANNING ORDER V2</span><h1>Order Planner</h1><p>Recipe + waste + pemakaian harian + stock fisik + sales. Sales dipakai sebagai validasi dan demand signal supaya tidak double-count dengan pemakaian stok.</p></div>
+      <div class="action-row planning-actions">
+        <button id="planning-import-sales" class="primary">Import Sales</button>
+        <button id="planning-sales-template" class="secondary">Template Sales</button>
+        <button id="planning-telegram" class="secondary">Kirim Telegram</button>
+        <button id="export-order" class="secondary">Export Excel</button>
+      </div>
     </section>
 
-    <div class="metric-grid stock-metrics">
-      <article class="metric-card"><span class="metric-label">Perlu order</span><strong>${recommended.filter(x => x.recommendedQty > 0).length}</strong><small>item direkomendasikan</small></article>
-      <article class="metric-card"><span class="metric-label">Kritis</span><strong>${recommended.filter(x => x.status === "Kritis").length}</strong><small>prioritas utama</small></article>
-      <article class="metric-card"><span class="metric-label">Fast moving</span><strong>${analytics.filter(x => x.velocity === "Fast").length}</strong><small>pergerakan cepat</small></article>
-      <article class="metric-card"><span class="metric-label">Histori SO</span><strong>${new Set(state.stockOpnames.map(x => x.date)).size}</strong><small>tanggal snapshot</small></article>
+    ${state.planningError ? `<article class="planning-permission-alert" role="alert"><div><strong>Planning Order belum bisa mengakses Firestore</strong><p>${escapeHtml(state.planningError)}</p></div><code>npm.cmd run deploy:rules</code></article>` : ""}
+
+    <div class="metric-grid stock-metrics planning-metrics">
+      <article class="metric-card ${recommended.some(x=>x.orderDueNow)?'metric-alert':''}"><span class="metric-label">Perlu order</span><strong>${recommended.filter(x => x.recommendedQty > 0).length}</strong><small>${recommended.filter(x=>x.orderDueNow).length} perlu diproses sekarang</small></article>
+      <article class="metric-card"><span class="metric-label">Recipe produksi</span><strong>${state.productionRecipes.filter(x=>x.active!==false).length}</strong><small>batch / base aktif</small></article>
+      <article class="metric-card"><span class="metric-label">Recipe produk</span><strong>${state.productRecipes.filter(x=>x.active!==false).length}</strong><small>produk jadi aktif</small></article>
+      <article class="metric-card ${salesStats.unmapped?'metric-alert':''}"><span class="metric-label">Sales mapped</span><strong>${salesStats.total ? Math.round(salesStats.rate*100) : 0}%</strong><small>${salesStats.unmapped} baris belum termapping</small></article>
     </div>
 
-    <article class="panel">
-      <div class="panel-head"><div><span class="overline">RECOMMENDATION</span><h3>Daftar Rekomendasi Order</h3></div>${recommended.length ? `<button id="order-wa-alert" class="secondary">Kirim ke WhatsApp</button>` : ""}</div>
-      ${recommended.length ? `<div class="stock-table-wrap"><table class="order-table">
-        <thead><tr><th>Barang</th><th>Stok</th><th>Pemakaian</th><th>Prediksi Habis</th><th>Order Paling Lambat</th><th>Saran Order</th><th>Data</th></tr></thead>
-        <tbody>
-          ${recommended.map(item => `
-            <tr>
-              <td data-label="Barang"><strong>${escapeHtml(item.name)}</strong>${item.criticalItem ? `<small class="block critical-label">Item krusial</small>` : ""}</td>
-              <td data-label="Stok"><strong>${escapeHtml(formatQtyWithCarton(item.currentQty, item))}</strong><small class="block">${formatQty(item.currentQty)} ${escapeHtml(item.unit)}</small></td>
-              <td data-label="Pemakaian">${item.avgDailyUsage > 0 ? `<strong>${formatQty(item.avgDailyUsage)}</strong><small class="block">${escapeHtml(item.unit)}/hari · ${escapeHtml(item.velocity)}</small>` : "Belum cukup data"}</td>
-              <td data-label="Prediksi Habis">${item.predictedOutDate ? `<strong>${escapeHtml(formatDate(item.predictedOutDate))}</strong><small class="block">~${item.daysCover.toFixed(1)} hari lagi</small>` : "—"}</td>
-              <td data-label="Order Paling Lambat">${item.recommendedOrderDate ? `<strong class="${item.orderDueNow ? "critical-label" : ""}">${item.orderDueNow ? "Hari ini" : escapeHtml(formatDate(item.recommendedOrderDate))}</strong><small class="block">Lead time ${Number(item.leadTimeDays || 2)} hari</small>` : "—"}</td>
-              <td data-label="Saran Order"><strong>${item.recommendedQty > 0 ? escapeHtml(formatQtyWithCarton(item.recommendedQty, item)) : "Pantau"}</strong>${item.recommendedQty > 0 ? `<small class="block">${formatQty(item.recommendedQty)} ${escapeHtml(item.unit)}</small>` : ""}</td>
-              <td data-label="Data"><span class="stock-status ${stockStatusClass(item.status)}">${escapeHtml(item.status)}</span><small class="block">${escapeHtml(item.predictionConfidence)} · ${item.historyCount} snapshot</small></td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table></div>` : emptyState("Belum ada item yang perlu diorder berdasarkan data saat ini.")}
-      <p class="matrix-tip">Estimasi awal dari data SO lama mengabaikan interval yang stoknya naik tetapi barang masuknya belum tercatat. Setelah menu Barang Masuk rutin dipakai, estimasi konsumsi jadi lebih akurat.</p>
+    <article class="panel planning-recommendation-panel">
+      <div class="panel-head"><div><span class="overline">RECOMMENDATION</span><h3>Rekomendasi order & alasan hitung</h3><p class="muted small-copy">Forecast default: 70% konsumsi aktual + 30% theoretical sales bila mapping sales cukup. Waste selalu ditambahkan ke konsumsi aktual.</p></div></div>
+      ${analytics.length ? `<div class="planning-order-list">
+        ${analytics.map(item => {
+          const exp = item.explanation || {};
+          return `<article class="planning-order-card ${stockStatusClass(item.status)}">
+            <div class="planning-order-card-head">
+              <div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.unit || 'PCS')} · ${escapeHtml(item.status)}</span></div>
+              <div class="planning-order-qty"><small>Saran</small><b>${item.recommendedQty > 0 ? escapeHtml(formatQtyWithCarton(item.recommendedQty, item)) : 'Pantau'}</b></div>
+            </div>
+            <div class="planning-order-grid">
+              <div><span>Stok sekarang</span><strong>${formatQty(item.currentQty)} ${escapeHtml(item.unit||'PCS')}</strong></div>
+              <div><span>Pemakaian ${item.periodDays}h</span><strong>${formatQty(item.usageTotal)}</strong></div>
+              <div><span>Waste equivalent</span><strong>${formatQty(item.wasteTotal)}</strong></div>
+              <div><span>Sales theoretical</span><strong>${formatQty(item.salesExpectedTotal)}</strong></div>
+              <div><span>Forecast / hari</span><strong>${formatQty(item.forecastDaily)}</strong></div>
+              <div><span>Est. saat barang datang</span><strong>${formatQty(item.predictedAtArrival)}</strong></div>
+            </div>
+            <details class="planning-explain">
+              <summary>Lihat perhitungan</summary>
+              <div class="planning-explain-grid">
+                <p><span>Konsumsi aktual</span><strong>${formatQty(item.usageTotal)} pemakaian + ${formatQty(item.wasteTotal)} waste = ${formatQty(item.actualConsumptionTotal)} ${escapeHtml(item.unit||'PCS')}</strong></p>
+                <p><span>Sales expected</span><strong>${formatQty(item.salesExpectedTotal)} ${escapeHtml(item.unit||'PCS')} · mapping ${Math.round(item.mappedSalesRate*100)}%</strong></p>
+                <p><span>Variance usage vs sales</span><strong class="${Math.abs(item.usageVariance)>0.01?'planning-variance':''}">${item.usageVariance>=0?'+':''}${formatQty(item.usageVariance)} ${escapeHtml(item.unit||'PCS')}</strong></p>
+                <p><span>Lead time</span><strong>${Number(exp.leadTimeDays||0)} hari · safety ${formatQty(exp.safetyStock||0)}</strong></p>
+                <p><span>Target coverage</span><strong>${Number(exp.targetCoverageDays||0)} hari</strong></p>
+                <p><span>Stock checkpoint</span><strong>${item.latestOpnameDate ? `${escapeHtml(formatDate(item.latestOpnameDate))}${item.stockVarianceQty==null?'':` · variance ${item.stockVarianceQty>=0?'+':''}${formatQty(item.stockVarianceQty)}`}` : 'Belum ada SO'}</strong></p>
+              </div>
+              <div class="planning-formula-note">Order dibulatkan ke isi karton hanya pada tahap akhir. Nilai recipe, waste, dan forecast tetap memakai desimal agar tidak kehilangan presisi.</div>
+            </details>
+          </article>`;
+        }).join('')}
+      </div>` : emptyState("Belum ada master stock aktif.")}
+    </article>
+
+    <div class="grid two planning-master-grid">
+      <article class="panel">
+        <div class="panel-head"><div><span class="overline">BATCH / BASE RECIPE</span><h3>Production Recipe</h3><p class="muted small-copy">Contoh: 1 bag Da Hong Pao → 1.750 ml tea base.</p></div><button id="add-production-recipe" class="primary compact">+ Batch</button></div>
+        <div class="planning-master-list">
+          ${state.productionRecipes.length ? state.productionRecipes.map(r=>`<div class="planning-master-row"><div><strong>${escapeHtml(r.name)}</strong><span>${formatQty(r.yieldQty)} ${escapeHtml(r.outputUnit)} / batch · ${(r.ingredients||[]).length} bahan</span></div><div><button class="secondary small" data-edit-production="${escapeHtml(r.id)}">Edit</button><button class="danger small" data-delete-production="${escapeHtml(r.id)}">Hapus</button></div></div>`).join('') : `<p class="muted">Belum ada production recipe.</p>`}
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><span class="overline">FINISHED PRODUCT</span><h3>Product Recipe</h3><p class="muted small-copy">Menghubungkan sales dan finished-product waste ke bahan stock.</p></div><button id="add-product-recipe" class="primary compact">+ Produk</button></div>
+        <div class="planning-master-list">
+          ${state.productRecipes.length ? state.productRecipes.map(r=>`<div class="planning-master-row"><div><strong>${escapeHtml(r.productName)}${r.variant?` · ${escapeHtml(r.variant)}`:''}</strong><span>1 produk = ${formatQty(r.wasteMeasureQty)} ${escapeHtml(r.wasteMeasureUnit)} waste basis · ${(r.components||[]).length} komponen</span></div><div><button class="secondary small" data-edit-product="${escapeHtml(r.id)}">Edit</button><button class="danger small" data-delete-product="${escapeHtml(r.id)}">Hapus</button></div></div>`).join('') : `<p class="muted">Belum ada product recipe.</p>`}
+        </div>
+      </article>
+    </div>
+
+    <article class="panel planning-sales-panel">
+      <div class="panel-head"><div><span class="overline">SALES IMPORT</span><h3>Sales tanpa SKU</h3><p class="muted small-copy">Kolom: date, product_name, variant, qty_sold. Import ulang tanggal + produk yang sama akan update, bukan menggandakan data.</p></div><button id="planning-add-sales" class="secondary compact">+ Manual</button></div>
+      ${salesStats.unmatched.length ? `<div class="planning-unmatched"><strong>${salesStats.unmatched.length} nama produk belum termapping</strong><div>${salesStats.unmatched.slice(0,12).map(x=>`<button class="planning-unmatched-chip" data-map-sales-name="${escapeHtml(x.productName)}" data-map-sales-variant="${escapeHtml(x.variant||'')}">${escapeHtml(x.productName)}${x.variant?` · ${escapeHtml(x.variant)}`:''} <b>${x.count}</b></button>`).join('')}</div></div>` : `<div class="planning-mapped-ok">✓ Semua sales yang tersimpan sudah dikenali recipe.</div>`}
+      <div class="stock-table-wrap"><table class="order-table planning-sales-table"><thead><tr><th>Tanggal</th><th>Produk</th><th>Qty</th><th>Recipe</th><th>Aksi</th></tr></thead><tbody>
+        ${recentSales.length ? recentSales.map(row=>{const recipe=row.productRecipeId?state.productRecipes.find(x=>x.id===row.productRecipeId):resolveProductRecipe(row.productName,row.variant,state.productRecipes,state.salesMappings);return `<tr><td data-label="Tanggal">${escapeHtml(formatDate(row.date))}</td><td data-label="Produk"><strong>${escapeHtml(row.productName)}</strong>${row.variant?`<small class="block">${escapeHtml(row.variant)}</small>`:''}</td><td data-label="Qty">${formatQty(row.qtySold)}</td><td data-label="Recipe">${recipe?`<span class="stock-status safe">Mapped</span><small class="block">${escapeHtml(recipe.productName)}${recipe.variant?` · ${escapeHtml(recipe.variant)}`:''}</small>`:`<span class="stock-status critical">Belum mapping</span>`}</td><td data-label="Aksi"><button class="secondary small" data-edit-sales="${escapeHtml(row.id)}">Edit</button> <button class="danger small" data-delete-sales="${escapeHtml(row.id)}">Hapus</button></td></tr>`}).join('') : `<tr><td colspan="5">Belum ada sales import.</td></tr>`}
+      </tbody></table></div>
+      ${state.salesRecords.length>recentSales.length?`<p class="muted small-copy">Menampilkan 30 data terbaru dari ${state.salesRecords.length} baris.</p>`:''}
+    </article>
+
+    <article class="panel planning-mapping-panel">
+      <div class="panel-head"><div><span class="overline">IMPORT MAPPING</span><h3>Nama sheet → Product Recipe</h3></div><button id="add-sales-mapping" class="secondary compact">+ Mapping</button></div>
+      <div class="planning-master-list">${state.salesMappings.length ? state.salesMappings.map(m=>{const r=state.productRecipes.find(x=>x.id===m.productRecipeId);return `<div class="planning-master-row"><div><strong>${escapeHtml(m.externalProductName)}${m.externalVariant?` · ${escapeHtml(m.externalVariant)}`:''}</strong><span>→ ${escapeHtml(r?.productName||'Recipe tidak ditemukan')}${r?.variant?` · ${escapeHtml(r.variant)}`:''}</span></div><div><button class="secondary small" data-edit-mapping="${escapeHtml(m.id)}">Edit</button><button class="danger small" data-delete-mapping="${escapeHtml(m.id)}">Hapus</button></div></div>`}).join('') : `<p class="muted">Mapping manual belum diperlukan jika nama sales sama persis dengan Product Recipe.</p>`}</div>
     </article>
   `;
-  document.querySelector("#export-order")?.addEventListener("click", () => exportOrderPlannerWorkbook({ analytics, filename: `SoWork-Order-Planner-${localDateKey(new Date())}.xlsx` }));
-  document.querySelector("#order-wa-alert")?.addEventListener("click", () => sendStockWhatsapp(recommended));
+
+  document.querySelector("#export-order")?.addEventListener("click", () => exportOrderPlannerWorkbook({ analytics, filename: `SoWork-Order-Planner-V2-${localDateKey(new Date())}.xlsx` }));
+  document.querySelector("#planning-sales-template")?.addEventListener("click", downloadSalesTemplate);
+  document.querySelector("#add-production-recipe")?.addEventListener("click", () => openProductionRecipeEditor(null));
+  document.querySelector("#add-product-recipe")?.addEventListener("click", () => openProductRecipeEditor(null));
+  document.querySelector("#planning-add-sales")?.addEventListener("click", () => openSalesRecordEditor(null));
+  document.querySelector("#add-sales-mapping")?.addEventListener("click", () => openSalesMappingEditor(null));
+
+  document.querySelector("#planning-import-sales")?.addEventListener("click", async () => {
+    try {
+      const file = await chooseSalesFile();
+      if (!file) return;
+      const result = await importSalesFile(file, context);
+      showToast(`Sales ${result.total} baris · ${result.inserted} baru · ${result.updated} update · ${result.unchanged} duplicate dilewati · ${result.unmapped} belum mapping.`, result.unmapped ? "warning" : "success", "Import Sales selesai");
+      const workerUrl = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
+      if (workerUrl && state.stockSettings?.telegramEnabled === true && state.stockSettings?.telegramNotifySalesImport !== false) {
+        sendTelegramPlanningEvent(workerUrl, {
+          kind: "sales-import",
+          eventId: result.batchId,
+          title: "Sales Import SoWork",
+          message: `${result.fileName || 'File sales'}\n${result.total} baris · ${result.mapped} mapped · ${result.unmapped} belum mapping\n${result.inserted} baru · ${result.updated} update · ${result.unchanged} duplicate dilewati`
+        }).catch(err => showToast(`Import tersimpan, Telegram gagal: ${err?.message || err}`, "warning", "Telegram"));
+      }
+    } catch (err) { showToast(friendlyError(err), "error", "Import Sales gagal"); }
+  });
+
+  document.querySelector("#planning-telegram")?.addEventListener("click", async () => {
+    try { await sendPlanningTelegramSummary(analytics); }
+    catch (err) { showToast(err?.message || friendlyError(err), "error", "Telegram gagal"); }
+  });
+
+  document.querySelectorAll("[data-edit-production]").forEach(btn => btn.onclick = () => openProductionRecipeEditor(state.productionRecipes.find(x=>x.id===btn.dataset.editProduction)));
+  document.querySelectorAll("[data-delete-production]").forEach(btn => btn.onclick = async () => {
+    const recipe = state.productionRecipes.find(x=>x.id===btn.dataset.deleteProduction); if(!recipe) return;
+    const refs=(state.productRecipes||[]).filter(r=>(r.components||[]).some(c=>c.sourceType==='production'&&c.sourceId===recipe.id)).length;
+    if(!confirm(`Hapus production recipe “${recipe.name}”?${refs?`\n\n${refs} Product Recipe masih mereferensikan recipe ini dan perlu diperbaiki.`:''}`)) return;
+    try { await removeProductionRecipe(recipe.id); showToast("Production Recipe dihapus.","success","CRUD Planning"); } catch(err){showToast(friendlyError(err),"error","Hapus gagal");}
+  });
+  document.querySelectorAll("[data-edit-product]").forEach(btn => btn.onclick = () => openProductRecipeEditor(state.productRecipes.find(x=>x.id===btn.dataset.editProduct)));
+  document.querySelectorAll("[data-delete-product]").forEach(btn => btn.onclick = async () => {
+    const recipe=state.productRecipes.find(x=>x.id===btn.dataset.deleteProduct); if(!recipe)return;
+    const salesCount=state.salesRecords.filter(x=>x.productRecipeId===recipe.id).length;
+    if(!confirm(`Hapus Product Recipe “${recipe.productName}${recipe.variant?` · ${recipe.variant}`:''}”?${salesCount?`\n\n${salesCount} data sales tetap tersimpan tetapi akan menjadi belum termapping.`:''}`))return;
+    try { await removeProductRecipe(recipe.id); showToast("Product Recipe dihapus.","success","CRUD Planning"); } catch(err){showToast(friendlyError(err),"error","Hapus gagal");}
+  });
+  document.querySelectorAll("[data-edit-sales]").forEach(btn => btn.onclick=()=>openSalesRecordEditor(state.salesRecords.find(x=>x.id===btn.dataset.editSales)));
+  document.querySelectorAll("[data-delete-sales]").forEach(btn => btn.onclick=async()=>{const row=state.salesRecords.find(x=>x.id===btn.dataset.deleteSales);if(!row||!confirm(`Hapus sales ${formatDate(row.date)} · ${row.productName}?`))return;try{await removeSalesRecord(row.id);showToast("Data sales dihapus.","success","CRUD Sales");}catch(err){showToast(friendlyError(err),"error","Hapus sales gagal");}});
+  document.querySelectorAll("[data-map-sales-name]").forEach(btn => btn.onclick=()=>openSalesMappingEditor({externalProductName:btn.dataset.mapSalesName,externalVariant:btn.dataset.mapSalesVariant}));
+  document.querySelectorAll("[data-edit-mapping]").forEach(btn => btn.onclick=()=>openSalesMappingEditor(state.salesMappings.find(x=>x.id===btn.dataset.editMapping)));
+  document.querySelectorAll("[data-delete-mapping]").forEach(btn => btn.onclick=async()=>{const m=state.salesMappings.find(x=>x.id===btn.dataset.deleteMapping);if(!m||!confirm(`Hapus mapping “${m.externalProductName}”?`))return;try{await removeSalesMapping(m.id);showToast("Mapping dihapus.","success","CRUD Mapping");}catch(err){showToast(friendlyError(err),"error","Hapus mapping gagal");}});
+}
+
+async function sendPlanningTelegramSummary(analytics = []) {
+  const workerUrl = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
+  if (!workerUrl || state.stockSettings?.telegramEnabled !== true) throw new Error("Telegram belum aktif / Worker URL belum diatur.");
+  const urgent = analytics.filter(x=>x.recommendedQty>0).slice(0,12);
+  const lines = urgent.length
+    ? urgent.map((x,i)=>`${i+1}. ${x.name}: ${formatQtyWithCarton(x.recommendedQty,x)} · stok ${formatQty(x.currentQty)} · forecast ${formatQty(x.forecastDaily)}/hari`)
+    : ["Tidak ada item yang perlu diorder saat ini."];
+  const result = await sendTelegramPlanningEvent(workerUrl, {
+    kind: "planning-summary",
+    eventId: `manual_${Date.now()}`,
+    title: "Planning Order SoWork",
+    message: lines.join("\n")
+  });
+  showToast(`Ringkasan planning dikirim ke ${Number(result?.sent || 0)} penerima Telegram.`, "success", "Telegram terkirim");
+  return result;
+}
+
+function openProductionRecipeEditor(rawRecipe) {
+  document.querySelector('#production-recipe-modal')?.remove();
+  const recipe=rawRecipe||{name:'',yieldQty:1750,outputUnit:'ML',ingredients:[],active:true,note:''};
+  const modal=document.createElement('div'); modal.id='production-recipe-modal'; modal.className='modal-backdrop';
+  modal.innerHTML=`<section class="edit-modal wide-modal planning-recipe-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><span class="overline">PRODUCTION RECIPE</span><h3>${rawRecipe?'Edit':'Tambah'} Batch / Base</h3><p class="muted">Bahan stock → hasil produksi. Angka boleh desimal dan tidak dibulatkan.</p></div><button type="button" class="modal-close">×</button></div><form id="production-recipe-form" class="edit-form"><div class="edit-grid"><label>Nama batch/base<input name="name" value="${escapeHtml(recipe.name||'')}" placeholder="Da Hong Pao Tea Base" required></label><label>Hasil per batch<input name="yieldQty" type="number" min="0.0001" step="0.0001" value="${Number(recipe.yieldQty||0)}" required></label><label>Satuan hasil<select name="outputUnit">${['ML','GRAM','PCS','QTY'].map(u=>`<option ${u===String(recipe.outputUnit||'ML').toUpperCase()?'selected':''}>${u}</option>`).join('')}</select></label><label class="check-line simple"><input name="active" type="checkbox" ${recipe.active!==false?'checked':''}><span>Aktif</span></label></div><div class="planning-recipe-builder"><div class="panel-head compact-head"><div><strong>Bahan stock per batch</strong><small class="muted">Pilih item yang benar-benar mengurangi stock.</small></div><button type="button" id="add-production-ingredient" class="secondary compact">+ Bahan</button></div><div id="production-ingredients"></div></div><label>Catatan<input name="note" value="${escapeHtml(recipe.note||'')}" placeholder="Opsional"></label><div class="modal-actions"><span></span><div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan Recipe</button></div></div></form></section>`;
+  document.body.appendChild(modal);
+  let rows=(recipe.ingredients||[]).map(x=>({...x}));
+  if(!rows.length) rows=[{itemId:'',qty:1}];
+  const host=modal.querySelector('#production-ingredients');
+  const draw=()=>{host.innerHTML=rows.map((row,i)=>{const item=state.stockItems.find(x=>x.id===row.itemId);const rowUnit=item?.unit||row.unit||'UNIT';return `<div class="planning-builder-row"><label>Bahan<select data-prod-item="${i}"><option value="">Pilih stock item...</option>${state.stockItems.filter(x=>x.active!==false).map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===row.itemId?'selected':''}>${escapeHtml(x.name)} · ${escapeHtml(x.unit||'PCS')}</option>`).join('')}</select></label><div class="planning-qty-field"><span class="planning-field-label">Qty / batch</span><div class="planning-qty-control"><input data-prod-qty="${i}" aria-label="Qty per batch" type="number" min="0" step="0.0001" value="${Number(row.qty||0)}"><span class="planning-unit-badge">${escapeHtml(rowUnit)}</span></div></div><button type="button" class="danger small planning-remove-row" data-prod-remove="${i}">Hapus</button></div>`}).join(''); host.querySelectorAll('[data-prod-item]').forEach(el=>el.onchange=()=>{rows[Number(el.dataset.prodItem)].itemId=el.value;const it=state.stockItems.find(x=>x.id===el.value);rows[Number(el.dataset.prodItem)].itemName=it?.name||'';rows[Number(el.dataset.prodItem)].unit=it?.unit||'';draw();});host.querySelectorAll('[data-prod-qty]').forEach(el=>el.oninput=()=>rows[Number(el.dataset.prodQty)].qty=Number(el.value||0));host.querySelectorAll('[data-prod-remove]').forEach(btn=>btn.onclick=()=>{rows.splice(Number(btn.dataset.prodRemove),1);if(!rows.length)rows.push({itemId:'',qty:1});draw();});}; draw();
+  modal.querySelector('#add-production-ingredient').onclick=()=>{rows.push({itemId:'',qty:1});draw();};
+  const close=()=>modal.remove(); modal.querySelector('.modal-close').onclick=close; modal.querySelector('.modal-cancel').onclick=close; modal.onclick=e=>{if(e.target===modal)close();};
+  modal.querySelector('#production-recipe-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const fd=new FormData(form);try{await saveProductionRecipe({id:rawRecipe?.id,name:fd.get('name'),yieldQty:fd.get('yieldQty'),outputUnit:fd.get('outputUnit'),active:form.elements.namedItem('active')?.checked,note:fd.get('note'),ingredients:rows.map(r=>{const it=state.stockItems.find(x=>x.id===r.itemId);return {...r,itemName:it?.name||r.itemName,unit:it?.unit||r.unit};})});showToast('Production Recipe tersimpan.','success','CRUD Planning');close();}catch(err){showToast(friendlyError(err),'error','Recipe gagal disimpan');}};
+}
+
+function openProductRecipeEditor(rawRecipe) {
+  document.querySelector('#product-recipe-modal')?.remove();
+  const recipe=rawRecipe||{productName:'',variant:'',wasteMeasureQty:300,wasteMeasureUnit:'ML',components:[],active:true,note:''};
+  const modal=document.createElement('div');modal.id='product-recipe-modal';modal.className='modal-backdrop';
+  modal.innerHTML=`<section class="edit-modal wide-modal planning-recipe-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><span class="overline">PRODUCT RECIPE</span><h3>${rawRecipe?'Edit':'Tambah'} Product Recipe</h3><p class="muted">Hubungkan produk jadi ke base/stock. Waste basis adalah volume/berat produk yang setara 1 pcs.</p></div><button type="button" class="modal-close">×</button></div><form id="product-recipe-form" class="edit-form"><div class="edit-grid"><label>Nama produk<input name="productName" value="${escapeHtml(recipe.productName||'')}" required></label><label>Variant<input name="variant" value="${escapeHtml(recipe.variant||'')}" placeholder="Large / Medium / kosong"></label><label>Waste basis / 1 pcs<input name="wasteMeasureQty" type="number" min="0.0001" step="0.0001" value="${Number(recipe.wasteMeasureQty||0)}" required></label><label>Satuan waste basis<select name="wasteMeasureUnit">${['ML','GRAM','PCS','QTY'].map(u=>`<option ${u===String(recipe.wasteMeasureUnit||'ML').toUpperCase()?'selected':''}>${u}</option>`).join('')}</select></label><label class="check-line simple"><input name="active" type="checkbox" ${recipe.active!==false?'checked':''}><span>Aktif</span></label></div><div class="planning-recipe-builder"><div class="panel-head compact-head"><div><strong>Komponen per 1 produk</strong><small class="muted">Bisa dari Production Recipe atau langsung Stock Item.</small></div><button type="button" id="add-product-component" class="secondary compact">+ Komponen</button></div><div id="product-components"></div></div><label>Catatan<input name="note" value="${escapeHtml(recipe.note||'')}"></label><div class="modal-actions"><span></span><div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan Product Recipe</button></div></div></form></section>`;
+  document.body.appendChild(modal);
+  let rows=(recipe.components||[]).map(x=>({...x})); if(!rows.length) rows=[{sourceType:'production',sourceId:'',qty:0}];
+  const host=modal.querySelector('#product-components');
+  const draw=()=>{host.innerHTML=rows.map((row,i)=>{const sourceOptions=row.sourceType==='production'?state.productionRecipes.filter(x=>x.active!==false):state.stockItems.filter(x=>x.active!==false);const selected=sourceOptions.find(x=>x.id===row.sourceId);const unit=row.sourceType==='production'?(selected?.outputUnit||row.unit||'QTY'):(selected?.unit||row.unit||'PCS');return `<div class="planning-builder-row product-component-row"><label>Sumber<select data-comp-type="${i}"><option value="production" ${row.sourceType==='production'?'selected':''}>Production Recipe</option><option value="stock" ${row.sourceType==='stock'?'selected':''}>Stock Item</option></select></label><label>Item<select data-comp-source="${i}"><option value="">Pilih...</option>${sourceOptions.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===row.sourceId?'selected':''}>${escapeHtml(x.name||x.productName)}${x.outputUnit?` · ${escapeHtml(x.outputUnit)}`:` · ${escapeHtml(x.unit||'PCS')}`}</option>`).join('')}</select></label><div class="planning-qty-field"><span class="planning-field-label">Qty / pcs</span><div class="planning-qty-control"><input data-comp-qty="${i}" aria-label="Qty per pcs" type="number" min="0" step="0.0001" value="${Number(row.qty||0)}"><span class="planning-unit-badge">${escapeHtml(unit)}</span></div></div><button type="button" class="danger small planning-remove-row" data-comp-remove="${i}">Hapus</button></div>`}).join('');host.querySelectorAll('[data-comp-type]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.compType);rows[i].sourceType=el.value;rows[i].sourceId='';rows[i].qty=0;draw();});host.querySelectorAll('[data-comp-source]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.compSource);rows[i].sourceId=el.value;const src=rows[i].sourceType==='production'?state.productionRecipes.find(x=>x.id===el.value):state.stockItems.find(x=>x.id===el.value);rows[i].sourceName=src?.name||src?.productName||'';rows[i].unit=rows[i].sourceType==='production'?(src?.outputUnit||'QTY'):(src?.unit||'PCS');draw();});host.querySelectorAll('[data-comp-qty]').forEach(el=>el.oninput=()=>rows[Number(el.dataset.compQty)].qty=Number(el.value||0));host.querySelectorAll('[data-comp-remove]').forEach(btn=>btn.onclick=()=>{rows.splice(Number(btn.dataset.compRemove),1);if(!rows.length)rows.push({sourceType:'production',sourceId:'',qty:0});draw();});};draw();
+  modal.querySelector('#add-product-component').onclick=()=>{rows.push({sourceType:'production',sourceId:'',qty:0});draw();};
+  const close=()=>modal.remove();modal.querySelector('.modal-close').onclick=close;modal.querySelector('.modal-cancel').onclick=close;modal.onclick=e=>{if(e.target===modal)close();};
+  modal.querySelector('#product-recipe-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const fd=new FormData(form);try{await saveProductRecipe({id:rawRecipe?.id,productName:fd.get('productName'),variant:fd.get('variant'),wasteMeasureQty:fd.get('wasteMeasureQty'),wasteMeasureUnit:fd.get('wasteMeasureUnit'),active:form.elements.namedItem('active')?.checked,note:fd.get('note'),components:rows});showToast('Product Recipe tersimpan.','success','CRUD Planning');close();}catch(err){showToast(friendlyError(err),'error','Product Recipe gagal');}};
+}
+
+function openSalesMappingEditor(rawMapping) {
+  if(!state.productRecipes.length) return showToast('Buat Product Recipe dulu sebelum mapping sales.','warning','Product Recipe kosong');
+  document.querySelector('#sales-mapping-modal')?.remove();
+  const m=rawMapping||{};const modal=document.createElement('div');modal.id='sales-mapping-modal';modal.className='modal-backdrop';
+  modal.innerHTML=`<section class="edit-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><span class="overline">SALES MAPPING</span><h3>${m.id?'Edit':'Tambah'} Mapping</h3></div><button type="button" class="modal-close">×</button></div><form id="sales-mapping-form" class="modal-form"><label>Nama produk di sheet<input name="externalProductName" value="${escapeHtml(m.externalProductName||'')}" required></label><label>Variant di sheet<input name="externalVariant" value="${escapeHtml(m.externalVariant||'')}"></label><label>Product Recipe<select name="productRecipeId" required><option value="">Pilih...</option>${state.productRecipes.filter(x=>x.active!==false).map(r=>`<option value="${escapeHtml(r.id)}" ${r.id===m.productRecipeId?'selected':''}>${escapeHtml(r.productName)}${r.variant?` · ${escapeHtml(r.variant)}`:''}</option>`).join('')}</select></label><div class="modal-actions"><span></span><div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan Mapping</button></div></div></form></section>`;
+  document.body.appendChild(modal);const close=()=>modal.remove();modal.querySelector('.modal-close').onclick=close;modal.querySelector('.modal-cancel').onclick=close;modal.onclick=e=>{if(e.target===modal)close();};modal.querySelector('#sales-mapping-form').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await saveSalesMapping({id:m.id,externalProductName:fd.get('externalProductName'),externalVariant:fd.get('externalVariant'),productRecipeId:fd.get('productRecipeId')});showToast('Sales mapping tersimpan.','success','CRUD Mapping');close();}catch(err){showToast(friendlyError(err),'error','Mapping gagal');}};
+}
+
+function openSalesRecordEditor(rawRecord) {
+  document.querySelector('#sales-record-modal')?.remove();
+  const r=rawRecord||{date:localDateKey(new Date()),productName:'',variant:'',qtySold:1,productRecipeId:''};const modal=document.createElement('div');modal.id='sales-record-modal';modal.className='modal-backdrop';
+  modal.innerHTML=`<section class="edit-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><span class="overline">SALES DATA</span><h3>${rawRecord?'Edit':'Tambah'} Sales</h3></div><button type="button" class="modal-close">×</button></div><form id="sales-record-form" class="modal-form"><label>Tanggal<input name="date" type="date" value="${escapeHtml(r.date||'')}" required></label><label>Nama produk<input name="productName" value="${escapeHtml(r.productName||'')}" required></label><label>Variant<input name="variant" value="${escapeHtml(r.variant||'')}"></label><label>Qty terjual<input name="qtySold" type="number" min="0.0001" step="0.0001" value="${Number(r.qtySold||0)}" required></label><label>Product Recipe (opsional)<select name="productRecipeId"><option value="">Auto mapping nama</option>${state.productRecipes.filter(x=>x.active!==false).map(pr=>`<option value="${escapeHtml(pr.id)}" ${pr.id===r.productRecipeId?'selected':''}>${escapeHtml(pr.productName)}${pr.variant?` · ${escapeHtml(pr.variant)}`:''}</option>`).join('')}</select></label><div class="modal-actions"><span></span><div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan Sales</button></div></div></form></section>`;
+  document.body.appendChild(modal);const close=()=>modal.remove();modal.querySelector('.modal-close').onclick=close;modal.querySelector('.modal-cancel').onclick=close;modal.onclick=e=>{if(e.target===modal)close();};modal.querySelector('#sales-record-form').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await saveSalesRecord({id:rawRecord?.id,date:fd.get('date'),productName:fd.get('productName'),variant:fd.get('variant'),qtySold:fd.get('qtySold'),productRecipeId:fd.get('productRecipeId'),source:rawRecord?.source||'manual'});showToast('Data sales tersimpan.','success','CRUD Sales');close();}catch(err){showToast(friendlyError(err),'error','Sales gagal disimpan');}};
 }
 
 function openStockItemEditor(rawItem) {
@@ -2655,29 +3309,283 @@ function openStockItemEditor(rawItem) {
   });
 }
 
-function openStockReceiptEditor() {
+function resolveReceiptBatchFromAction(actionEl) {
+  const currentBatches = buildStockReceiptBatches(state.stockMovements);
+  const batchId = String(actionEl?.dataset?.receiptBatchId || "").trim();
+  const batchKey = String(actionEl?.dataset?.receiptBatchKey || "").trim();
+  if (batchId) {
+    const byId = currentBatches.find(batch => String(batch?.batchId || "") === batchId);
+    if (byId) return byId;
+  }
+  return currentBatches.find(batch => String(batch?.key || "") === batchKey) || null;
+}
+
+function bindStockReceiptCrudActions(section) {
+  if (!section) return;
+  section.addEventListener("click", async event => {
+    const actionEl = event.target.closest("[data-receipt-action]");
+    if (!actionEl || !section.contains(actionEl)) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const action = String(actionEl.dataset.receiptAction || "");
+    const batch = resolveReceiptBatchFromAction(actionEl);
+    if (!batch) {
+      showToast("Data kiriman sudah berubah atau belum tersinkron. Coba pilih tanggalnya lagi.", "warning", "Kiriman tidak ditemukan");
+      return;
+    }
+
+    const movementId = String(actionEl.dataset.receiptMovementId || "");
+    const row = movementId ? batch.rows.find(item => String(item?.id || "") === movementId) : null;
+
+    if (action === "edit-batch") {
+      openStockReceiptEditor(batch.date, batch);
+      return;
+    }
+    if (action === "edit-item") {
+      if (!row) return showToast("Item kiriman tidak ditemukan. Coba refresh histori.", "warning", "Item tidak ditemukan");
+      openStockReceiptItemEditor(batch, row);
+      return;
+    }
+
+    const oldLabel = actionEl.textContent;
+    actionEl.disabled = true;
+    actionEl.textContent = "Memproses...";
+    try {
+      if (action === "delete-batch") {
+        await deleteReceiptBatch(batch);
+      } else if (action === "delete-item") {
+        if (!row) return showToast("Item kiriman tidak ditemukan. Coba refresh histori.", "warning", "Item tidak ditemukan");
+        await deleteReceiptItem(batch, row);
+      }
+    } finally {
+      if (actionEl.isConnected) {
+        actionEl.disabled = false;
+        actionEl.textContent = oldLabel;
+      }
+    }
+  });
+}
+
+function receiptActor() {
+  return { uid: state.user?.uid || "", name: state.profile?.name || state.user?.email || "Admin" };
+}
+
+function receiptBatchTarget(batch) {
+  return {
+    batchId: String(batch?.batchId || ""),
+    movementIds: (batch?.rows || []).map(row => String(row?.id || "")).filter(Boolean)
+  };
+}
+
+function receiptMovementToDraft(row) {
+  const item = state.stockItems.find(x => x.id === row?.itemId);
+  const cartonSize = Math.max(0, Number(item?.cartonSize ?? row?.cartonSize ?? 0));
+  let cartons = Math.max(0, Number(row?.cartons || 0));
+  let looseQty = Math.max(0, Number(row?.looseQty || 0));
+  if (!(cartons > 0 || looseQty > 0) && Number(row?.qty || 0) > 0) {
+    const breakdown = cartonBreakdown(Number(row.qty || 0), cartonSize);
+    cartons = breakdown.cartons;
+    looseQty = breakdown.loose;
+  }
+  return {
+    itemId: String(row?.itemId || ""),
+    itemName: String(item?.name || row?.itemName || ""),
+    unit: String(item?.unit || row?.unit || "PCS"),
+    cartonSize,
+    cartons,
+    looseQty,
+    qty: qtyFromCartonInput(cartons, looseQty, cartonSize),
+    lastOpnameDate: String(item?.lastOpnameDate || "")
+  };
+}
+
+async function deleteReceiptBatch(batch) {
+  if (!batch?.rows?.length) return;
+  const label = batch.supplier || batch.destination || "kiriman ini";
+  if (!confirm(`Hapus seluruh batch “${label}” tanggal ${formatDate(batch.date)}?\n\nSemua ${batch.rows.length} item di batch ini akan dihapus dan stok sistem disesuaikan otomatis.`)) return;
+  try {
+    const result = await removeStockReceiptBatch({ ...receiptBatchTarget(batch), actor: receiptActor() });
+    showToast(`${result.removedDocuments} item barang masuk dihapus dari batch.`, "success", "Batch dihapus");
+    scheduleCloudflareSync(0);
+  } catch (err) {
+    showToast(err?.message || friendlyError(err), "error", "Gagal menghapus batch");
+  }
+}
+
+async function deleteReceiptItem(batch, row) {
+  if (!batch || !row) return;
+  const itemName = row.itemName || stockItemName(row.itemId);
+  if (!confirm(`Hapus “${itemName}” dari batch tanggal ${formatDate(batch.date)}?\n\nStok item ini akan disesuaikan otomatis.`)) return;
+  if ((batch.rows || []).length <= 1) {
+    try {
+      const result = await removeStockReceiptBatch({ ...receiptBatchTarget(batch), actor: receiptActor() });
+      showToast(`${itemName} dihapus. Karena ini item terakhir, batch ikut dihapus.`, "success", "Item & batch dihapus");
+      scheduleCloudflareSync(0);
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Gagal menghapus item");
+    }
+    return;
+  }
+  try {
+    const nextRows = batch.rows.filter(x => x.id !== row.id).map(receiptMovementToDraft);
+    const result = await updateStockReceiptBatch({
+      ...receiptBatchTarget(batch),
+      date: batch.date,
+      destination: batch.destination,
+      supplier: batch.supplier,
+      note: batch.note,
+      rows: nextRows,
+      actor: receiptActor()
+    });
+    showToast(`${itemName} dihapus. Batch sekarang berisi ${result.itemCount} barang.`, "success", "Item barang masuk dihapus");
+    scheduleCloudflareSync(0);
+  } catch (err) {
+    showToast(err?.message || friendlyError(err), "error", "Gagal menghapus item");
+  }
+}
+
+function openStockReceiptItemEditor(batch, rawRow) {
+  if (!batch || !rawRow) return;
+  document.querySelector("#stock-receipt-item-modal")?.remove();
+  const currentDraft = receiptMovementToDraft(rawRow);
+  const selectableItems = state.stockItems
+    .filter(item => item.active !== false || item.id === rawRow.itemId)
+    .slice()
+    .sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""), "id"));
+  if (!selectableItems.length) return showToast("Master barang tidak tersedia.", "warning", "Tidak bisa edit item");
+
+  const modal = document.createElement("div");
+  modal.id = "stock-receipt-item-modal";
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="edit-modal receipt-item-edit-modal" role="dialog" aria-modal="true">
+      <div class="modal-head"><div><span class="overline">EDIT ITEM BARANG MASUK</span><h3>${escapeHtml(rawRow.itemName || stockItemName(rawRow.itemId))}</h3><p class="muted">${escapeHtml(formatDate(batch.date))} · ${escapeHtml(batch.supplier || batch.destination || "Kiriman")}</p></div><button type="button" class="modal-close">×</button></div>
+      <form id="stock-receipt-item-form" class="edit-form">
+        <label>Barang<select name="itemId">${selectableItems.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === currentDraft.itemId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+        <div class="edit-grid receipt-item-qty-grid">
+          <label>Karton<input name="cartons" type="number" min="0" step="1" value="${Number(currentDraft.cartons || 0)}" /></label>
+          <label>Jumlah lepas<input name="looseQty" type="number" min="0" step="0.01" value="${Number(currentDraft.looseQty || 0)}" /></label>
+        </div>
+        <div id="receipt-item-total" class="receipt-batch-summary"></div>
+        <div class="modal-actions">
+          <button id="delete-receipt-item-from-modal" type="button" class="danger">Hapus Item</button>
+          <div><button type="button" class="secondary modal-cancel">Batal</button><button type="submit" class="primary">Simpan Perubahan</button></div>
+        </div>
+      </form>
+    </section>`;
+  document.body.appendChild(modal);
+
+  const form = modal.querySelector("#stock-receipt-item-form");
+  const totalBox = modal.querySelector("#receipt-item-total");
+  const close = () => modal.remove();
+  const refresh = () => {
+    const item = selectableItems.find(x => x.id === form.elements.itemId.value);
+    const size = Math.max(0, Number(item?.cartonSize || 0));
+    const cartonsInput = form.elements.cartons;
+    const looseInput = form.elements.looseQty;
+    if (cartonsInput) cartonsInput.disabled = !(size > 0);
+    const cartons = Number(cartonsInput?.value || 0);
+    const looseQty = Number(looseInput?.value || 0);
+    const qty = qtyFromCartonInput(cartons, looseQty, size);
+    totalBox.innerHTML = `<strong>Total ${formatQty(qty)} ${escapeHtml(item?.unit || "PCS")}</strong><span>${size > 0 ? `1 karton = ${formatQty(size)} ${escapeHtml(item?.unit || "PCS")}` : "Item ini tidak memakai konversi karton."}</span>`;
+  };
+
+  modal.querySelector(".modal-close").onclick = close;
+  modal.querySelector(".modal-cancel").onclick = close;
+  modal.onclick = e => { if (e.target === modal) close(); };
+  form.addEventListener("input", refresh);
+  form.addEventListener("change", refresh);
+  refresh();
+
+  modal.querySelector("#delete-receipt-item-from-modal").onclick = async () => {
+    close();
+    await deleteReceiptItem(batch, rawRow);
+  };
+
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const item = selectableItems.find(x => x.id === String(fd.get("itemId") || ""));
+    if (!item) return showToast("Barang tidak ditemukan.", "warning", "Edit item gagal");
+    if (batch.rows.some(row => row.id !== rawRow.id && row.itemId === item.id)) {
+      return showToast(`${item.name} sudah ada di batch ini.`, "warning", "Barang duplikat");
+    }
+    const cartons = Number(fd.get("cartons") || 0);
+    const looseQty = Number(fd.get("looseQty") || 0);
+    const qty = qtyFromCartonInput(cartons, looseQty, item.cartonSize);
+    if (!(qty > 0)) return showToast("Jumlah barang harus lebih dari 0.", "warning", "Jumlah belum valid");
+
+    const nextRows = batch.rows.map(row => row.id === rawRow.id ? {
+      itemId: item.id,
+      itemName: item.name,
+      unit: item.unit,
+      cartonSize: item.cartonSize,
+      cartons,
+      looseQty,
+      qty,
+      lastOpnameDate: item.lastOpnameDate || ""
+    } : receiptMovementToDraft(row));
+
+    const submit = form.querySelector('button[type="submit"], button.primary');
+    if (submit) { submit.disabled = true; submit.textContent = "Menyimpan..."; }
+    try {
+      await updateStockReceiptBatch({
+        ...receiptBatchTarget(batch),
+        date: batch.date,
+        destination: batch.destination,
+        supplier: batch.supplier,
+        note: batch.note,
+        rows: nextRows,
+        actor: receiptActor()
+      });
+      showToast(`${item.name} berhasil diperbarui tanpa membuat batch baru.`, "success", "Item diperbarui");
+      scheduleCloudflareSync(0);
+      close();
+    } catch (err) {
+      showToast(err?.message || friendlyError(err), "error", "Gagal memperbarui item");
+      if (submit) { submit.disabled = false; submit.textContent = "Simpan Perubahan"; }
+    }
+  };
+}
+
+function openStockReceiptEditor(initialDate, editBatch = null) {
   if (!state.stockItems.length) return alert("Master barang masih kosong.");
   document.querySelector("#stock-receipt-modal")?.remove();
-  const activeItems = state.stockItems.filter(x => x.active !== false).sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""), "id"));
+  const editMode = Boolean(editBatch?.rows?.length);
+  const existingItemIds = new Set((editBatch?.rows || []).map(row => row.itemId));
+  const activeItems = state.stockItems
+    .filter(x => x.active !== false || existingItemIds.has(x.id))
+    .slice()
+    .sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""), "id"));
+  const receiptDate = /^\d{4}-\d{2}-\d{2}$/.test(String(editBatch?.date || initialDate || ""))
+    ? String(editBatch?.date || initialDate)
+    : localDateKey(new Date());
+  const selectedDestination = String(editBatch?.destination || "Gudang Utama");
+  const destinationOptions = ["Gudang Utama","Gudang 2","Kitchen","Bar","Gudang Istirahat"];
+  if (selectedDestination && !destinationOptions.includes(selectedDestination)) destinationOptions.unshift(selectedDestination);
   const modal = document.createElement("div");
   modal.id = "stock-receipt-modal";
   modal.className = "modal-backdrop";
   modal.innerHTML = `
     <section class="edit-modal wide-modal stock-receipt-batch-modal" role="dialog" aria-modal="true">
-      <div class="modal-head"><div><span class="overline">BARANG MASUK BATCH</span><h3>Catat Semua Barang Datang</h3><p class="muted">Masukkan seluruh barang dalam satu kiriman. Setelah tersimpan, Telegram mengirim satu ringkasan untuk seluruh batch.</p></div><button type="button" class="modal-close">×</button></div>
+      <div class="modal-head"><div><span class="overline">${editMode ? "CRUD BARANG MASUK" : "BARANG MASUK BATCH"}</span><h3>${editMode ? "Edit Batch Barang Masuk" : "Catat Semua Barang Datang"}</h3><p class="muted">${editMode ? "Edit tanggal, supplier, lokasi, tambah/hapus item, atau koreksi jumlah. Stok sistem ikut disesuaikan otomatis." : "Masukkan seluruh barang dalam satu kiriman. Setelah tersimpan, Telegram mengirim satu ringkasan untuk seluruh batch."}</p></div><button type="button" class="modal-close">×</button></div>
       <form id="stock-receipt-form" class="edit-form">
         <div class="edit-grid receipt-common-grid">
-          <label>Tanggal diterima<input name="date" type="date" value="${localDateKey(new Date())}" required /></label>
-          <label>Masuk ke<select name="destination"><option>Gudang Utama</option><option>Gudang 2</option><option>Kitchen</option><option>Bar</option><option>Gudang Istirahat</option></select></label>
-          <label>Supplier / Pengirim<input name="supplier" placeholder="Opsional" /></label>
-          <label>Catatan<input name="note" placeholder="No. surat jalan / catatan kiriman..." /></label>
+          <label>Tanggal diterima<input name="date" type="date" value="${escapeHtml(receiptDate)}" required /></label>
+          <label>Masuk ke<select name="destination">${destinationOptions.map(x => `<option ${x === selectedDestination ? "selected" : ""}>${escapeHtml(x)}</option>`).join("")}</select></label>
+          <label>Supplier / Pengirim<input name="supplier" value="${escapeHtml(editBatch?.supplier || "")}" placeholder="Opsional" /></label>
+          <label>Catatan<input name="note" value="${escapeHtml(editBatch?.note || "")}" placeholder="No. surat jalan / catatan kiriman..." /></label>
         </div>
 
         <div class="receipt-batch-head"><div><strong>Daftar barang</strong><span>Setiap barang hanya boleh satu kali dalam batch.</span></div><button id="add-receipt-row" type="button" class="secondary compact">+ Tambah Barang</button></div>
         <div id="receipt-batch-rows" class="receipt-batch-rows"></div>
         <div id="receipt-batch-summary" class="receipt-batch-summary">Belum ada jumlah barang.</div>
 
-        <div class="modal-actions"><span class="muted small-copy">Stok tetap tersimpan walau Telegram sedang offline.</span><div><button type="button" class="secondary modal-cancel">Batal</button><button id="save-stock-receipt-batch" class="primary">Simpan Semua</button></div></div>
+        <div class="modal-actions">
+          ${editMode ? `<button type="button" id="delete-stock-receipt-batch" class="danger">Hapus Batch</button>` : `<span class="muted small-copy">Stok tetap tersimpan walau Telegram sedang offline.</span>`}
+          <div><button type="button" class="secondary modal-cancel">Batal</button><button id="save-stock-receipt-batch" type="submit" class="primary">${editMode ? "Simpan Perubahan" : "Simpan Semua"}</button></div>
+        </div>
       </form>
     </section>`;
   document.body.appendChild(modal);
@@ -2689,14 +3597,22 @@ function openStockReceiptEditor() {
 
   const itemOptions = selectedId => activeItems.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === selectedId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
 
-  const addRow = (selectedId = "") => {
+  const addRow = (selectedId = "", initial = null) => {
     const index = rowCounter++;
     const defaultId = selectedId || activeItems[index % activeItems.length]?.id || activeItems[0]?.id || "";
+    const item = activeItems.find(x => x.id === defaultId);
+    let cartons = Math.max(0, Number(initial?.cartons || 0));
+    let looseQty = Math.max(0, Number(initial?.looseQty || 0));
+    if (!(cartons > 0 || looseQty > 0) && Number(initial?.qty || 0) > 0) {
+      const breakdown = cartonBreakdown(Number(initial.qty || 0), Number(item?.cartonSize || initial?.cartonSize || 0));
+      cartons = breakdown.cartons;
+      looseQty = breakdown.loose;
+    }
     rowsBox.insertAdjacentHTML("beforeend", `
       <div class="receipt-batch-row" data-receipt-row="${index}">
         <label class="receipt-item-select">Barang<select name="receipt_item_${index}">${itemOptions(defaultId)}</select></label>
-        <label>Karton<input name="receipt_cartons_${index}" type="number" min="0" step="1" value="0" /></label>
-        <label>Jumlah lepas<input name="receipt_loose_${index}" type="number" min="0" step="0.01" value="0" /></label>
+        <label>Karton<input name="receipt_cartons_${index}" type="number" min="0" step="1" value="${cartons}" /></label>
+        <label>Jumlah lepas<input name="receipt_loose_${index}" type="number" min="0" step="0.01" value="${looseQty}" /></label>
         <div class="receipt-row-total" data-receipt-total>0</div>
         <button type="button" class="danger compact receipt-remove-row" title="Hapus baris">×</button>
       </div>`);
@@ -2721,7 +3637,7 @@ function openStockReceiptEditor() {
       if (total) total.innerHTML = item ? `<strong>${formatQty(qty)} ${escapeHtml(item.unit || "PCS")}</strong><small>${size > 0 ? `1 karton = ${formatQty(size)} ${escapeHtml(item.unit || "PCS")}` : "Tanpa konversi karton"}</small>` : "-";
       if (qty > 0) { filled += 1; totalQty += qty; }
     });
-    summaryBox.innerHTML = `<strong>${filled} barang siap disimpan</strong><span>Total kuantitas lintas unit: ${formatQty(totalQty)} · Telegram akan dikirim sebagai 1 pesan ringkasan.</span>`;
+    summaryBox.innerHTML = `<strong>${filled} barang ${editMode ? "di batch" : "siap disimpan"}</strong><span>Total kuantitas lintas unit: ${formatQty(totalQty)}${editMode ? " · Edit tidak mengirim ulang notif Barang Masuk Telegram." : " · Telegram akan dikirim sebagai 1 pesan ringkasan."}</span>`;
   };
 
   const close = () => modal.remove();
@@ -2744,7 +3660,13 @@ function openStockReceiptEditor() {
     refreshReceiptRows();
   });
 
-  addRow(activeItems[0]?.id || "");
+  if (editMode) editBatch.rows.forEach(row => addRow(row.itemId, row));
+  else addRow(activeItems[0]?.id || "");
+
+  modal.querySelector("#delete-stock-receipt-batch")?.addEventListener("click", async () => {
+    close();
+    await deleteReceiptBatch(editBatch);
+  });
 
   form.onsubmit = async e => {
     e.preventDefault();
@@ -2775,28 +3697,33 @@ function openStockReceiptEditor() {
       });
     }
 
-    if (!selectedRows.length) return showToast("Isi jumlah minimal satu barang.", "warning", "Barang masuk masih kosong");
+    if (!selectedRows.length) return showToast(editMode ? "Batch harus memiliki minimal satu barang. Gunakan Hapus Batch bila ingin menghapus seluruh kiriman." : "Isi jumlah minimal satu barang.", "warning", "Barang masuk masih kosong");
 
     const submit = modal.querySelector("#save-stock-receipt-batch");
     const oldLabel = submit.textContent;
     submit.disabled = true;
-    submit.textContent = `Menyimpan ${selectedRows.length} barang...`;
+    submit.textContent = editMode ? "Menyimpan perubahan..." : `Menyimpan ${selectedRows.length} barang...`;
 
     try {
-      const result = await saveStockReceiptBatch({
+      const payload = {
         date: fd.get("date"),
         destination: fd.get("destination"),
         supplier: fd.get("supplier"),
         note: fd.get("note"),
         rows: selectedRows,
-        actor: { uid: state.user?.uid, name: state.profile?.name || state.user?.email || "Admin" }
-      });
+        actor: receiptActor()
+      };
+      const result = editMode
+        ? await updateStockReceiptBatch({ ...receiptBatchTarget(editBatch), ...payload })
+        : await saveStockReceiptBatch(payload);
 
-      showToast(`${result.itemCount} barang berhasil dicatat dalam satu kiriman.`, "success", "Barang masuk tersimpan");
+      state.stockReceiptDate = result.date;
+      state.stockReceiptMonth = String(result.date || "").slice(0, 7) || state.stockReceiptMonth;
+      showToast(editMode ? `${result.itemCount} barang dalam batch berhasil diperbarui.` : `${result.itemCount} barang berhasil dicatat dalam satu kiriman.`, "success", editMode ? "Batch diperbarui" : "Barang masuk tersimpan");
       scheduleCloudflareSync(0);
 
       const workerUrl = normalizeWorkerUrl(state.stockSettings?.cloudflareWorkerUrl || "");
-      if (state.stockSettings?.telegramEnabled === true && state.stockSettings?.telegramNotifyStockReceipt !== false && workerUrl) {
+      if (!editMode && state.stockSettings?.telegramEnabled === true && state.stockSettings?.telegramNotifyStockReceipt !== false && workerUrl) {
         try {
           const delivery = await sendTelegramStockReceiptBatch(workerUrl, {
             batchId: result.batchId,
@@ -2814,7 +3741,7 @@ function openStockReceiptEditor() {
       }
       close();
     } catch (err) {
-      showToast(err?.message || friendlyError(err), "error", "Barang masuk gagal disimpan");
+      showToast(err?.message || friendlyError(err), "error", editMode ? "Perubahan batch gagal disimpan" : "Barang masuk gagal disimpan");
       submit.disabled = false;
       submit.textContent = oldLabel;
     }
@@ -2970,6 +3897,7 @@ function openStockSettingsEditor() {
           <label class="check-line simple"><input name="telegramNotifyDailyCheck" type="checkbox" ${s.telegramNotifyDailyCheck !== false ? "checked" : ""}/><span>Ingatkan Daily Check yang belum selesai</span></label>
           <label class="check-line simple"><input name="telegramNotifyOpsReminder" type="checkbox" ${s.telegramNotifyOpsReminder !== false ? "checked" : ""}/><span>Ingatkan cek Stock + Waste malam</span></label>
           <label class="check-line simple"><input name="telegramNotifyStockReceipt" type="checkbox" ${s.telegramNotifyStockReceipt !== false ? "checked" : ""}/><span>Notif ringkasan Barang Masuk</span></label>
+          <label class="check-line simple"><input name="telegramNotifyStockOpname" type="checkbox" ${s.telegramNotifyStockOpname !== false ? "checked" : ""}/><span>Notif ringkasan Stock Opname</span></label>
         </div>
         <label class="telegram-time-setting">Jam reminder operasional
           <select name="telegramOpsReminderHour">
@@ -2987,7 +3915,7 @@ function openStockSettingsEditor() {
         </div>
 
         <div class="inline-rule telegram-rule"><strong>Alur gratis:</strong> SoWork menyimpan data utama di Firestore Spark. Saat Admin mengubah Jadwal/Daily Check/Stock/Waste, browser mengirim snapshot terproteksi Firebase ID Token ke Cloudflare D1. Cron Cloudflare kemudian bisa mengingatkan Telegram walaupun SoWork sudah ditutup.</div>
-        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Kode yang sama bisa dipakai beberapa akun Telegram; pairing baru menambah penerima dan tidak mengganti akun yang sudah terhubung. Setelah itu command <code>/stock</code>, <code>/order</code>, <code>/waste</code>, dan <code>/check</code> aktif.</div>
+        <div class="inline-rule"><strong>Pairing:</strong> setelah Simpan & Sync + Pasang Webhook, kirim <code>/start KODE</code> ke bot. Kode yang sama bisa dipakai beberapa akun Telegram; pairing baru menambah penerima dan tidak mengganti akun yang sudah terhubung. Shortcut Telegram bersifat <strong>read-only</strong>: <code>/today</code>, <code>/stock</code>, <code>/order</code>, <code>/waste</code>, <code>/shift</code>, <code>/so</code>, <code>/incoming</code>, <code>/alert</code>, <code>/check</code>, dan <code>/menu</code>. Input/edit/hapus tetap hanya dari web SoWork.</div>
         <div class="inline-rule telegram-rule"><strong>WhatsApp:</strong> alert Telegram punya tombol “Teruskan ke WhatsApp”. Auto-send WA tanpa klik tetap membutuhkan WhatsApp Business API resmi.</div>
 
         <input type="hidden" name="telegramChatId" value="${escapeHtml(workerStatus?.chatId || s.telegramChatId || "")}"/>
@@ -3071,6 +3999,7 @@ function openStockSettingsEditor() {
       telegramNotifyDailyCheck: Boolean(form.elements.namedItem("telegramNotifyDailyCheck")?.checked),
       telegramNotifyOpsReminder: Boolean(form.elements.namedItem("telegramNotifyOpsReminder")?.checked),
       telegramNotifyStockReceipt: Boolean(form.elements.namedItem("telegramNotifyStockReceipt")?.checked),
+      telegramNotifyStockOpname: Boolean(form.elements.namedItem("telegramNotifyStockOpname")?.checked),
       telegramOpsReminderHour: [18, 20].includes(Number(fd.get("telegramOpsReminderHour"))) ? Number(fd.get("telegramOpsReminderHour")) : 20,
       defaultLeadTimeDays: Number(fd.get("defaultLeadTimeDays") || 2),
       defaultTargetCoverageDays: Number(fd.get("defaultTargetCoverageDays") || 7)
@@ -3423,10 +4352,29 @@ function renderWaste(target) {
 
 function openWasteItemEditor(rawItem) {
   document.querySelector('#waste-item-modal')?.remove();
-  const item=rawItem||{name:'',unit:'ML',category:'Waste',active:true,sortOrder:state.wasteItems.length+1,costPerUnit:0,dailyWarningQty:0,monthlyTargetQty:0};
+  const item=rawItem||{name:'',unit:'ML',category:'Waste',active:true,sortOrder:state.wasteItems.length+1,costPerUnit:0,dailyWarningQty:0,monthlyTargetQty:0,planningSourceType:'none',planningRefId:''};
   const modal=document.createElement('div');modal.id='waste-item-modal';modal.className='modal-backdrop';
-  modal.innerHTML=`<section class="edit-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><span class="overline">MASTER WASTE</span><h3>${rawItem?'Edit Item Waste':'Tambah Item Waste'}</h3></div><button type="button" class="modal-close">×</button></div><form id="waste-item-form" class="modal-form"><label>Nama Item<input name="name" value="${escapeHtml(item.name)}" required/></label><div class="form-grid compact-grid"><label>Satuan<select name="unit">${['ML','GRAM','PCS','QTY'].map(u=>`<option value="${u}" ${String(item.unit||'QTY').toUpperCase()===u?'selected':''}>${u==='GRAM'?'Gram':u}</option>`).join('')}</select></label><label>Urutan<input name="sortOrder" type="number" min="0" value="${Number(item.sortOrder||0)}"/></label><label>Warning harian<input name="dailyWarningQty" type="number" min="0" step="0.01" value="${Number(item.dailyWarningQty||0)}" placeholder="0 = otomatis"/></label><label>Target waste / bulan<input name="monthlyTargetQty" type="number" min="0" step="0.01" value="${Number(item.monthlyTargetQty||0)}" placeholder="Opsional"/></label><label>Biaya per unit (Rp)<input name="costPerUnit" type="number" min="0" step="0.01" value="${Number(item.costPerUnit||0)}" placeholder="Opsional"/></label></div><label>Kategori<input name="category" value="${escapeHtml(item.category||'Waste')}"/></label><div class="unit-helper"><strong>Untuk analisis yang lebih tajam</strong><span>Warning 0 = SoWork hitung otomatis dari histori. Biaya/unit memungkinkan estimasi rupiah waste supaya pengeluaran bisa dipantau.</span></div><label class="check-line"><input name="active" type="checkbox" ${item.active!==false?'checked':''}/> Aktifkan item</label><div class="modal-actions">${rawItem?`<button type="button" id="delete-waste-item" class="danger">${state.wasteDays.some(day=>Number(day.values?.[rawItem.id]||0)>0)?'Arsipkan':'Hapus Permanen'}</button>`:'<span></span>'}<div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan</button></div></div></form></section>`;
-  document.body.appendChild(modal);const close=()=>modal.remove();modal.querySelector('.modal-close').onclick=close;modal.querySelector('.modal-cancel').onclick=close;modal.onclick=e=>{if(e.target===modal)close()};
+  modal.innerHTML=`<section class="edit-modal wide-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><span class="overline">MASTER WASTE</span><h3>${rawItem?'Edit Item Waste':'Tambah Item Waste'}</h3><p class="muted">Waste bisa dihubungkan ke Product Recipe, Production Recipe, atau langsung Stock Item agar otomatis masuk Planning Order.</p></div><button type="button" class="modal-close">×</button></div><form id="waste-item-form" class="modal-form"><label>Nama Item<input name="name" value="${escapeHtml(item.name)}" required/></label><div class="form-grid compact-grid"><label>Satuan<select name="unit">${['ML','GRAM','PCS','QTY'].map(u=>`<option value="${u}" ${String(item.unit||'QTY').toUpperCase()===u?'selected':''}>${u==='GRAM'?'Gram':u}</option>`).join('')}</select></label><label>Urutan<input name="sortOrder" type="number" min="0" value="${Number(item.sortOrder||0)}"/></label><label>Warning harian<input name="dailyWarningQty" type="number" min="0" step="0.01" value="${Number(item.dailyWarningQty||0)}" placeholder="0 = otomatis"/></label><label>Target waste / bulan<input name="monthlyTargetQty" type="number" min="0" step="0.01" value="${Number(item.monthlyTargetQty||0)}" placeholder="Opsional"/></label><label>Biaya per unit (Rp)<input name="costPerUnit" type="number" min="0" step="0.01" value="${Number(item.costPerUnit||0)}" placeholder="Opsional"/></label></div><label>Kategori<input name="category" value="${escapeHtml(item.category||'Waste')}"/></label>
+  <div class="planning-waste-link"><div class="panel-head compact-head"><div><strong>Konversi ke Planning Order</strong><small class="muted">Contoh: Blooming Jasmine waste → Product Recipe → equivalent pcs + bahan stock.</small></div></div><div class="form-grid compact-grid"><label>Tipe konversi<select name="planningSourceType" id="waste-planning-type"><option value="none">Tidak dikonversi</option><option value="product" ${item.planningSourceType==='product'?'selected':''}>Finished Product</option><option value="production" ${item.planningSourceType==='production'?'selected':''}>Production / Base</option><option value="stock" ${item.planningSourceType==='stock'?'selected':''}>Raw Stock Item</option></select></label><label>Referensi<select name="planningRefId" id="waste-planning-ref"></select></label></div><div id="waste-planning-preview" class="unit-helper"></div></div>
+  <div class="unit-helper"><strong>Untuk analisis yang lebih tajam</strong><span>Warning 0 = SoWork hitung otomatis dari histori. Konversi Planning membuat waste ikut menghitung konsumsi bahan dan prediksi order tanpa mengubah data waste asli.</span></div><label class="check-line"><input name="active" type="checkbox" ${item.active!==false?'checked':''}/> Aktifkan item</label><div class="modal-actions">${rawItem?`<button type="button" id="delete-waste-item" class="danger">${state.wasteDays.some(day=>Number(day.values?.[rawItem.id]||0)>0)?'Arsipkan':'Hapus Permanen'}</button>`:'<span></span>'}<div><button type="button" class="secondary modal-cancel">Batal</button><button class="primary">Simpan</button></div></div></form></section>`;
+  document.body.appendChild(modal);
+  const typeSelect=modal.querySelector('#waste-planning-type');
+  const refSelect=modal.querySelector('#waste-planning-ref');
+  const preview=modal.querySelector('#waste-planning-preview');
+  const drawPlanningRefs=()=>{
+    const type=typeSelect.value;
+    const current=refSelect.value || item.planningRefId || '';
+    let rows=[];
+    if(type==='product') rows=state.productRecipes.filter(x=>x.active!==false).map(x=>({id:x.id,label:`${x.productName}${x.variant?` · ${x.variant}`:''} · 1 pcs = ${formatQty(x.wasteMeasureQty)} ${x.wasteMeasureUnit}`}));
+    if(type==='production') rows=state.productionRecipes.filter(x=>x.active!==false).map(x=>({id:x.id,label:`${x.name} · batch ${formatQty(x.yieldQty)} ${x.outputUnit}`}));
+    if(type==='stock') rows=state.stockItems.filter(x=>x.active!==false).map(x=>({id:x.id,label:`${x.name} · ${x.unit||'PCS'}`}));
+    refSelect.innerHTML=type==='none'?'<option value="">Tidak perlu referensi</option>':`<option value="">Pilih referensi...</option>${rows.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===current?'selected':''}>${escapeHtml(x.label)}</option>`).join('')}`;
+    refSelect.disabled=type==='none';
+    const selected=rows.find(x=>x.id===refSelect.value);
+    preview.innerHTML=type==='none'?'<strong>Tidak terhubung</strong><span>Waste tetap dicatat normal, tetapi tidak ikut konversi recipe.</span>':selected?`<strong>Terhubung: ${escapeHtml(selected.label)}</strong><span>Setelah waste tersimpan, SoWork menampilkan equivalent produk/batch dan memasukkannya ke forecast stock.</span>`:'<strong>Pilih referensi</strong><span>Pastikan satuan waste sesuai dengan waste basis/output recipe.</span>';
+  };
+  typeSelect.onchange=()=>{item.planningRefId='';drawPlanningRefs();}; refSelect.onchange=drawPlanningRefs; drawPlanningRefs();
+  const close=()=>modal.remove();modal.querySelector('.modal-close').onclick=close;modal.querySelector('.modal-cancel').onclick=close;modal.onclick=e=>{if(e.target===modal)close()};
   modal.querySelector('#waste-item-form').onsubmit=async e=>{
     e.preventDefault();
     const form=e.currentTarget;
@@ -3435,7 +4383,10 @@ function openWasteItemEditor(rawItem) {
     const old=btn?.textContent||'Simpan';
     if(btn){btn.disabled=true;btn.textContent='Menyimpan...';}
     try{
-      await saveWasteItem({id:rawItem?.id,name:fd.get('name'),unit:fd.get('unit'),category:fd.get('category'),sortOrder:fd.get('sortOrder'),dailyWarningQty:fd.get('dailyWarningQty'),monthlyTargetQty:fd.get('monthlyTargetQty'),costPerUnit:fd.get('costPerUnit'),active:fd.get('active')==='on'});
+      const planningSourceType=fd.get('planningSourceType');
+      const planningRefId=fd.get('planningRefId');
+      if(planningSourceType!=='none'&&!planningRefId) throw new Error('Pilih referensi konversi Planning Order.');
+      await saveWasteItem({id:rawItem?.id,name:fd.get('name'),unit:fd.get('unit'),category:fd.get('category'),sortOrder:fd.get('sortOrder'),dailyWarningQty:fd.get('dailyWarningQty'),monthlyTargetQty:fd.get('monthlyTargetQty'),costPerUnit:fd.get('costPerUnit'),planningSourceType,planningRefId,active:fd.get('active')==='on'});
       showToast(`Item Waste “${fd.get('name')}” berhasil ${rawItem?'diperbarui':'ditambahkan'}.`, 'success', 'CRUD Waste');
       close();
     }catch(err){
@@ -3772,7 +4723,7 @@ function renderDataHub(target) {
   target.innerHTML = `
     <section class="page-intro">
       <div><span class="overline">DATA HUB</span><h1>Export buat share. Import buat input cepat.</h1><p>Semua data operasional utama bisa keluar ke Excel. Sheet yang importable dibuat dengan header stabil supaya bisa diedit, dishare, lalu dimasukkan lagi ke SoWork.</p></div>
-      <div class="action-row"><button id="export-all-data" class="primary">Export Semua Data</button><a class="secondary button-link" href="${import.meta.env.BASE_URL}templates/SoWork-Import-Template.xlsx" download>Template Import</a></div>
+      <div class="action-row"><button id="export-all-data" class="primary">Export Semua Data</button><button id="import-all-data" class="secondary">Import Semua Data</button><a class="secondary button-link" href="${import.meta.env.BASE_URL}templates/SoWork-Import-Template.xlsx" download>Template Import</a></div>
     </section>
 
     <div class="metric-grid data-metrics">
@@ -3821,6 +4772,8 @@ function renderDataHub(target) {
     });
   });
 
+  document.querySelector("#import-all-data")?.addEventListener("click", () => runExcelImport("all"));
+
   document.querySelectorAll("[data-data-export]").forEach(btn => btn.onclick = () => {
     const id = btn.dataset.dataExport;
     if (id === "schedule") return exportScheduleWorkbook({ entries: state.schedules, rules: state.scheduleRules, periodLabel: "Semua Jadwal", filename: "SoWork-Jadwal-All.xlsx" });
@@ -3842,19 +4795,164 @@ function renderDataHub(target) {
 async function runExcelImport(feature) {
   const file = await chooseExcelFile();
   if (!file) return;
-  if (!confirm(`Import data ${feature} dari “${file.name}”? Pastikan header mengikuti template SoWork.`)) return;
+
+  const context = {
+    schedules: state.schedules,
+    stockItems: state.stockItems,
+    wasteItems: state.wasteItems,
+    wasteDays: state.wasteDays,
+    actor: { uid: state.user?.uid || "", name: state.profile?.name || state.user?.email || "Admin" }
+  };
+
+  let preview;
   try {
-    const result = await importFeatureWorkbook(feature, file, {
-      stockItems: state.stockItems,
-      wasteItems: state.wasteItems,
-      wasteDays: state.wasteDays,
-      actor: { uid: state.user?.uid || "", name: state.profile?.name || state.user?.email || "Admin" }
-    });
-    showToast(`Import selesai. ${result.detail || `${result.count} data`}`, "success", "Import berhasil");
+    preview = await previewFeatureWorkbook(feature, file, context);
   } catch (err) {
+    console.error("Excel preview", feature, err);
+    showToast(err?.message || friendlyError(err), "error", "File tidak bisa dipreview");
+    return;
+  }
+
+  const approved = await openImportPreviewModal({ feature, file, preview });
+  if (!approved) return;
+
+  try {
+    // Schedule Apply memakai payload yang PERSIS ditampilkan pada Preview.
+    // Ini mencegah workbook diparse ulang dan menghasilkan sumber berbeda saat Apply.
+    if (feature === "schedule" && preview?.applyPayload?.entries?.length) {
+      context.schedulePreviewPayload = preview.applyPayload;
+      state.scheduleImportLock = {
+        minDate: preview.applyPayload.minDate,
+        maxDate: preview.applyPayload.maxDate,
+        entries: preview.applyPayload.entries.map(row => ({ ...row }))
+      };
+    }
+    const result = await importFeatureWorkbook(feature, file, context);
+    if (result?.importedSchedule && result?.maxDate) {
+      const monthKey = scheduleMonthForDate(result.maxDate);
+      if (monthKey) {
+        const inferredCarryover = Boolean(result.minDate && result.minDate < `${monthKey}-01`);
+        try { await persistLastSavedSchedulePeriod(monthKey, inferredCarryover); } catch (prefErr) { console.warn("Simpan periode setelah import:", prefErr); }
+        state.scheduleMonth = monthKey;
+        state.scheduleIncludeCarryover = inferredCarryover;
+        state.schedulePreview = null;
+      }
+    }
+    const skippedNote = result?.skipped ? ` · ${result.skipped} baris dilewati` : "";
+
+    // Jangan render state lama setelah Apply. Untuk jadwal, baca ulang Firestore dulu supaya
+    // Monthly View yang tampil benar-benar sama dengan data yang baru disetujui di Preview.
+    if (result?.importedSchedule) {
+      // Setelah verifikasi sukses, hasil SERVER yang baru diverifikasi langsung menjadi
+      // sumber Monthly View. Tidak menunggu cache/listener untuk berubah.
+      const appliedRows = Array.isArray(result?.serverEntries) && result.serverEntries.length
+        ? result.serverEntries
+        : (Array.isArray(result?.importedEntries) ? result.importedEntries : []);
+      if (appliedRows.length && result.minDate && result.maxDate) {
+        const outside = (state.schedules || []).filter(row => String(row?.date || "") < result.minDate || String(row?.date || "") > result.maxDate);
+        state.schedules = [...outside, ...appliedRows].sort((a,b) => String(a?.date || "").localeCompare(String(b?.date || "")));
+        state.scheduleImportLock = { minDate: result.minDate, maxDate: result.maxDate, entries: appliedRows.map(row => ({ ...row })) };
+      } else {
+        state.schedules = await loadSchedulesFromServer();
+        state.scheduleImportLock = null;
+      }
+      state.page = "schedule";
+      state.schedulePreview = null;
+      renderShell();
+      const sourceWarning = result?.warnings?.length ? ` · ${result.warnings[0]}` : "";
+      showToast(`Import terverifikasi dan diterapkan. ${result.detail || `${result.count} data`}${skippedNote}. Monthly View sudah memakai hasil import${sourceWarning}`, "success", "Import berhasil");
+    } else {
+      showToast(`Import selesai. ${result.detail || `${result.count} data`}${skippedNote}`, "success", "Import berhasil");
+      if (state.page === "data") renderShell();
+    }
+  } catch (err) {
+    if (feature === "schedule") {
+      state.scheduleImportLock = null;
+      try { state.schedules = await loadSchedulesFromServer(); } catch (_) {}
+      if (state.page === "schedule") renderShell();
+    }
     console.error("Excel import", feature, err);
     showToast(err?.message || friendlyError(err), "error", "Import gagal");
   }
+}
+
+function openImportPreviewModal({ feature, file, preview }) {
+  return new Promise(resolve => {
+    document.querySelector("#excel-import-preview")?.remove();
+    const modal = document.createElement("div");
+    modal.id = "excel-import-preview";
+    modal.className = "modal-backdrop import-preview-backdrop";
+
+    const stats = Array.isArray(preview?.stats) ? preview.stats : [];
+    const rows = Array.isArray(preview?.rows) ? preview.rows : [];
+    const columns = rows.length ? Object.keys(rows[0]) : [];
+    const shiftStats = preview?.shiftStats || null;
+    const formatBytes = bytes => {
+      const n = Number(bytes || 0);
+      if (!n) return "-";
+      if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+      return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    };
+
+    modal.innerHTML = `
+      <section class="edit-modal import-preview-modal" role="dialog" aria-modal="true" aria-labelledby="import-preview-title">
+        <div class="modal-head import-preview-head">
+          <div><span class="overline">IMPORT PREVIEW</span><h3 id="import-preview-title">${escapeHtml(preview?.title || "Preview Import")}</h3><p>Lihat data dulu. Firestore belum diubah sampai kamu menekan <strong>Apply Import</strong>.</p></div>
+          <button class="modal-close" type="button" aria-label="Tutup">×</button>
+        </div>
+
+        <div class="import-file-card">
+          <div class="import-file-icon">XLSX</div>
+          <div class="grow"><strong>${escapeHtml(file?.name || "File Excel")}</strong><span>${escapeHtml(formatBytes(file?.size))} · ${escapeHtml((preview?.sheetNames || []).length)} sheet${preview?.detail ? ` · ${escapeHtml(preview.detail)}` : ""}</span></div>
+          <span class="status-pill">Belum diterapkan</span>
+        </div>
+
+        ${feature === "schedule" && preview?.minDate && preview?.maxDate ? `<div class="import-range-banner"><div><span>Mulai dari data Excel</span><strong>${escapeHtml(preview.minDate)}</strong></div><b>→</b><div><span>Sampai</span><strong>${escapeHtml(preview.maxDate)}</strong></div></div>` : ""}
+
+        ${stats.length ? `<div class="import-preview-stats">${stats.map(item => `<div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>`).join("")}</div>` : ""}
+
+        ${shiftStats ? `<div class="import-shift-summary">
+          <span class="shift-summary-chip s1">S1 <strong>${Number(shiftStats.S1 || 0)}</strong></span>
+          <span class="shift-summary-chip middle">Middle <strong>${Number(shiftStats.Middle || 0)}</strong></span>
+          <span class="shift-summary-chip s2">S2 <strong>${Number(shiftStats.S2 || 0)}</strong></span>
+          <span class="shift-summary-chip libur">Libur <strong>${Number(shiftStats.Libur || 0)}</strong></span>
+          <span class="shift-summary-chip lembur">Lembur <strong>${Number(shiftStats.Lembur || 0)}</strong></span>
+        </div>` : ""}
+
+        ${feature === "schedule" && (preview?.diffRows || []).length ? `<div class="import-diff-card"><div class="import-preview-section-head"><div><strong>Perubahan yang akan diterapkan</strong><span>Apply memakai data ini persis, tanpa membaca ulang file.</span></div></div><div class="import-diff-list">${preview.diffRows.slice(0,8).map(row => `<div class="import-diff-row"><div><strong>${escapeHtml(row.Tanggal)} · ${escapeHtml(row.Crew)}</strong></div><span class="import-diff-before">${escapeHtml(row.Sebelum)}</span><b>→</b><span class="import-diff-after">${escapeHtml(row.Setelah)}</span></div>`).join("")}</div></div>` : ""}
+
+        ${(preview?.warnings || []).length ? `<div class="import-preview-warning"><strong>Perlu diperhatikan</strong>${preview.warnings.map(x => `<span>${escapeHtml(x)}</span>`).join("")}</div>` : ""}
+
+        <div class="import-preview-section">
+          <div class="import-preview-section-head"><div><strong>Contoh data yang akan masuk</strong><span>${preview?.count || 0} data dikenali${rows.length && Number(preview?.count || 0) > rows.length ? ` · menampilkan ${rows.length} contoh` : ""}</span></div></div>
+          ${rows.length ? `<div class="import-preview-table-wrap"><table class="import-preview-table"><thead><tr>${columns.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${columns.map(c => `<td data-label="${escapeHtml(c)}">${escapeHtml(row[c] ?? "-")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><span>—</span><p>Tidak ada contoh baris untuk ditampilkan.</p></div>`}
+        </div>
+
+        <div class="import-preview-note"><strong>Yang terjadi saat Apply</strong><span>${feature === "schedule" ? `Sumber yang dipakai: ${escapeHtml(preview.detail || "tab jadwal utama")}. Periode jadwal akan diganti agar hasil akhirnya sama dengan Preview ini. Jika tab utama ada tetapi tidak bisa dibaca, import akan DIBATALKAN — tidak lagi fallback ke data tersembunyi lama.` : "Data akan di-upsert ke Firestore sesuai aturan import SoWork. Data yang sama akan diperbarui, bukan sekadar ditambahkan dobel."}</span></div>
+
+        <div class="modal-actions import-preview-actions">
+          <button type="button" class="secondary" data-import-cancel>Batal</button>
+          <button type="button" class="primary" data-import-apply>Apply Import</button>
+        </div>
+      </section>`;
+
+    document.body.appendChild(modal);
+    let settled = false;
+    let onKey = null;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      if (onKey) document.removeEventListener("keydown", onKey);
+      modal.remove();
+      resolve(value);
+    };
+    modal.querySelector(".modal-close")?.addEventListener("click", () => finish(false));
+    modal.querySelector("[data-import-cancel]")?.addEventListener("click", () => finish(false));
+    modal.querySelector("[data-import-apply]")?.addEventListener("click", () => finish(true));
+    modal.addEventListener("click", event => { if (event.target === modal) finish(false); });
+    onKey = event => { if (event.key === "Escape") finish(false); };
+    document.addEventListener("keydown", onKey);
+  });
 }
 
 function openStockImportChoice() {
@@ -3992,7 +5090,7 @@ function renderSettings(target) {
 
       <article class="panel">
         <div class="panel-head"><div><span class="overline">SYSTEM INFO</span><h3>SoWork</h3></div></div>
-        <div class="settings-readonly-row"><span>Version</span><strong>v1.7.3 Stability Pack</strong></div>
+        <div class="settings-readonly-row"><span>Version</span><strong>v1.7.31 Dashboard Shift Besok</strong></div>
         <div class="settings-readonly-row"><span>Firebase Project</span><strong>sowork-ab04d</strong></div>
         <div class="settings-readonly-row"><span>Mode</span><strong>Firebase Spark + Cloudflare Free</strong></div>
       </article>
@@ -4076,6 +5174,10 @@ function buildBackupContext() {
     scheduleRules: state.scheduleRules || {},
     stockItems: state.stockItems || [],
     wasteItems: state.wasteItems || [],
+    productionRecipes: state.productionRecipes || [],
+    productRecipes: state.productRecipes || [],
+    salesMappings: state.salesMappings || [],
+    salesRecords: state.salesRecords || [],
     appSettings: state.appSettings || {},
     stockSettings: state.stockSettings || {}
   };
@@ -4140,7 +5242,7 @@ async function runManualBackup() {
 
 function backupDataReady() {
   const ready = state.backupDataReady || {};
-  return ["rules", "stock", "waste", "app", "stockSettings"].every(key => ready[key] === true);
+  return ["rules", "stock", "waste", "planning", "app", "stockSettings"].every(key => ready[key] === true);
 }
 
 function scheduleAutoBackupCheck(delay = 3000) {
@@ -4406,11 +5508,39 @@ async function refreshTelegramWorkerStatus({ persistConnection = false } = {}) {
 function startRealtime() {
   clearSubscriptions();
   state.autoBackupChecked = false;
-  state.backupDataReady = { rules: false, stock: false, waste: false, app: false, stockSettings: false };
+  state.backupDataReady = { rules: false, stock: false, waste: false, planning: false, app: false, stockSettings: false };
 
   state.unsubs.push(
     watchSchedules(
-      rows => { state.schedules = rows; state.scheduleLoaded = true; state.scheduleError = ""; if (!state.scheduleMonth && rows.length) state.scheduleMonth = latestScheduleMonth(rows); scheduleCloudflareSync(); scheduleRender(["dashboard","schedule","checklist"]); },
+      rows => {
+        // Saat import baru saja terverifikasi, listener persistence kadang sempat
+        // mengirim snapshot lama. Jangan biarkan snapshot lama menimpa Monthly View.
+        if (state.scheduleImportLock?.entries?.length) {
+          const lock = state.scheduleImportLock;
+          const lockMap = new Map(lock.entries.map(row => [`${String(row?.date || "")}|${String(row?.crewName || "").trim().toLowerCase()}`, row]));
+          const incomingRange = rows.filter(row => String(row?.date || "") >= lock.minDate && String(row?.date || "") <= lock.maxDate);
+          const incomingMap = new Map(incomingRange.map(row => [`${String(row?.date || "")}|${String(row?.crewName || "").trim().toLowerCase()}`, row]));
+          const matched = incomingMap.size === lockMap.size && [...lockMap].every(([key,want]) => {
+            const got = incomingMap.get(key);
+            return got && String(got.shift || "") === String(want.shift || "") && String(got.role || "") === String(want.role || "");
+          });
+          if (!matched) {
+            const outside = rows.filter(row => String(row?.date || "") < lock.minDate || String(row?.date || "") > lock.maxDate);
+            state.schedules = [...outside, ...lock.entries].sort((a,b) => String(a?.date || "").localeCompare(String(b?.date || "")));
+            state.scheduleLoaded = true;
+            state.scheduleError = "";
+            scheduleRender(["dashboard","schedule","checklist"]);
+            return;
+          }
+          state.scheduleImportLock = null;
+        }
+        state.schedules = rows;
+        state.scheduleLoaded = true;
+        state.scheduleError = "";
+        restoreSchedulePeriodPreference();
+        scheduleCloudflareSync();
+        scheduleRender(["dashboard","schedule","checklist"]);
+      },
       err => { state.scheduleLoaded = true; state.scheduleError = friendlyError(err); console.error("Schedule listener:", err); scheduleRender(["schedule"]); }
     )
   );
@@ -4489,6 +5619,29 @@ function startRealtime() {
       )
     );
     state.unsubs.push(
+      watchPlanningData(
+        data => {
+          state.productionRecipes = data.productionRecipes || [];
+          state.productRecipes = data.productRecipes || [];
+          state.salesMappings = data.salesMappings || [];
+          state.salesRecords = data.salesRecords || [];
+          state.planningLoaded = true;
+          state.planningError = "";
+          state.backupDataReady.planning = true;
+          scheduleAutoBackupCheck();
+          scheduleCloudflareSync();
+          scheduleRender(["order","waste","dashboard"]);
+        },
+        err => {
+          console.error("Planning listener:", err);
+          state.planningLoaded = true;
+          state.planningError = friendlyError(err);
+          state.backupDataReady.planning = false;
+          scheduleRender(["order"]);
+        }
+      )
+    );
+    state.unsubs.push(
       watchPersonalReports(
         rows => { state.personalReports = rows; scheduleRender(["reports"]); },
         err => console.error("Personal reports listener:", err)
@@ -4496,7 +5649,14 @@ function startRealtime() {
     );
     state.unsubs.push(
       watchAppSettings(
-        settings => { state.appSettings = settings || state.appSettings; state.backupDataReady.app = true; scheduleAutoBackupCheck(); scheduleRender(); },
+        settings => {
+          state.appSettings = settings || state.appSettings;
+          state.appSettingsLoaded = true;
+          restoreSchedulePeriodPreference();
+          state.backupDataReady.app = true;
+          scheduleAutoBackupCheck();
+          scheduleRender();
+        },
         err => console.error("App settings listener:", err)
       )
     );
@@ -4554,10 +5714,20 @@ observeAuth(async user => {
 
   if (!user) {
     state.profile = null;
+    state.schedulePreview = null;
+    state.scheduleMonth = null;
+    state.schedulePeriodRestored = false;
+    state.appSettingsLoaded = false;
+    state.scheduleLoaded = false;
     renderAuth();
     return;
   }
 
+  state.schedulePreview = null;
+  state.scheduleMonth = null;
+  state.schedulePeriodRestored = false;
+  state.appSettingsLoaded = false;
+  state.scheduleLoaded = false;
   state.profile = await getUserProfile(user.uid);
 
   if (!state.profile) {

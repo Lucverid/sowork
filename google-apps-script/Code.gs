@@ -19,8 +19,8 @@ function doGet(e) {
     return jsonpResponse_(callback, readStatus_(String(e.parameter.requestId || '')));
   }
   return callback
-    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.8' })
-    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.6.8' });
+    ? jsonpResponse_(callback, { ok: true, service: 'SoWork Google Sheet Bridge', version: '1.7.15' })
+    : jsonResponse_({ ok: true, service: 'SoWork Google Sheet Bridge', version: '1.7.15' });
 }
 
 function doPost(e) {
@@ -36,10 +36,12 @@ function doPost(e) {
     else if (payload.action === 'testConnection') result = testConnection_(payload);
     else throw new Error('Action tidak didukung.');
     const response = { ok: true, requestId, action: payload.action, ...result };
+    saveStatus_(requestId, response);
     return bridgeResponse_(requestId, callbackToken, response);
   } catch (error) {
     console.error(error);
     const response = { ok: false, requestId, error: String(error && error.message ? error.message : error) };
+    saveStatus_(requestId, response);
     return bridgeResponse_(requestId, callbackToken, response);
   }
 }
@@ -111,6 +113,7 @@ function writeSchedule_(payload) {
       }
 
       stats.totalKerja += 1;
+      if (item.overtime) stats.LemburTotal += 1;
 
       // Shift lembur dipisah seperti format rekap kerja lama.
       if (shift === 'S1') {
@@ -367,6 +370,14 @@ function writeSchedule_(payload) {
   ].filter(Boolean).join(' | ');
   sheet.getRange(1, 1).setNote(note);
 
+  // v1.7.15: rekap cukup berada di bawah jadwal utama.
+  // Bersihkan tab rekap terpisah dari versi sebelumnya agar Spreadsheet tetap ringkas.
+  removeGeneratedSummarySheet_(ss, sheetName);
+
+  // Sheet data mentah tetap dibuat dan disembunyikan. Ini yang membuat file XLSX hasil
+  // download Google Spreadsheet bisa di-import kembali tanpa menebak shift dari warna sel.
+  const dataSheetName = writeScheduleDataSheet_(ss, sheetName, entries, payload);
+
   SpreadsheetApp.flush();
 
   return {
@@ -379,6 +390,9 @@ function writeSchedule_(payload) {
     mergedCrewRows: true,
     summaryEnabled: true,
     summaryPosition: 'below',
+    summarySheetName: '',
+    dataSheetName,
+    importReady: true,
     roleSummaryColumns: roleNames,
     url: `${ss.getUrl()}#gid=${sheet.getSheetId()}`
   };
@@ -421,6 +435,7 @@ function makeCrewStats_(roleNames) {
     S2Lembur: 0,
     Middle: 0,
     Libur: 0,
+    LemburTotal: 0,
     roles
   };
 }
@@ -434,10 +449,74 @@ function addCrewStats_(target, source, roleNames) {
   target.S2Lembur += Number(source.S2Lembur || 0);
   target.Middle += Number(source.Middle || 0);
   target.Libur += Number(source.Libur || 0);
+  target.LemburTotal += Number(source.LemburTotal || 0);
   roleNames.forEach(role => {
     target.roles[role] = Number(target.roles[role] || 0) + Number(source.roles && source.roles[role] || 0);
   });
   return target;
+}
+
+
+
+function removeGeneratedSummarySheet_(ss, baseSheetName) {
+  const summaryName = generatedSheetName_('Rekap', baseSheetName);
+  const summarySheet = ss.getSheetByName(summaryName);
+  if (!summarySheet) return false;
+  try {
+    // Main sheet selalu sudah ada, jadi menghapus tab rekap aman.
+    ss.deleteSheet(summarySheet);
+    return true;
+  } catch (_) {
+    // Jangan gagalkan pengiriman jadwal hanya karena tab lama tidak bisa dihapus.
+    return false;
+  }
+}
+
+function writeScheduleDataSheet_(ss, baseSheetName, entries, payload) {
+  const sheetName = generatedSheetName_('__SoWork Data', baseSheetName);
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) sheet = ss.insertSheet(sheetName);
+  try { sheet.getDataRange().breakApart(); } catch (_) {}
+  sheet.clear();
+  sheet.clearConditionalFormatRules();
+
+  const headers = ['Tanggal','Crew','Gender','Shift','Role','Catatan','Lembur','Jenis Lembur','Catatan Lembur','Periode','Format'];
+  const rows = [headers];
+  entries.slice().sort((a,b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.crewName || '').localeCompare(String(b.crewName || ''), 'id')).forEach(item => {
+    rows.push([
+      String(item.date || ''),
+      String(item.crewName || ''),
+      String(item.gender || genderFor_(String(item.crewName || ''), payload.rules) || ''),
+      normalizeShift_(item.shift),
+      normalizeShift_(item.shift) === 'Libur' ? '' : normalizeRole_(item.role),
+      String(item.notes || ''),
+      item.overtime ? 'TRUE' : 'FALSE',
+      String(item.overtimeType || ''),
+      String(item.overtimeNote || ''),
+      String(payload.periodLabel || ''),
+      'SOWORK_SCHEDULE_DATA_V1'
+    ]);
+  });
+
+  ensureSize_(sheet, rows.length, headers.length);
+  sheet.getRange(1,1,rows.length,headers.length).setValues(rows)
+    .setFontFamily('Arial').setFontSize(10).setVerticalAlignment('middle').setWrap(true);
+  sheet.getRange(1,1,1,headers.length).setBackground('#172033').setFontColor('#FFFFFF').setFontWeight('bold');
+  sheet.getRange(1,1,rows.length,headers.length).setBorder(true,true,true,true,true,true,'#E5E7EB',SpreadsheetApp.BorderStyle.SOLID);
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidths(1, headers.length, 120);
+  sheet.setColumnWidth(2, 150);
+  sheet.setColumnWidth(6, 220);
+  sheet.setColumnWidth(9, 220);
+  sheet.getRange(1,1).setNote('Jangan hapus sheet ini jika ingin download XLSX lalu Import Excel kembali ke SoWork.');
+  try { sheet.hideSheet(); } catch (_) {}
+  return sheetName;
+}
+
+function generatedSheetName_(prefix, base) {
+  const raw = `${String(prefix || '').trim()} ${String(base || 'Jadwal').trim()}`.trim();
+  const cleaned = raw.replace(/[\\/?*\[\]:]/g, '-').replace(/\s+/g, ' ').trim();
+  return (cleaned || 'SoWork Data').slice(0, 99);
 }
 
 function parsePayload_(e) {

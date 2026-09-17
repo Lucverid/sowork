@@ -92,12 +92,23 @@ SoWork → Settings → Atur Telegram & Alert:
 8. Balik ke Settings dan klik `Cek Worker`.
 9. Jika terhubung, klik `Kirim Test`.
 
-## 7. Command bot
+## 7. Command bot (read-only)
 
-- `/stock` — stok kritis/menipis + saran beli
-- `/order` — prediksi order + jumlah beli
-- `/waste` — high waste terbaru
-- `/help` — bantuan
+Command Telegram hanya membaca snapshot SoWork; tidak ada command untuk mengubah/hapus data.
+
+- `/today` — ringkasan operasional hari ini
+- `/stock` — semua item stock + qty/status saat ini
+- `/stock critical` — hanya stock kritis/menipis
+- `/order` atau `/order_planner` — Order Planner + saran jumlah beli
+- `/waste` — ringkasan waste bulan berjalan
+- `/waste today` — waste hari ini
+- `/shift` — jadwal hari ini
+- `/shift tomorrow` — jadwal besok
+- `/so` — Stock Opname terakhir
+- `/incoming` — Barang Masuk terakhir
+- `/alert` — rangkuman stock/order/waste/daily-check yang perlu perhatian
+- `/check` — status Daily Check hari ini
+- `/menu` atau `/help` — bantuan
 
 ## Alert otomatis
 

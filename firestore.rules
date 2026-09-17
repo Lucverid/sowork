@@ -6,12 +6,22 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Admin utama dikenali langsung dari Firebase Authentication UID.
-    // Ini menghindari permission check berantai lewat get(users/{uid})
-    // pada setiap operasi Admin.
+    // Admin tetap punya bootstrap UID lama, tetapi juga boleh dikenali
+    // dari profil users/{uid}. Ini penting bila akun Admin pernah dibuat ulang
+    // sehingga Firebase Auth UID berubah sementara role di profil tetap admin.
+    function isProfileAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active != false;
+    }
+
     function isAdmin() {
       return signedIn()
-        && request.auth.uid == "uTBNtKIL3iTHx1JGg1AHwM5HLYi2";
+        && (
+          request.auth.uid == "uTBNtKIL3iTHx1JGg1AHwM5HLYi2"
+          || isProfileAdmin()
+        );
     }
 
     // Profile lookup hanya digunakan untuk akun non-admin / Viewer.
@@ -105,6 +115,11 @@ service cloud.firestore {
     }
 
     match /purchaseOrders/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Planning Order V2: production recipe, product recipe, sales mapping, sales import.
+    match /planning/{docId} {
       allow read, write: if isAdmin();
     }
 

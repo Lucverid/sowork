@@ -2,6 +2,23 @@ const SNAPSHOT_KEY = "operations_snapshot";
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 let jwksCache = { expiresAt: 0, keys: null };
 
+// v1.7.33 — Telegram Read-Only Button Dashboard.
+// Slash command lama tetap menjadi fallback, sedangkan inline button menjadi navigasi utama.
+// Semua action dashboard hanya membaca snapshot SoWork; tidak ada callback yang menulis data operasional.
+const BOT_COMMANDS = [
+  { command: "menu", description: "Daftar shortcut SoWork" },
+  { command: "today", description: "Ringkasan operasional hari ini" },
+  { command: "stock", description: "Lihat semua stock" },
+  { command: "order", description: "Lihat Order Planner" },
+  { command: "waste", description: "Ringkasan waste bulan ini" },
+  { command: "shift", description: "Jadwal shift hari ini" },
+  { command: "so", description: "Stock Opname terakhir" },
+  { command: "incoming", description: "Barang Masuk terakhir" },
+  { command: "alert", description: "Hal yang perlu perhatian" },
+  { command: "check", description: "Status Daily Check" },
+  { command: "help", description: "Bantuan command" }
+];
+
 export default {
   async fetch(request, env, ctx) {
     try {
@@ -34,6 +51,12 @@ export default {
         }
         if (url.pathname === "/api/stock-receipt-batch" && request.method === "POST") {
           return cors(await apiStockReceiptBatch(request, env));
+        }
+        if (url.pathname === "/api/stock-opname" && request.method === "POST") {
+          return cors(await apiStockOpname(request, env));
+        }
+        if (url.pathname === "/api/planning-event" && request.method === "POST") {
+          return cors(await apiPlanningEvent(request, env));
         }
         if (url.pathname === "/api/unpair" && request.method === "POST") {
           const removed = await clearTelegramConnections(env);
@@ -109,10 +132,17 @@ async function apiSetupWebhook(request, env) {
   const response = await telegramApi(env, "setWebhook", {
     url: `${origin}/telegram/webhook`,
     secret_token: env.TELEGRAM_WEBHOOK_SECRET,
-    allowed_updates: ["message", "edited_message"],
+    allowed_updates: ["message", "edited_message", "callback_query"],
     drop_pending_updates: false
   });
-  return json({ ok: true, webhookUrl: `${origin}/telegram/webhook`, telegram: response });
+  // Sekalian isi menu slash Telegram. Jika gagal, webhook tetap dianggap berhasil.
+  let commandMenu = null;
+  try {
+    commandMenu = await telegramApi(env, "setMyCommands", { commands: BOT_COMMANDS });
+  } catch (error) {
+    console.warn("Telegram setMyCommands skipped", error?.message || error);
+  }
+  return json({ ok: true, webhookUrl: `${origin}/telegram/webhook`, telegram: response, commandMenu });
 }
 
 async function apiTest(env) {
@@ -158,6 +188,101 @@ async function apiStockReceiptBatch(request, env) {
   return json({ ok: true, sent: connections.length, batchId });
 }
 
+async function apiStockOpname(request, env) {
+  const payload = await request.json().catch(() => null);
+  if (!payload || typeof payload !== "object") return json({ ok: false, error: "Payload Stock Opname tidak valid." }, 400);
+
+  const snapshot = await getSnapshot(env);
+  const settings = snapshot?.settings || {};
+  if (settings.telegramEnabled !== true) {
+    return json({ ok: true, skipped: true, reason: "Telegram nonaktif." });
+  }
+  if (settings.telegramNotifyStockOpname === false) {
+    return json({ ok: true, skipped: true, reason: "Notif Stock Opname dimatikan." });
+  }
+
+  const rows = Array.isArray(payload.rows) ? payload.rows.filter(row => row && row.itemName) : [];
+  if (!rows.length) return json({ ok: false, error: "Daftar Stock Opname kosong." }, 400);
+
+  const eventId = safeKey(String(payload.eventId || `stock_opname_${payload.date || new Date().toISOString()}`));
+  const text = buildStockOpnameMessage({ ...payload, rows });
+  const sent = await sendAlertOnce(env, `opname_${eventId}`, "stock-opname", text, settings);
+  if (!sent) {
+    const exists = await env.DB.prepare("SELECT event_key FROM notification_events WHERE event_key = ?")
+      .bind(safeKey(`opname_${eventId}`)).first();
+    if (exists) return json({ ok: true, duplicate: true, sent: 0 });
+    return json({ ok: false, error: "Telegram belum dipair atau pesan gagal dikirim." }, 409);
+  }
+
+  const connections = await getConnections(env);
+  return json({ ok: true, sent: connections.length, eventId });
+}
+
+function buildStockOpnameMessage(payload) {
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const actor = String(payload.createdByName || "Admin").trim();
+  const date = String(payload.date || "");
+  const batchId = String(payload.batchId || "").trim();
+  const sesuai = rows.filter(row => String(row.reconciliationStatus || "").toLowerCase() === "sesuai").length;
+  const kurang = rows.filter(row => String(row.reconciliationStatus || "").toLowerCase().includes("kurang"));
+  const lebih = rows.filter(row => String(row.reconciliationStatus || "").toLowerCase().includes("lebih"));
+  const mismatch = [...kurang, ...lebih].sort((a, b) => Math.abs(Number(b.varianceQty || 0)) - Math.abs(Number(a.varianceQty || 0)));
+
+  const lines = [
+    "📋 STOCK OPNAME SOWORK",
+    "",
+    `${rows.length} barang dicek${date ? ` · ${dateShort(date)}` : ""}`,
+    ...(batchId ? [`🧾 Batch: ${batchId}`] : []),
+    `✅ Sesuai: ${sesuai}`,
+    `🔻 Selisih kurang: ${kurang.length}`,
+    `🔺 Selisih lebih: ${lebih.length}`
+  ];
+
+  if (mismatch.length) {
+    lines.push("", "⚠️ Selisih:");
+    mismatch.slice(0, 18).forEach(row => {
+      const diff = Number(row.varianceQty || 0);
+      const sign = diff > 0 ? "+" : "";
+      const unit = String(row.unit || "PCS");
+      const physical = Number(row.totalQty || 0);
+      const system = Number(row.systemQtyBeforeOpname || 0);
+      lines.push(`• ${String(row.itemName || "Barang")}: ${sign}${fmt(diff)} ${unit} (fisik ${fmt(physical)} · sistem ${fmt(system)})`);
+    });
+    if (mismatch.length > 18) lines.push(`• +${mismatch.length - 18} item berselisih lainnya`);
+  }
+
+  lines.push("", `Diinput oleh: ${actor || "Admin"}`);
+  return lines.join("\n");
+}
+
+async function apiPlanningEvent(request, env) {
+  const payload = await request.json().catch(() => null);
+  if (!payload || typeof payload !== "object") return json({ ok: false, error: "Payload Planning tidak valid." }, 400);
+  const snapshot = await getSnapshot(env);
+  const settings = snapshot?.settings || {};
+  if (settings.telegramEnabled !== true) return json({ ok: true, skipped: true, reason: "Telegram nonaktif." });
+
+  const kind = String(payload.kind || "planning-summary");
+  if (kind === "sales-import" && settings.telegramNotifySalesImport === false) return json({ ok: true, skipped: true, reason: "Notif Sales Import dimatikan." });
+  if (kind === "planning-summary" && settings.telegramNotifyPlanningSummary === false) return json({ ok: true, skipped: true, reason: "Notif Planning dimatikan." });
+  if (kind === "stock-variance" && settings.telegramNotifyStockVariance === false) return json({ ok: true, skipped: true, reason: "Notif Stock Variance dimatikan." });
+
+  const title = String(payload.title || "Planning Order SoWork").trim().slice(0, 120);
+  const message = String(payload.message || "").trim().slice(0, 3000);
+  if (!message) return json({ ok: false, error: "Isi notifikasi Planning kosong." }, 400);
+  const icon = kind === "sales-import" ? "📊" : kind === "stock-variance" ? "⚠️" : "📦";
+  const text = `${icon} ${title.toUpperCase()}\n\n${message}`;
+  const eventId = safeKey(String(payload.eventId || `${kind}_${Date.now()}`));
+  const sent = await sendAlertOnce(env, `planning_${kind}_${eventId}`, kind, text, settings);
+  if (!sent) {
+    const connections = await getConnections(env);
+    if (!connections.length) return json({ ok: false, error: "Telegram belum dipair." }, 409);
+    return json({ ok: true, duplicate: true, sent: 0 });
+  }
+  const connections = await getConnections(env);
+  return json({ ok: true, sent: connections.length, eventId });
+}
+
 function buildStockReceiptBatchMessage(payload) {
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const date = String(payload.date || "");
@@ -199,16 +324,34 @@ async function telegramWebhook(request, env) {
   if (!expected || actual !== expected) return new Response("Forbidden", { status: 403 });
 
   const update = await request.json().catch(() => ({}));
-  const message = update.message || update.edited_message;
+  const callback = update.callback_query || null;
+  const message = update.message || update.edited_message || callback?.message;
   if (!message?.chat?.id) return new Response("OK");
 
+  const actor = callback?.from || message.from || {};
   const chatId = String(message.chat.id);
-  const userId = String(message.from?.id || "");
-  const username = String(message.from?.username || "");
-  const firstName = String(message.from?.first_name || "");
-  const text = String(message.text || "").trim();
+  const userId = String(actor?.id || "");
+  const username = String(actor?.username || "");
+  const firstName = String(actor?.first_name || "");
+  const text = callback ? "" : String(message.text || "").trim();
   const snapshot = await getSnapshot(env);
   const settings = snapshot?.settings || {};
+
+  // Inline button selalu melewati validasi pairing yang sama dengan command manual.
+  if (callback) {
+    if (!(await isPaired(env, chatId, userId))) {
+      await answerCallback(env, callback.id, "Telegram ini belum dipair ke SoWork.", true);
+      await sendTelegram(env, chatId, "Telegram ini belum dipair ke SoWork. Gunakan /start KODE dari Settings SoWork.", settings);
+      return new Response("OK");
+    }
+
+    // Ack secepat mungkin supaya loading spinner tombol Telegram tidak menggantung.
+    await answerCallback(env, callback.id, "");
+    const today = jakartaDateKey(new Date());
+    const panel = buildTelegramButtonPanel(callback.data, snapshot || {}, today);
+    await sendReadOnlyPanel(env, chatId, panel.text, settings, panel.replyMarkup, message.message_id);
+    return new Response("OK");
+  }
 
   if (text.startsWith("/start")) {
     const code = text.split(/\s+/)[1] || "";
@@ -232,18 +375,9 @@ async function telegramWebhook(request, env) {
     `).bind(chatId, userId, username, firstName, new Date().toISOString()).run();
 
     const recipientCount = (await getConnections(env)).length;
-    await sendTelegram(env, chatId,
-      `✅ SoWork terhubung ke Telegram GRATIS via Cloudflare.
-
-Akun ini ditambahkan sebagai penerima notifikasi. Total penerima aktif: ${recipientCount}.
-
-Perintah:
-/stock — stok menipis/kritis
-/order — prediksi order + jumlah beli
-/waste — kondisi waste terbaru
-/check — status Daily Check hari ini
-/help — bantuan`,
-      settings
+    await sendTelegramWithMarkup(env, chatId,
+      `✅ SoWork terhubung ke Telegram GRATIS via Cloudflare.\n\nAkun ini ditambahkan sebagai penerima notifikasi. Total penerima aktif: ${recipientCount}.\n\nPilih shortcut di bawah untuk membuka dashboard read-only.`,
+      buildMainDashboardKeyboard()
     );
     return new Response("OK");
   }
@@ -253,27 +387,552 @@ Perintah:
     return new Response("OK");
   }
 
-  if (text.startsWith("/stock")) {
-    const rows = buildAllStockAnalytics(snapshot || {});
-    const msg = buildStockStatusMessage(rows);
-    await sendTelegram(env, chatId, msg || "✅ Tidak ada stok kritis atau menipis saat ini.", settings);
-  } else if (text.startsWith("/order")) {
-    const rows = buildAllStockAnalytics(snapshot || {});
-    const msg = buildDailyOrderReminder(rows, true);
-    await sendTelegram(env, chatId, msg || "✅ Belum ada item yang perlu diorder sekarang.", settings);
-  } else if (text.startsWith("/waste")) {
-    const msg = buildCurrentWasteMessage(snapshot || {});
-    await sendTelegram(env, chatId, msg || "✅ Belum ada high waste yang terdeteksi.", settings);
-  } else if (text.startsWith("/check")) {
-    const msg = buildChecklistStatusMessage(snapshot || {}, jakartaDateKey(new Date()), true);
-    await sendTelegram(env, chatId, msg || "✅ Daily Check hari ini tidak punya task aktif.", settings);
+  const parsed = parseTelegramCommand(text);
+  const today = jakartaDateKey(new Date());
+  const data = snapshot || {};
+  let reply = "";
+  let replyMarkup = buildMainDashboardKeyboard();
+
+  if (parsed.command === "/stock") {
+    const rows = buildAllStockAnalytics(data);
+    const criticalOnly = parsed.args.some(x => ["critical", "kritis", "alert"].includes(x));
+    reply = criticalOnly ? buildStockAttentionMessage(rows) : buildFullStockMessage(rows);
+    replyMarkup = buildStockDashboardKeyboard(criticalOnly ? "critical" : "all");
+  } else if (parsed.command === "/order" || parsed.command === "/order_planner") {
+    reply = buildOrderPlannerCommand(buildAllStockAnalytics(data));
+    replyMarkup = buildSectionKeyboard("order");
+  } else if (parsed.command === "/waste") {
+    const mode = parsed.args.some(x => ["today", "hariini", "hari-ini"].includes(x)) ? "today" : "month";
+    reply = buildWasteCommandMessage(data, today, mode);
+    replyMarkup = buildWasteDashboardKeyboard(mode);
+  } else if (parsed.command === "/shift") {
+    const tomorrow = parsed.args.some(x => ["tomorrow", "besok"].includes(x));
+    const date = tomorrow ? addDays(today, 1) : today;
+    reply = buildShiftCommandMessage(data, date, tomorrow ? "BESOK" : "HARI INI");
+    replyMarkup = buildShiftDashboardKeyboard(tomorrow ? "tomorrow" : "today");
+  } else if (parsed.command === "/so" || parsed.command === "/opname") {
+    reply = buildLatestStockOpnameCommand(data);
+    replyMarkup = buildSectionKeyboard("so");
+  } else if (parsed.command === "/incoming" || parsed.command === "/barang_masuk") {
+    reply = buildLatestIncomingCommand(data);
+    replyMarkup = buildSectionKeyboard("incoming");
+  } else if (parsed.command === "/alert") {
+    reply = buildReadOnlyAlertCommand(data, today);
+    replyMarkup = buildSectionKeyboard("alert");
+  } else if (parsed.command === "/today") {
+    reply = buildTodayCommandMessage(data, today);
+    replyMarkup = buildSectionKeyboard("today");
+  } else if (parsed.command === "/check") {
+    reply = buildChecklistStatusMessage(data, today, true) || "✅ Daily Check hari ini tidak punya task aktif.";
+    replyMarkup = buildSectionKeyboard("check");
+  } else if (parsed.command === "/menu" || parsed.command === "/help" || !parsed.command) {
+    reply = buildBotDashboardText(data);
+    replyMarkup = buildMainDashboardKeyboard();
   } else {
-    await sendTelegram(env, chatId,
-      "🤖 SoWork Bot — Cloudflare Free\n\n/stock — stok kritis & menipis\n/order — prediksi order + jumlah beli\n/waste — status waste terbaru\n/check — status Daily Check hari ini\n/help — bantuan\n\nAlert punya tombol ‘Teruskan ke WhatsApp’ jika nomor WA relay diisi di SoWork.",
-      settings
-    );
+    reply = `Perintah ${parsed.command} belum tersedia. Gunakan dashboard tombol di bawah.`;
+    replyMarkup = buildMainDashboardKeyboard();
   }
+
+  await sendReadOnlyCommand(env, chatId, withSnapshotFooter(reply, data), settings, replyMarkup);
   return new Response("OK");
+}
+
+function parseTelegramCommand(text) {
+  const parts = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length || !parts[0].startsWith("/")) return { command: "", args: [] };
+  const command = parts[0].split("@")[0].toLowerCase();
+  return { command, args: parts.slice(1).map(x => String(x).toLowerCase()) };
+}
+
+function buildBotMenuText() {
+  return [
+    "🤖 SOWORK BOT · READ ONLY",
+    "",
+    "Tombol dashboard adalah navigasi utama. Command manual tetap tersedia sebagai fallback:",
+    "",
+    "/today · /stock · /stock critical · /order",
+    "/waste · /waste today · /shift · /shift tomorrow",
+    "/so · /incoming · /alert · /check · /menu",
+    "",
+    "🔒 Semua shortcut hanya membaca data. Edit/hapus/input tetap dilakukan dari web SoWork."
+  ].join("\n");
+}
+
+function buildBotDashboardText(snapshot) {
+  return [
+    "🤖 SOWORK DASHBOARD",
+    "",
+    "Pilih informasi yang ingin dilihat lewat tombol di bawah.",
+    "",
+    snapshotFreshnessLine(snapshot),
+    "🔒 Read-only · perubahan data tetap dari web SoWork."
+  ].join("\n");
+}
+
+function dashboardButton(text, action) {
+  return { text, callback_data: `sowork:${action}` };
+}
+
+function buildMainDashboardKeyboard() {
+  return { inline_keyboard: [
+    [dashboardButton("☀️ Hari Ini", "today"), dashboardButton("📦 Stock", "stock")],
+    [dashboardButton("🛒 Order Planner", "order"), dashboardButton("🗑️ Waste", "waste")],
+    [dashboardButton("👥 Shift", "shift"), dashboardButton("🚨 Alert", "alert")],
+    [dashboardButton("📋 Stock Opname", "so"), dashboardButton("📥 Barang Masuk", "incoming")],
+    [dashboardButton("✅ Daily Check", "check"), dashboardButton("🔄 Refresh", "menu")]
+  ] };
+}
+
+function buildStockDashboardKeyboard(mode = "all") {
+  return { inline_keyboard: [
+    [dashboardButton(mode === "all" ? "✅ Semua Stock" : "📦 Semua Stock", "stock"), dashboardButton(mode === "critical" ? "✅ Kritis/Menipis" : "🔴 Kritis/Menipis", "stock:critical")],
+    [dashboardButton("🔄 Refresh", mode === "critical" ? "stock:critical" : "stock"), dashboardButton("🏠 Menu", "menu")]
+  ] };
+}
+
+function buildWasteDashboardKeyboard(mode = "month") {
+  return { inline_keyboard: [
+    [dashboardButton(mode === "today" ? "✅ Hari Ini" : "🗑️ Hari Ini", "waste:today"), dashboardButton(mode === "month" ? "✅ Bulan Ini" : "📊 Bulan Ini", "waste:month")],
+    [dashboardButton("🔄 Refresh", mode === "today" ? "waste:today" : "waste:month"), dashboardButton("🏠 Menu", "menu")]
+  ] };
+}
+
+function buildShiftDashboardKeyboard(mode = "today") {
+  return { inline_keyboard: [
+    [dashboardButton(mode === "today" ? "✅ Hari Ini" : "👥 Hari Ini", "shift:today"), dashboardButton(mode === "tomorrow" ? "✅ Besok" : "📅 Besok", "shift:tomorrow")],
+    [dashboardButton("🔄 Refresh", mode === "tomorrow" ? "shift:tomorrow" : "shift:today"), dashboardButton("🏠 Menu", "menu")]
+  ] };
+}
+
+function buildSectionKeyboard(action) {
+  return { inline_keyboard: [
+    [dashboardButton("🔄 Refresh", action), dashboardButton("🏠 Menu", "menu")]
+  ] };
+}
+
+function buildTelegramButtonPanel(callbackData, snapshot, today) {
+  const raw = String(callbackData || "");
+  const action = raw.startsWith("sowork:") ? raw.slice(7) : "menu";
+  let text = "";
+  let replyMarkup = buildMainDashboardKeyboard();
+
+  if (action === "menu") {
+    text = buildBotDashboardText(snapshot);
+  } else if (action === "today") {
+    text = buildTodayCommandMessage(snapshot, today);
+    replyMarkup = buildSectionKeyboard("today");
+  } else if (action === "stock") {
+    text = buildFullStockMessage(buildAllStockAnalytics(snapshot));
+    replyMarkup = buildStockDashboardKeyboard("all");
+  } else if (action === "stock:critical") {
+    text = buildStockAttentionMessage(buildAllStockAnalytics(snapshot));
+    replyMarkup = buildStockDashboardKeyboard("critical");
+  } else if (action === "order") {
+    text = buildOrderPlannerCommand(buildAllStockAnalytics(snapshot));
+    replyMarkup = buildSectionKeyboard("order");
+  } else if (action === "waste" || action === "waste:month") {
+    text = buildWasteCommandMessage(snapshot, today, "month");
+    replyMarkup = buildWasteDashboardKeyboard("month");
+  } else if (action === "waste:today") {
+    text = buildWasteCommandMessage(snapshot, today, "today");
+    replyMarkup = buildWasteDashboardKeyboard("today");
+  } else if (action === "shift" || action === "shift:today") {
+    text = buildShiftCommandMessage(snapshot, today, "HARI INI");
+    replyMarkup = buildShiftDashboardKeyboard("today");
+  } else if (action === "shift:tomorrow") {
+    text = buildShiftCommandMessage(snapshot, addDays(today, 1), "BESOK");
+    replyMarkup = buildShiftDashboardKeyboard("tomorrow");
+  } else if (action === "so") {
+    text = buildLatestStockOpnameCommand(snapshot);
+    replyMarkup = buildSectionKeyboard("so");
+  } else if (action === "incoming") {
+    text = buildLatestIncomingCommand(snapshot);
+    replyMarkup = buildSectionKeyboard("incoming");
+  } else if (action === "alert") {
+    text = buildReadOnlyAlertCommand(snapshot, today);
+    replyMarkup = buildSectionKeyboard("alert");
+  } else if (action === "check") {
+    text = buildChecklistStatusMessage(snapshot, today, true) || "✅ Daily Check hari ini tidak punya task aktif.";
+    replyMarkup = buildSectionKeyboard("check");
+  } else {
+    text = buildBotDashboardText(snapshot);
+    replyMarkup = buildMainDashboardKeyboard();
+  }
+
+  return { text: withSnapshotFooter(text, snapshot), replyMarkup };
+}
+
+function snapshotFreshnessLine(snapshot) {
+  const raw = String(snapshot?.syncedAt || "");
+  if (!raw) return "🕒 Data terakhir: snapshot belum tersedia";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return `🕒 Data terakhir: ${raw}`;
+  const formatted = new Intl.DateTimeFormat("id-ID", {
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta"
+  }).format(date);
+  return `🕒 Data terakhir: ${formatted} WIB`;
+}
+
+function withSnapshotFooter(text, snapshot) {
+  const body = String(text || "Belum ada data yang bisa ditampilkan.").trim();
+  if (body.includes("🕒 Data terakhir:")) return body;
+  return `${body}\n\n${snapshotFreshnessLine(snapshot)}\n🔒 Read-only`;
+}
+
+async function answerCallback(env, callbackQueryId, text = "", showAlert = false) {
+  if (!callbackQueryId) return;
+  try {
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: String(callbackQueryId),
+      text: String(text || "").slice(0, 180),
+      show_alert: Boolean(showAlert),
+      cache_time: 0
+    });
+  } catch (error) {
+    console.warn("Telegram answerCallbackQuery skipped", error?.message || error);
+  }
+}
+
+async function sendTelegramWithMarkup(env, chatId, text, replyMarkup = null) {
+  requireTelegramSecrets(env);
+  const body = {
+    chat_id: String(chatId),
+    text: String(text || "").slice(0, 3900),
+    disable_web_page_preview: true
+  };
+  if (replyMarkup) body.reply_markup = replyMarkup;
+  const result = await telegramApi(env, "sendMessage", body);
+  return result?.result;
+}
+
+async function sendReadOnlyCommand(env, chatId, text, settings = {}, replyMarkup = null) {
+  const chunks = splitTelegramText(String(text || ""), 3500);
+  for (let i = 0; i < chunks.length; i++) {
+    const prefix = i > 0 ? `↪️ Lanjutan ${i + 1}/${chunks.length}\n\n` : "";
+    const markup = i === chunks.length - 1 ? (replyMarkup || buildMainDashboardKeyboard()) : null;
+    await sendTelegramWithMarkup(env, chatId, `${prefix}${chunks[i]}`, markup);
+  }
+}
+
+async function sendReadOnlyPanel(env, chatId, text, settings = {}, replyMarkup = null, messageId = null) {
+  const chunks = splitTelegramText(String(text || ""), 3500);
+
+  // Untuk hasil pendek, panel lama diedit di tempat agar chat tidak penuh pesan baru.
+  if (messageId && chunks.length === 1) {
+    try {
+      await telegramApi(env, "editMessageText", {
+        chat_id: String(chatId),
+        message_id: Number(messageId),
+        text: chunks[0],
+        disable_web_page_preview: true,
+        reply_markup: replyMarkup || buildMainDashboardKeyboard()
+      });
+      return;
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (message.toLowerCase().includes("message is not modified")) return;
+      console.warn("Telegram editMessageText fallback to sendMessage", message);
+    }
+  }
+
+  // Daftar yang panjang (mis. semua stock) tetap dipecah agar tidak melewati limit Telegram.
+  for (let i = 0; i < chunks.length; i++) {
+    const prefix = i > 0 ? `↪️ Lanjutan ${i + 1}/${chunks.length}\n\n` : "";
+    const markup = i === chunks.length - 1 ? (replyMarkup || buildMainDashboardKeyboard()) : null;
+    await sendTelegramWithMarkup(env, chatId, `${prefix}${chunks[i]}`, markup);
+  }
+}
+
+function splitTelegramText(text, limit = 3500) {
+  if (text.length <= limit) return [text];
+  const lines = text.split("\n");
+  const chunks = [];
+  let current = "";
+  for (const line of lines) {
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length <= limit) {
+      current = candidate;
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (line.length <= limit) {
+      current = line;
+    } else {
+      for (let i = 0; i < line.length; i += limit) chunks.push(line.slice(i, i + limit));
+      current = "";
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : [text.slice(0, limit)];
+}
+
+function stockStatusIcon(status) {
+  return status === "Kritis" ? "🔴" : status === "Menipis" ? "🟠" : "🟢";
+}
+
+function buildFullStockMessage(rows) {
+  if (!rows.length) return "📊 STOCK SOWORK\n\nBelum ada master Stock aktif pada snapshot Telegram.";
+  const critical = rows.filter(x => x.status === "Kritis").length;
+  const low = rows.filter(x => x.status === "Menipis").length;
+  const safe = rows.filter(x => x.status === "Aman").length;
+  const lines = [
+    "📊 STOCK SOWORK · SEMUA ITEM",
+    "",
+    `${rows.length} item · 🔴 ${critical} kritis · 🟠 ${low} menipis · 🟢 ${safe} aman`,
+    ""
+  ];
+  rows.forEach(x => {
+    const unit = String(x.unit || "unit");
+    let detail = `${stockStatusIcon(x.status)} ${x.name} — ${fmt(x.currentQty)} ${unit}`;
+    if (Number(x.cartonSize || 0) > 0 && Number(x.currentQty || 0) >= Number(x.cartonSize || 0)) {
+      const cartons = Math.floor(Number(x.currentQty || 0) / Number(x.cartonSize || 1));
+      const loose = Number(x.currentQty || 0) - cartons * Number(x.cartonSize || 1);
+      detail += ` (${cartons} karton${loose > 0 ? ` + ${fmt(loose)} ${unit}` : ""})`;
+    }
+    lines.push(detail);
+  });
+  lines.push("", "Gunakan /stock critical untuk hanya melihat item yang perlu perhatian.");
+  return lines.join("\n");
+}
+
+function buildStockAttentionMessage(rows) {
+  const selected = rows.filter(x => x.status !== "Aman");
+  if (!selected.length) return "✅ STOCK ALERT\n\nSemua item aktif saat ini berstatus Aman.";
+  const lines = ["⚠️ STOCK ALERT SOWORK", "", `${selected.length} item perlu perhatian:`, ""];
+  selected.forEach(x => {
+    const extra = x.recommendedQty > 0 ? ` · saran beli ${formatOrderQty(x)}` : "";
+    lines.push(`${stockStatusIcon(x.status)} ${x.name} — ${fmt(x.currentQty)} ${x.unit || "unit"}${extra}`);
+  });
+  return lines.join("\n");
+}
+
+function buildOrderPlannerCommand(rows) {
+  const recommended = rows.filter(x => Number(x.recommendedQty || 0) > 0);
+  if (!recommended.length) return "✅ ORDER PLANNER\n\nBelum ada item dengan rekomendasi pembelian berdasarkan snapshot terbaru.";
+  const dueNow = recommended.filter(x => x.orderDueNow || x.status === "Kritis").length;
+  const lines = [
+    "📦 ORDER PLANNER SOWORK",
+    "",
+    `${recommended.length} item direkomendasikan · ${dueNow} perlu diprioritaskan`,
+    ""
+  ];
+  recommended.forEach(x => {
+    const flags = x.orderDueNow || x.status === "Kritis" ? "🔴" : x.status === "Menipis" ? "🟠" : "🟡";
+    let line = `${flags} ${x.name}\n   Stok ${fmt(x.currentQty)} ${x.unit || "unit"} · beli ${formatOrderQty(x)}`;
+    if (x.predictedOutDate) line += ` · habis ~${dateShort(x.predictedOutDate)}`;
+    if (x.recommendedOrderDate) line += `\n   Order: ${x.orderDueNow ? "HARI INI" : dateShort(x.recommendedOrderDate)}`;
+    lines.push(line);
+  });
+  lines.push("", "Prediksi mengikuti snapshot yang sama dengan web. Cocokkan stok fisik sebelum final order.");
+  return lines.join("\n");
+}
+
+function wasteEntriesForDay(snapshot, day) {
+  const items = Array.isArray(snapshot.wasteItems) ? snapshot.wasteItems : [];
+  const values = day?.values || {};
+  return items.map(item => ({
+    id: item.id,
+    name: item.name || item.id,
+    unit: item.unit || "QTY",
+    qty: Math.max(0, Number(values[item.id] || 0))
+  })).filter(x => x.qty > 0);
+}
+
+function buildWasteCommandMessage(snapshot, today, mode = "month") {
+  const days = (Array.isArray(snapshot.wasteDays) ? snapshot.wasteDays : []).filter(x => x.date);
+  const items = Array.isArray(snapshot.wasteItems) ? snapshot.wasteItems : [];
+  if (mode === "today") {
+    const day = days.find(x => x.date === today);
+    if (!day) return `🗑️ WASTE HARI INI · ${dateShort(today)}\n\nBelum ada input Waste hari ini.`;
+    const entries = wasteEntriesForDay(snapshot, day);
+    const lines = ["🗑️ WASTE HARI INI", "", dateShort(today), ""];
+    if (!entries.length) lines.push("✅ Sudah dicatat · semua nilai 0.");
+    else entries.forEach(x => lines.push(`• ${x.name}: ${fmt(x.qty)} ${x.unit}`));
+    const analyzed = analyzeWasteDay(snapshot, today, day.values || {});
+    if (analyzed.highItems?.length) lines.push("", `⚠️ High Waste: ${analyzed.highItems.map(x => x.name).join(", ")}`);
+    return lines.join("\n");
+  }
+
+  const monthKey = String(today).slice(0, 7);
+  const monthDays = days.filter(x => String(x.date || "").startsWith(monthKey));
+  if (!monthDays.length) return `🗑️ WASTE BULAN INI\n\nBelum ada input Waste untuk ${monthLabel(monthKey)}.`;
+  const totals = items.map(item => ({
+    name: item.name || item.id,
+    unit: item.unit || "QTY",
+    qty: monthDays.reduce((sum, day) => sum + Math.max(0, Number(day.values?.[item.id] || 0)), 0)
+  })).filter(x => x.qty > 0).sort((a,b) => b.qty - a.qty);
+  const latest = monthDays.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)))[0];
+  const lines = [
+    "🗑️ WASTE BULAN BERJALAN",
+    "",
+    `${monthLabel(monthKey)} · ${monthDays.length} hari sudah dicatat`,
+    `Input terakhir: ${latest ? dateShort(latest.date) : "-"}`,
+    ""
+  ];
+  if (!totals.length) lines.push("✅ Semua input bulan ini bernilai 0.");
+  else totals.forEach(x => lines.push(`• ${x.name}: ${fmt(x.qty)} ${x.unit}`));
+  lines.push("", "Gunakan /waste today untuk melihat input hari ini.");
+  return lines.join("\n");
+}
+
+function buildShiftCommandMessage(snapshot, date, label = "HARI INI") {
+  const rows = (Array.isArray(snapshot.schedules) ? snapshot.schedules : [])
+    .filter(x => x.date === date)
+    .sort((a,b) => shiftSortRank(a.shift) - shiftSortRank(b.shift) || String(a.crewName || "").localeCompare(String(b.crewName || ""), "id"));
+  const lines = [`🗓️ SHIFT ${label}`, "", dateShort(date), ""];
+  if (!rows.length) {
+    lines.push("Belum ada jadwal tersimpan untuk tanggal ini.");
+    return lines.join("\n");
+  }
+  rows.forEach(x => {
+    if (x.shift === "Libur") lines.push(`🔴 ${x.crewName} — Libur`);
+    else {
+      const overtime = x.overtime ? ` · Lembur${x.overtimeType ? ` ${x.overtimeType}` : ""}` : "";
+      lines.push(`• ${x.crewName} — ${x.shift}${x.role ? ` · ${x.role}` : ""}${overtime}`);
+    }
+  });
+  return lines.join("\n");
+}
+
+function buildLatestStockOpnameCommand(snapshot) {
+  const rows = (Array.isArray(snapshot.stockOpnames) ? snapshot.stockOpnames : []).filter(x => x.date);
+  if (!rows.length) return "📋 STOCK OPNAME TERAKHIR\n\nBelum ada histori Stock Opname pada snapshot Telegram.";
+  const latestDate = rows.reduce((max, x) => String(x.date) > max ? String(x.date) : max, "");
+  const onDate = rows.filter(x => String(x.date) === latestDate);
+  let selected = onDate;
+  let batchId = "";
+  const latestBatchedRow = onDate
+    .filter(x => String(x.batchId || ""))
+    .slice()
+    .sort((a,b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  if (latestBatchedRow?.batchId) {
+    batchId = String(latestBatchedRow.batchId);
+    const batched = onDate.filter(x => String(x.batchId || "") === batchId);
+    if (batched.length) selected = batched;
+  }
+  const classifyOpnameRow = row => {
+    const diff = Number(row.varianceQty || 0);
+    const status = String(row.reconciliationStatus || "").toLowerCase();
+    if (diff < 0 || status.includes("kurang")) return "kurang";
+    if (diff > 0 || status.includes("lebih")) return "lebih";
+    if (status && status !== "sesuai") return "selisih";
+    return "sesuai";
+  };
+  const classified = selected.map(row => ({ row, kind: classifyOpnameRow(row) }));
+  const sesuai = classified.filter(x => x.kind === "sesuai").length;
+  const kurang = classified.filter(x => x.kind === "kurang").map(x => x.row);
+  const lebih = classified.filter(x => x.kind === "lebih").map(x => x.row);
+  const otherMismatch = classified.filter(x => x.kind === "selisih").map(x => x.row);
+  const mismatch = [...kurang, ...lebih, ...otherMismatch];
+  const lines = [
+    "📋 STOCK OPNAME TERAKHIR",
+    "",
+    `${dateShort(latestDate)} · ${selected.length} item`,
+    ...(batchId ? [`🧾 Batch: ${batchId}`] : []),
+    `✅ Sesuai: ${sesuai}`,
+    `🔻 Kurang: ${kurang.length}`,
+    `🟡 Lebih: ${lebih.length}`,
+    `⚠️ Total selisih: ${mismatch.length}`
+  ];
+  if (mismatch.length) {
+    lines.push("", "Selisih:");
+    mismatch.sort((a,b)=>Math.abs(Number(b.varianceQty||0))-Math.abs(Number(a.varianceQty||0))).forEach(row => {
+      const diff = Number(row.varianceQty || 0);
+      const sign = diff > 0 ? "+" : "";
+      const marker = diff < 0 ? "🔻" : diff > 0 ? "🟡" : "⚠️";
+      lines.push(`${marker} ${row.itemName || row.itemId}: ${sign}${fmt(diff)} ${row.unit || "unit"}`);
+    });
+  }
+  return lines.join("\n");
+}
+
+function buildLatestIncomingCommand(snapshot) {
+  const rows = (Array.isArray(snapshot.stockMovements) ? snapshot.stockMovements : [])
+    .filter(x => x.type === "IN" && x.date)
+    .sort((a,b) => String(b.date || "").localeCompare(String(a.date || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  if (!rows.length) return "📥 BARANG MASUK TERAKHIR\n\nBelum ada histori barang masuk pada snapshot Telegram.";
+  const first = rows[0];
+  const batchId = String(first.batchId || "");
+  const selected = batchId ? rows.filter(x => String(x.batchId || "") === batchId) : rows.filter(x => x.date === first.date).slice(0, 1);
+  const lines = [
+    "📥 BARANG MASUK TERAKHIR",
+    "",
+    `${dateShort(first.date)} · ${selected.length} jenis barang`,
+    ...(batchId ? [`🧾 Batch: ${batchId}`] : []),
+    ...(first.supplier ? [`Supplier: ${first.supplier}`] : []),
+    ...(first.destination ? [`Tujuan: ${first.destination}`] : []),
+    ""
+  ];
+  selected.sort((a,b)=>Number(a.batchIndex||0)-Number(b.batchIndex||0)).forEach(row => {
+    lines.push(`• ${row.itemName || row.itemId}: ${fmt(row.qty)} ${row.unit || "unit"}`);
+  });
+  if (first.note) lines.push("", `Catatan: ${first.note}`);
+  return lines.join("\n");
+}
+
+function buildReadOnlyAlertCommand(snapshot, today) {
+  const stockRows = buildAllStockAnalytics(snapshot);
+  const critical = stockRows.filter(x => x.status === "Kritis");
+  const low = stockRows.filter(x => x.status === "Menipis");
+  const orders = stockRows.filter(x => x.recommendedQty > 0 && (x.orderDueNow || x.status === "Kritis"));
+  const todayWaste = (Array.isArray(snapshot.wasteDays) ? snapshot.wasteDays : []).find(x => x.date === today);
+  const highWaste = todayWaste ? analyzeWasteDay(snapshot, today, todayWaste.values || {}).highItems || [] : [];
+  const tasks = applicableChecklistTasks(snapshot, today);
+  const completions = (Array.isArray(snapshot.checklistCompletions) ? snapshot.checklistCompletions : []).filter(x => x.date === today && x.completed === true);
+  const doneIds = new Set(completions.map(x => String(x.templateId || "")));
+  const pending = tasks.filter(x => !doneIds.has(String(x.id || "")));
+  const total = critical.length + low.length + orders.length + highWaste.length + pending.length;
+  const lines = ["🚨 ALERT CENTER SOWORK", "", dateShort(today), ""];
+  if (!total) {
+    lines.push("✅ Tidak ada alert aktif dari snapshot saat ini.");
+    return lines.join("\n");
+  }
+  lines.push(`🔴 Stock kritis: ${critical.length}`, `🟠 Stock menipis: ${low.length}`, `📦 Order prioritas: ${orders.length}`, `🗑️ High Waste hari ini: ${highWaste.length}`, `📋 Daily Check pending: ${pending.length}`);
+  const names = [...critical, ...low].slice(0, 8).map(x => x.name);
+  if (names.length) lines.push("", `Stock: ${names.join(", ")}${critical.length + low.length > names.length ? ", …" : ""}`);
+  if (orders.length) lines.push(`Order: ${orders.slice(0, 6).map(x => x.name).join(", ")}${orders.length > 6 ? ", …" : ""}`);
+  if (highWaste.length) lines.push(`Waste: ${highWaste.slice(0, 6).map(x => x.name).join(", ")}${highWaste.length > 6 ? ", …" : ""}`);
+  return lines.join("\n");
+}
+
+function buildTodayCommandMessage(snapshot, today) {
+  const stockRows = buildAllStockAnalytics(snapshot);
+  const attention = stockRows.filter(x => x.status !== "Aman");
+  const orderDue = stockRows.filter(x => x.recommendedQty > 0 && (x.orderDueNow || x.status === "Kritis"));
+  const shiftRows = (Array.isArray(snapshot.schedules) ? snapshot.schedules : []).filter(x => x.date === today);
+  const working = shiftRows.filter(x => x.shift && x.shift !== "Libur");
+  const off = shiftRows.filter(x => x.shift === "Libur");
+  const wasteToday = (Array.isArray(snapshot.wasteDays) ? snapshot.wasteDays : []).find(x => x.date === today);
+  const tasks = applicableChecklistTasks(snapshot, today);
+  const completedIds = new Set((Array.isArray(snapshot.checklistCompletions) ? snapshot.checklistCompletions : [])
+    .filter(x => x.date === today && x.completed === true).map(x => String(x.templateId || "")));
+  const doneCount = tasks.filter(x => completedIds.has(String(x.id || ""))).length;
+  const lines = [
+    "☀️ SOWORK TODAY",
+    "",
+    dateShort(today),
+    "",
+    `👥 Shift: ${working.length} bekerja${off.length ? ` · ${off.length} libur` : ""}`,
+    `📦 Stock: ${attention.length ? `${attention.length} perlu perhatian` : "aman"}`,
+    `🛒 Order: ${orderDue.length ? `${orderDue.length} prioritas` : "belum ada prioritas"}`,
+    `🗑️ Waste: ${wasteToday ? "sudah diinput" : "belum diinput"}`,
+    `📋 Daily Check: ${tasks.length ? `${doneCount}/${tasks.length} selesai` : "tidak ada task aktif"}`
+  ];
+  if (working.length) lines.push("", `Crew: ${working.map(x => `${x.crewName} (${x.shift}${x.role ? `/${x.role}` : ""})`).join(", ")}`);
+  if (off.length) lines.push(`Libur: ${off.map(x => x.crewName).join(", ")}`);
+  if (attention.length) lines.push(`Perhatian stock: ${attention.slice(0, 6).map(x => x.name).join(", ")}${attention.length > 6 ? ", …" : ""}`);
+  return lines.join("\n");
+}
+
+function shiftSortRank(shift) {
+  return shift === "S1" ? 0 : shift === "Middle" ? 1 : shift === "S2" ? 2 : shift === "Libur" ? 3 : 4;
+}
+
+function monthLabel(monthKey) {
+  const [year, month] = String(monthKey || "").split("-").map(Number);
+  if (!year || !month) return String(monthKey || "");
+  return new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "Asia/Jakarta" })
+    .format(new Date(`${year}-${String(month).padStart(2, "0")}-01T00:00:00+07:00`));
 }
 
 async function handleScheduled(cron, env) {
@@ -436,6 +1095,7 @@ function cleanSettings(s) {
     telegramNotifyDailyCheck: s.telegramNotifyDailyCheck !== false,
     telegramNotifyOpsReminder: s.telegramNotifyOpsReminder !== false,
     telegramNotifyStockReceipt: s.telegramNotifyStockReceipt !== false,
+    telegramNotifyStockOpname: s.telegramNotifyStockOpname !== false,
     telegramOpsReminderHour: [18, 20].includes(Number(s.telegramOpsReminderHour)) ? Number(s.telegramOpsReminderHour) : 20,
     defaultLeadTimeDays: Math.max(0, Number(s.defaultLeadTimeDays || 2)),
     defaultTargetCoverageDays: Math.max(1, Number(s.defaultTargetCoverageDays || 7))
@@ -682,7 +1342,7 @@ function buildDailyOrderReminder(rows, showAll = false) {
   const due = rows.filter(x => x.recommendedQty > 0 && (showAll || x.orderDueNow || x.status === "Kritis"));
   if (!due.length) return "";
   const lines = ["📦 REMINDER ORDER SOWORK", "", showAll ? "Item dengan rekomendasi pembelian:" : "Item yang perlu ditindaklanjuti hari ini:"];
-  due.slice(0, 18).forEach(x => lines.push(`• ${x.name}: beli ${formatOrderQty(x)}${x.predictedOutDate ? ` · habis ~${dateShort(x.predictedOutDate)}` : ""}`));
+  due.slice(0, 18).forEach(x => lines.push(`• ${x.name}: sisa ${fmt(x.currentQty)} ${x.unit || "unit"} · beli ${formatOrderQty(x)}${x.predictedOutDate ? ` · habis ~${dateShort(x.predictedOutDate)}` : ""}`));
   lines.push("", "Cocokkan stok fisik, jadwal delivery, dan tren pemakaian sebelum final order agar pengeluaran tetap stabil.");
   return lines.join("\n");
 }

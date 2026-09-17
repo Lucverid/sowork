@@ -100,6 +100,15 @@ function int0(value) {
   return Math.max(0, Math.floor(Number(value || 0)));
 }
 
+function normalizedRoleKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/[\s/_-]+/g, " ");
+}
+
+function isMiddleOperationalRole(value) {
+  const key = normalizedRoleKey(value);
+  return key === "bar" || key === "kitchen" || key === "kitchen bar";
+}
+
 export function cleanNames(value) {
   const arr = Array.isArray(value) ? value : String(value || "").split(",");
   return [...new Set(arr.map(x => String(x).trim()).filter(Boolean))];
@@ -245,10 +254,19 @@ export function validateRules(rulesInput) {
     if (availableFemale < femaleRequired) errors.push(`${day}: butuh minimal ${femaleRequired} wanita berdasarkan rules, tersedia ${availableFemale}.`);
 
     for (const shift of ["S1", "Middle", "S2"]) {
-      if (formation[shift] > 0 && !rules.rolesByShift[shift]?.length) {
+      const shiftRoles = cleanNames(rules.rolesByShift[shift] || []);
+      if (formation[shift] > 0 && !shiftRoles.length) {
         errors.push(`${day}: role untuk ${shift} kosong.`);
       }
+      if ((shift === "S1" || shift === "S2") && formation[shift] > shiftRoles.length) {
+        errors.push(`${day}: ${shift} berisi ${formation[shift]} crew tetapi hanya punya ${shiftRoles.length} role. S1/S2 wajib role unik dalam shift, jadi jumlah role minimal harus sama dengan jumlah crew.`);
+      }
     }
+  }
+
+  const invalidMiddleRoles = cleanNames(rules.rolesByShift.Middle || []).filter(role => !isMiddleOperationalRole(role));
+  if (invalidMiddleRoles.length) {
+    errors.push(`Role Middle hanya boleh Kitchen / Bar. Hapus role: ${invalidMiddleRoles.join(", ")}.`);
   }
 
   const offCountByCrew = Object.fromEntries(activeNames.map(n => [n, 0]));
@@ -262,6 +280,128 @@ export function validateRules(rulesInput) {
   if (activeCrew.length < 4) warnings.push("Crew aktif di bawah 4. Pastikan formasi harian benar-benar realistis.");
 
   return { rules, errors, warnings };
+}
+
+
+export function buildScheduleBaselinePreview({ entries = [], range = null, rules: rulesInput }) {
+  const rules = normalizeRules(rulesInput);
+  const startKey = String(range?.start || "");
+  const endKey = String(range?.end || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startKey) || !/^\d{4}-\d{2}-\d{2}$/.test(endKey)) {
+    return { available: false, complete: false, entries: [], errors: ["Rentang jadwal tersimpan tidak valid."], warnings: [], summary: null, range };
+  }
+
+  const sourceRows = (entries || []).filter(row => {
+    const date = String(row?.date || "");
+    return date >= startKey && date <= endKey && date && String(row?.crewName || "").trim();
+  });
+  if (!sourceRows.length) {
+    return { available: false, complete: false, entries: [], errors: [], warnings: [], summary: null, range };
+  }
+
+  const crewNames = cleanNames(sourceRows.map(row => row.crewName));
+  const dateKeys = [];
+  const parseKey = key => {
+    const [y, m, d] = key.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+  for (let cursor = parseKey(startKey), end = parseKey(endKey); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    dateKeys.push(localDateKey(cursor));
+  }
+
+  const keyed = new Map();
+  const duplicateKeys = [];
+  for (const row of sourceRows) {
+    const key = `${row.date}::${String(row.crewName || "").trim()}`;
+    if (keyed.has(key)) duplicateKeys.push(key);
+    keyed.set(key, row);
+  }
+
+  const missing = [];
+  for (const date of dateKeys) {
+    for (const name of crewNames) {
+      if (!keyed.has(`${date}::${name}`)) missing.push(`${date} · ${name}`);
+    }
+  }
+
+  if (duplicateKeys.length || missing.length) {
+    const errors = [];
+    if (duplicateKeys.length) errors.push(`Jadwal tersimpan punya ${duplicateKeys.length} data ganda pada tanggal/crew yang sama.`);
+    if (missing.length) errors.push(`Jadwal tersimpan belum lengkap: ${missing.length} slot tanggal/crew belum tersimpan. Data yang sudah ada tidak akan ditimpa otomatis.`);
+    return {
+      available: true,
+      complete: false,
+      entries: [],
+      errors,
+      warnings: [missing.length ? `Contoh yang belum ada: ${missing.slice(0, 4).join("; ")}${missing.length > 4 ? `; +${missing.length - 4} lainnya` : ""}.` : ""].filter(Boolean),
+      summary: null,
+      range: { start: startKey, end: endKey },
+      baselineSource: "firestore",
+      baselineExact: false,
+      savedEntryCount: sourceRows.length,
+      expectedEntryCount: dateKeys.length * crewNames.length,
+      baselineCrewCount: crewNames.length
+    };
+  }
+
+  const normalizedEntries = [];
+  for (const date of dateKeys) {
+    for (const name of crewNames) {
+      const row = keyed.get(`${date}::${name}`);
+      const { id, updatedAt, ...safe } = row || {};
+      const dateObj = parseKey(date);
+      normalizedEntries.push({
+        ...safe,
+        date,
+        day: DAY_NAMES[dateObj.getDay()],
+        crewName: name,
+        shift: safe.shift || "S1",
+        role: safe.shift === "Libur" ? "" : String(safe.role || ""),
+        notes: String(safe.notes || ""),
+        overtime: Boolean(safe.overtime) && safe.shift !== "Libur",
+        overtimeType: safe.overtime ? String(safe.overtimeType || "Buka") : "",
+        overtimeNote: safe.overtime ? String(safe.overtimeNote || "") : "",
+        source: safe.source || "saved",
+        generated: safe.generated === true
+      });
+    }
+  }
+
+  const warnings = [
+    `Periode ini sudah memiliki ${normalizedEntries.length} entry tersimpan. Preview mengikuti susunan tersebut agar generate ulang tidak mengacak jadwal.`
+  ];
+
+  const activeNames = cleanNames((rules.crew || []).filter(x => x.active !== false).map(x => x.name));
+  const missingCurrentCrew = activeNames.filter(name => !crewNames.includes(name));
+  const legacyCrew = crewNames.filter(name => !activeNames.includes(name));
+  if (missingCurrentCrew.length) warnings.push(`Crew aktif di Rules yang belum ada di jadwal tersimpan: ${missingCurrentCrew.join(", ")}. Jadwal tersimpan tetap dipertahankan.`);
+  if (legacyCrew.length) warnings.push(`Jadwal tersimpan masih memuat crew di luar Rules aktif: ${legacyCrew.join(", ")}. Data tersimpan tetap dipertahankan.`);
+
+  for (const date of dateKeys) {
+    const rows = normalizedEntries.filter(row => row.date === date);
+    for (const shift of ["S1", "S2"]) {
+      const roles = rows.filter(row => row.shift === shift).map(row => String(row.role || "").trim().toLowerCase()).filter(Boolean);
+      if (new Set(roles).size !== roles.length) warnings.push(`${date}: jadwal tersimpan punya role duplikat di ${shift}. Tidak diubah agar tetap sama dengan data tersimpan.`);
+    }
+    const badMiddle = rows.filter(row => row.shift === "Middle" && !isMiddleOperationalRole(row.role));
+    if (badMiddle.length) warnings.push(`${date}: ada role Middle lama yang tidak sesuai rule Kitchen/Bar. Tidak diubah karena periode ini mengikuti data tersimpan.`);
+  }
+
+  const summary = summarizeScheduleEntries(normalizedEntries, crewNames);
+  return {
+    available: true,
+    complete: true,
+    entries: normalizedEntries,
+    errors: [],
+    warnings,
+    summary,
+    range: { start: startKey, end: endKey },
+    baselineSource: "firestore",
+    baselineExact: true,
+    savedEntryCount: normalizedEntries.length,
+    expectedEntryCount: normalizedEntries.length,
+    baselineCrewCount: crewNames.length
+  };
 }
 
 export function generateSchedule({ year, month, includeCarryover = false, rules: rulesInput }) {
@@ -394,8 +534,17 @@ function assignRolesForDay(assigned, roleCounts, lastRole, rolesByShift) {
     const roles = cleanNames(rolesByShift?.[shift] || []);
     if (!names.length || !roles.length) continue;
 
+    // v1.7.9: pertahankan karakter rotasi role versi lama, sambil tetap
+    // memaksa S1/S2 unik di dalam shift yang sama. Middle boleh berulang,
+    // tetapi tetap hanya memakai role operasional yang divalidasi.
+    const enforceUniqueRole = shift === "S1" || shift === "S2";
+    const usedInShift = new Set();
+
     for (const name of names) {
-      const role = roles.slice().sort((a, b) => {
+      const candidates = roles.filter(role => !enforceUniqueRole || !usedInShift.has(role));
+      if (!candidates.length) continue;
+
+      const role = candidates.slice().sort((a, b) => {
         const countA = Number(roleCounts[name]?.[a] || 0);
         const countB = Number(roleCounts[name]?.[b] || 0);
         const repeatA = lastRole[name] === a ? 2.75 : 0;
@@ -404,7 +553,9 @@ function assignRolesForDay(assigned, roleCounts, lastRole, rolesByShift) {
         const usedTodayB = [...result.values()].filter(x => x === b).length * 1.25;
         return (countA * 10 + repeatA + usedTodayA) - (countB * 10 + repeatB + usedTodayB) || a.localeCompare(b, "id");
       })[0];
+
       result.set(name, role);
+      if (enforceUniqueRole) usedInShift.add(role);
       if (!(role in roleCounts[name])) roleCounts[name][role] = 0;
       roleCounts[name][role] += 1;
       lastRole[name] = role;

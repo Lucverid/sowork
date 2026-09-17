@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx-js-style";
-import { saveSchedule } from "../schedule/schedule.js";
+import { saveSchedule, upsertSchedules, replaceScheduleRange } from "../schedule/schedule.js";
 import { saveChecklistItem } from "../checklist/checklist.js";
 import { saveStockItem, saveStockReceipt, saveDailyStockUsage, saveStockOpname } from "../stock/stock.js";
 import { buildStockReconciliation } from "../stock/analytics.js";
@@ -103,11 +103,211 @@ export function exportAllWorkbook({ schedules = [], checklist = [], checklistCom
   XLSX.writeFile(wb, filename || `SoWork-All-Data-${dateKey(new Date())}.xlsx`);
 }
 
+
+export async function previewFeatureWorkbook(feature, file, context = {}) {
+  if (!file) throw new Error("File Excel belum dipilih.");
+  const wb = await readWorkbook(file);
+  const sheetNames = (wb.SheetNames || []).slice();
+  const base = {
+    feature,
+    fileName: file.name || "Workbook Excel",
+    fileSize: Number(file.size || 0),
+    sheetNames,
+    count: 0,
+    skipped: 0,
+    title: "Preview Import",
+    detail: "",
+    stats: [],
+    rows: [],
+    warnings: []
+  };
+
+  if (feature === "schedule") {
+    const parsed = parseScheduleImportWorkbook(wb);
+    // Preview harus mengikuti urutan tanggal aktual di file, bukan urutan crew/parser.
+    // Ini penting untuk periode 26 bulan sebelumnya -> 25 bulan terpilih.
+    const entries = (parsed.entries || []).slice().sort((a,b) =>
+      String(a?.date || '').localeCompare(String(b?.date || '')) ||
+      String(a?.crewName || '').localeCompare(String(b?.crewName || ''), 'id')
+    );
+    const dates = entries.map(x => x.date).filter(Boolean).sort();
+    const crews = [...new Set(entries.map(x => x.crewName).filter(Boolean))];
+    const shifts = { S1:0, S2:0, Middle:0, Libur:0, Lembur:0 };
+    entries.forEach(x => {
+      if (Object.prototype.hasOwnProperty.call(shifts, x.shift)) shifts[x.shift] += 1;
+      if (x.overtime) shifts.Lembur += 1;
+    });
+
+    // Bandingkan preview dengan jadwal yang saat ini tampil/tersimpan di SoWork.
+    // Ini membuat user tahu sebelum Apply apakah file benar-benar membawa perubahan.
+    const minDate = dates[0] || '';
+    const maxDate = dates[dates.length - 1] || '';
+    const currentRows = (context.schedules || []).filter(row => {
+      const d = String(row?.date || '');
+      return minDate && maxDate && d >= minDate && d <= maxDate;
+    });
+    const currentMap = new Map(currentRows.map(row => [scheduleImportKey(row), row]));
+    const importMap = new Map(entries.map(row => [scheduleImportKey(row), row]));
+    let changed = 0;
+    let added = 0;
+    for (const [key, row] of importMap) {
+      const old = currentMap.get(key);
+      if (!old) added++;
+      else if (!sameVisibleScheduleValue(old, row)) changed++;
+    }
+    const removed = [...currentMap.keys()].filter(key => !importMap.has(key)).length;
+    const noDataChange = currentRows.length > 0 && changed === 0 && added === 0 && removed === 0;
+    const compareWarnings = noDataChange
+      ? ['File import sama dengan jadwal SoWork pada periode ini. Apply tidak akan mengubah Monthly View.']
+      : (currentRows.length ? [`Perubahan terdeteksi: ${changed} diubah, ${added} ditambah, ${removed} dihapus.`] : []);
+    const diffRows = [];
+    for (const [key, row] of importMap) {
+      const old = currentMap.get(key);
+      if (!old || !sameVisibleScheduleValue(old, row)) {
+        diffRows.push({
+          Tanggal: row.date,
+          Crew: row.crewName,
+          Sebelum: old ? `${old.shift}${old.role ? ` · ${old.role}` : ''}` : 'Belum ada',
+          Setelah: `${row.shift}${row.role ? ` · ${row.role}` : ''}`
+        });
+      }
+    }
+    for (const [key, old] of currentMap) {
+      if (!importMap.has(key)) diffRows.push({ Tanggal: old.date, Crew: old.crewName, Sebelum: `${old.shift}${old.role ? ` · ${old.role}` : ''}`, Setelah: 'Dihapus' });
+    }
+    return {
+      ...base,
+      title: "Preview Jadwal",
+      detail: `Sumber: ${parsed.sourceLabel}`,
+      count: entries.length,
+      skipped: parsed.skipped || 0,
+      minDate: dates[0] || "",
+      maxDate: dates[dates.length - 1] || "",
+      stats: [
+        { label:"Entry", value:String(entries.length) },
+        { label:"Crew", value:String(crews.length) },
+        { label:"Rentang data Excel", value: dates.length ? `${dates[0]} → ${dates[dates.length-1]}` : "-" },
+        { label:"Berubah", value:String(changed) },
+        { label:"Ditambah", value:String(added) },
+        { label:"Dihapus", value:String(removed) },
+        { label:"Dilewati", value:String(parsed.skipped || 0) }
+      ],
+      shiftStats: shifts,
+      rows: entries.slice(0, 12).map(x => ({
+        Tanggal:x.date, Crew:x.crewName, Shift:x.shift, Role:x.role || "-", Lembur:x.overtime ? "Ya" : "Tidak"
+      })),
+      warnings: [...compareWarnings, ...(parsed.warnings || []), ...(parsed.skipped ? [`${parsed.skipped} baris tidak valid akan dilewati.`] : [])],
+      changeSummary: { changed, added, removed, noDataChange },
+      diffRows: diffRows.slice(0, 20),
+      // Payload internal: yang dilihat user saat Preview INI yang harus diterapkan.
+      // Jangan parse workbook ulang setelah user menekan Apply.
+      applyPayload: {
+        entries: entries.map(row => ({ ...row })),
+        minDate: dates[0] || '',
+        maxDate: dates[dates.length - 1] || '',
+        skipped: parsed.skipped || 0,
+        sourceLabel: parsed.sourceLabel || 'Preview Import',
+        warnings: [...(parsed.warnings || [])]
+      }
+    };
+  }
+
+  const previewRows = (sheetName, mapRow, required=true) => {
+    const rows = getRows(wb, sheetName, required);
+    const mapped = rows.map(mapRow).filter(Boolean);
+    return { rows:mapped, rawCount:rows.length };
+  };
+
+  if (feature === "checklist") {
+    const p = previewRows("Checklist Template", row => {
+      const title=text(row["Task"] || row["Title"]); if(!title) return null;
+      return { Task:title, Shift:normalizeChecklistShift(row["Shift"]), Assignment:normalizeAssignment(row["Assignment Type"]) };
+    });
+    return { ...base, title:"Preview Daily Checklist", count:p.rows.length, stats:[{label:"Task",value:String(p.rows.length)},{label:"Sheet",value:"Checklist Template"}], rows:p.rows.slice(0,12) };
+  }
+
+  if (feature === "stockMaster") {
+    const p = previewRows("Stock Master", row => {
+      const name=text(row["Nama"] || row["Nama Item"]); if(!name) return null;
+      return { Nama:name, Satuan:text(row["Satuan"]||"PCS"), Stok:num(row["Current Stock"],0), Kategori:text(row["Kategori"]||"Bahan") };
+    });
+    return { ...base, title:"Preview Stock Master", count:p.rows.length, stats:[{label:"Item",value:String(p.rows.length)},{label:"Sheet",value:"Stock Master"}], rows:p.rows.slice(0,12) };
+  }
+
+  if (feature === "stockIncoming") {
+    const items=context.stockItems||[]; let skipped=0;
+    const p = previewRows("Stock Masuk", row => {
+      const item=findByIdOrName(items,row["Item ID"],row["Nama Item"]); const date=asDate(row["Tanggal"]);
+      const cartons=Math.max(0,num(row["Karton"],0)), loose=Math.max(0,num(row["Qty Lepas"],0));
+      if(!item||!date||!(cartons>0||loose>0)){skipped++;return null;}
+      return { Tanggal:date, Item:item.name, Karton:cartons, "Qty Lepas":loose };
+    });
+    return { ...base, title:"Preview Barang Masuk", count:p.rows.length, skipped, stats:[{label:"Transaksi",value:String(p.rows.length)},{label:"Dilewati",value:String(skipped)}], rows:p.rows.slice(0,12), warnings:skipped?[`${skipped} baris tidak cocok dengan Stock Master / tanggal tidak valid.`]:[] };
+  }
+
+  if (feature === "stockUsage") {
+    const items=context.stockItems||[]; let skipped=0;
+    const p = previewRows("Penggunaan Stok", row => {
+      const item=findByIdOrName(items,row["Item ID"],row["Nama Item"]); const date=asDate(row["Tanggal"]);
+      if(!item||!date){skipped++;return null;}
+      return { Tanggal:date, Item:item.name, Qty:Math.max(0,num(row["Qty Digunakan"]??row["Qty"],0)), Satuan:item.unit||"PCS" };
+    });
+    return { ...base, title:"Preview Penggunaan Stok", count:p.rows.length, skipped, stats:[{label:"Baris",value:String(p.rows.length)},{label:"Dilewati",value:String(skipped)}], rows:p.rows.slice(0,12), warnings:skipped?[`${skipped} baris tidak cocok dengan Stock Master / tanggal tidak valid.`]:[] };
+  }
+
+  if (feature === "opname") {
+    const items=context.stockItems||[]; let skipped=0;
+    const p=previewRows("Stock Opname", row=>{
+      const item=findByIdOrName(items,row["Item ID"],row["Nama Item"]); const date=asDate(row["Tanggal"]);
+      if(!item||!date){skipped++;return null;}
+      return {Tanggal:date,Item:item.name,"Lokasi 1":num(row["Qty Lokasi 1"],0),"Lokasi 2":num(row["Qty Lokasi 2"],0)};
+    });
+    return { ...base,title:"Preview Stock Opname",count:p.rows.length,skipped,stats:[{label:"Baris",value:String(p.rows.length)},{label:"Dilewati",value:String(skipped)}],rows:p.rows.slice(0,12),warnings:skipped?[`${skipped} baris tidak cocok dengan Stock Master / tanggal tidak valid.`]:[] };
+  }
+
+  if (feature === "reports") {
+    const p=previewRows("Laporan", row=>{const date=asDate(row["Tanggal"]);if(!date)return null;return {Tanggal:date,Shift:text(row["Shift"]),Role:text(row["Role"]),Ringkasan:text(row["Ringkasan"]).slice(0,70)};});
+    return { ...base,title:"Preview Laporan",count:p.rows.length,stats:[{label:"Laporan",value:String(p.rows.length)},{label:"Sheet",value:"Laporan"}],rows:p.rows.slice(0,12) };
+  }
+
+  if (feature === "waste") {
+    const master=wb.Sheets["Waste Master"]?sheetJson(wb.Sheets["Waste Master"]):[];
+    const dailySheet=wb.Sheets["Waste Harian"]||wb.Sheets["Waste Data"];
+    const daily=dailySheet?sheetJson(dailySheet):[];
+    if(!master.length&&!daily.length) throw new Error('Sheet "Waste Master" atau "Waste Harian" tidak ditemukan.');
+    const rows=[];
+    master.slice(0,6).forEach(r=>rows.push({Jenis:"Master",Tanggal:"-",Item:text(r["Nama Item"]||r["Nama"]),Qty:"-"}));
+    daily.slice(0,6).forEach(r=>rows.push({Jenis:"Harian",Tanggal:asDate(r["Tanggal"])||"-",Item:text(r["Nama Item"]),Qty:num(r["Qty"],0)}));
+    return { ...base,title:"Preview Waste",count:master.length+daily.length,stats:[{label:"Master",value:String(master.length)},{label:"Harian",value:String(daily.length)}],rows:rows.slice(0,12) };
+  }
+
+  if (feature === "all") {
+    const known=["Checklist Template","Stock Master","Stock Masuk","Penggunaan Stok","Stock Opname","Waste Master","Waste Harian","Waste Data","Laporan"];
+    const sections=[];
+    let total=0;
+    try {
+      const parsed=parseScheduleImportWorkbook(wb);
+      if(parsed.entries?.length){ sections.push({name:"Jadwal",count:parsed.entries.length}); total+=parsed.entries.length; }
+    } catch(_) {}
+    for(const name of known){
+      const sh=wb.Sheets[name]; if(!sh) continue;
+      const count=sheetJson(sh).length;
+      if(count){sections.push({name,count}); total+=count;}
+    }
+    if(!sections.length) throw new Error("Tidak ada sheet import SoWork yang dikenali.");
+    return { ...base,title:"Preview Semua Data",count:total,stats:sections.map(x=>({label:x.name,value:String(x.count)})),rows:sections.map(x=>({Data:x.name,"Jumlah Baris":x.count})).slice(0,12),detail:`${sections.length} jenis data dikenali` };
+  }
+
+  throw new Error(`Preview import ${feature} belum didukung.`);
+}
+
 export async function importFeatureWorkbook(feature, file, context = {}) {
   if (!file) throw new Error("File Excel belum dipilih.");
   const wb = await readWorkbook(file);
   switch (feature) {
-    case "schedule": return importSchedule(wb);
+    case "schedule": return context?.schedulePreviewPayload?.entries?.length
+      ? importScheduleEntries(context.schedulePreviewPayload)
+      : importSchedule(wb);
     case "checklist": return importChecklist(wb);
     case "stockMaster": return importStockMaster(wb, context.stockItems || []);
     case "stockIncoming": return importStockIncoming(wb, context);
@@ -138,45 +338,508 @@ export function chooseExcelFile() {
 
 async function importAll(wb, context) {
   const results = [];
-  for (const feature of ["schedule","checklist","stockMaster","opname","waste","reports"]) {
+  const workingContext = { ...context, stockItems: (context.stockItems || []).slice() };
+  let scheduleMeta = null;
+
+  for (const feature of ["schedule","checklist","stockMaster","stockIncoming","stockUsage","opname","waste","reports"]) {
     try {
       const result = await ({
         schedule: () => importSchedule(wb),
         checklist: () => importChecklist(wb),
-        stockMaster: () => importStockMaster(wb, context.stockItems || []),
-        opname: () => importOpname(wb, context),
-        waste: () => importWaste(wb, context),
-        reports: () => importReports(wb, context)
+        stockMaster: () => importStockMaster(wb, workingContext.stockItems || []),
+        stockIncoming: () => importStockIncoming(wb, workingContext),
+        stockUsage: () => importStockUsage(wb, workingContext),
+        opname: () => importOpname(wb, workingContext),
+        waste: () => importWaste(wb, workingContext),
+        reports: () => importReports(wb, workingContext)
       }[feature])();
+      if (feature === 'stockMaster' && Array.isArray(result.items)) workingContext.stockItems = result.items;
+      if (feature === 'schedule' && result.importedSchedule) scheduleMeta = result;
       if (result.count) results.push(result);
     } catch (err) {
-      if (!String(err?.message || "").includes("Sheet")) throw err;
+      if (!/sheet .*tidak ditemukan/i.test(String(err?.message || ''))) throw err;
     }
   }
   if (!results.length) throw new Error("Tidak ada sheet import SoWork yang dikenali.");
-  return { count: results.reduce((s,x)=>s+x.count,0), detail: results.map(x=>x.detail).join(" · ") };
+  return {
+    count: results.reduce((sum,row)=>sum+Number(row.count || 0),0),
+    detail: results.map(row=>row.detail).filter(Boolean).join(" · "),
+    importedSchedule: Boolean(scheduleMeta),
+    minDate: scheduleMeta?.minDate || '',
+    maxDate: scheduleMeta?.maxDate || '',
+    skipped: results.reduce((sum,row)=>sum+Number(row.skipped || 0),0)
+  };
 }
 
 async function importSchedule(wb) {
-  const rows = getRows(wb, "Jadwal Data", true);
-  let count = 0;
-  for (const [index,row] of rows.entries()) {
-    const date = asDate(row["Tanggal"]);
-    const crewName = text(row["Crew"] || row["Nama Crew"]);
-    const shift = normalizeShift(row["Shift"]);
-    if (!date || !crewName || !shift) continue;
-    await saveSchedule({
-      date, crewName, gender: text(row["Gender"]), shift,
-      role: shift === "Libur" ? "" : text(row["Role"]),
-      notes: text(row["Catatan"]),
-      overtime: asBool(row["Lembur"]),
-      overtimeType: text(row["Jenis Lembur"] || "Buka"),
-      overtimeNote: text(row["Catatan Lembur"]),
-      source: "excel-import"
-    });
-    count++;
+  const parsed = parseScheduleImportWorkbook(wb);
+  if (!parsed.entries.length) {
+    throw new Error(parsed.message || 'Tidak ada baris jadwal valid. Gunakan Export lengkap SoWork atau XLSX jadwal yang masih mempertahankan data shift.');
   }
-  return { count, detail: `Jadwal ${count}` };
+  return importScheduleEntries({
+    entries: parsed.entries,
+    skipped: parsed.skipped || 0,
+    sourceLabel: parsed.sourceLabel || 'Workbook',
+    warnings: parsed.warnings || []
+  });
+}
+
+async function importScheduleEntries(payload = {}) {
+  const sourceEntries = Array.isArray(payload.entries) ? payload.entries : [];
+  if (!sourceEntries.length) throw new Error('Payload Preview Jadwal kosong. Pilih ulang file lalu cek Preview sebelum Apply.');
+
+  // PENTING: sourceEntries berasal langsung dari Preview yang disetujui user.
+  // Jadi Apply tidak membaca ulang workbook dan tidak mungkin memilih hidden/raw source lain.
+  const importedEntries = sourceEntries.map(row => ({ ...row, source: 'excel-import', generated: false }));
+  const dates = importedEntries.map(x => x.date).filter(Boolean).sort();
+  const minDate = payload.minDate || dates[0] || '';
+  const maxDate = payload.maxDate || dates[dates.length - 1] || '';
+  if (!minDate || !maxDate) throw new Error('Rentang tanggal import jadwal tidak valid.');
+
+  const syncResult = await replaceScheduleRange(minDate, maxDate, importedEntries, { verifyServer: true });
+  const serverEntries = Array.isArray(syncResult?.serverEntries) ? syncResult.serverEntries : [];
+  return {
+    count: importedEntries.length,
+    detail: `Jadwal ${importedEntries.length} · ${payload.sourceLabel || 'Preview Import'}${syncResult?.verified ? ' · terverifikasi server' : ''}`,
+    minDate,
+    maxDate,
+    importedSchedule: true,
+    importedEntries,
+    serverEntries,
+    applyMode: 'replace-range-preview-payload',
+    skipped: payload.skipped || 0,
+    warnings: payload.warnings || [],
+    verified: Boolean(syncResult?.verified)
+  };
+}
+
+function parseScheduleImportWorkbook(wb) {
+  // Dua format utama:
+  // 1) Export lengkap SoWork: memiliki sheet canonical `Jadwal Data`.
+  //    Sheet ini WAJIB menjadi sumber utama karena Shift/Role tersimpan sebagai teks,
+  //    sehingga round-trip Export -> Import tidak bergantung pada warna/style XLSX.
+  // 2) Google Sheet round-trip: matrix utama bisa diedit user dan hidden raw hanya
+  //    metadata/fallback. Untuk format ini, matrix yang terlihat tetap authoritative.
+  let rawResult = null;
+  let rawError = null;
+  const canonicalRawSheet = findSheet(wb, ['Jadwal Data', 'Schedule Data', 'JadwalData']);
+  const rawSheet = canonicalRawSheet || findScheduleRawDataSheet(wb);
+  if (rawSheet) {
+    try {
+      const rows = Number.isInteger(rawSheet.headerRow) ? sheetJsonFromHeaderRow(rawSheet.sheet, rawSheet.headerRow) : sheetJson(rawSheet.sheet);
+      const entries = [];
+      let skipped = 0;
+      for (const row of rows) {
+        const date = asDate(pick(row, ['Tanggal','Date']));
+        const crewName = text(pick(row, ['Crew','Nama Crew','Nama']));
+        const shift = normalizeShift(pick(row, ['Shift','Jam Kerja']));
+        if (!date || !crewName || !shift) { skipped++; continue; }
+        entries.push({
+          date, crewName, gender: text(pick(row,['Gender','Jenis Kelamin'])), shift,
+          role: shift === 'Libur' ? '' : text(pick(row,['Role','Posisi','Tugas'])),
+          notes: text(pick(row,['Catatan','Notes'])),
+          overtime: asBool(pick(row,['Lembur','Overtime'])),
+          overtimeType: text(pick(row,['Jenis Lembur','Overtime Type'])) || 'Buka',
+          overtimeNote: text(pick(row,['Catatan Lembur','Overtime Note']))
+        });
+      }
+      if (!entries.length) throw new Error(`Sheet "${rawSheet.name}" ditemukan, tapi tidak ada baris valid. Pastikan kolom Tanggal, Crew, dan Shift tidak kosong.`);
+      rawResult = { entries, skipped, sourceLabel: rawSheet.name, warnings: [] };
+    } catch (err) {
+      rawError = err;
+    }
+  }
+
+  // File resmi hasil `Export lengkap` SoWork harus selalu round-trip dari raw sheet.
+  // Jangan memaksa parser warna matrix untuk file ini.
+  if (canonicalRawSheet) {
+    if (rawResult) {
+      return {
+        ...rawResult,
+        sourceLabel: `${canonicalRawSheet.name} (Export lengkap SoWork)`,
+        warnings: rawResult.warnings || []
+      };
+    }
+    throw new Error(`Sheet canonical "${canonicalRawSheet.name}" ditemukan tetapi tidak bisa dibaca. ${rawError?.message || 'Pastikan kolom Tanggal, Crew, Gender, Shift, dan Role masih utuh.'}`);
+  }
+
+  let matrixResult = null;
+  let matrixError = null;
+  const matrix = findScheduleMatrixSheet(wb);
+  if (matrix) {
+    try { matrixResult = parseScheduleMatrix(matrix.sheet, matrix.name); }
+    catch (err) { matrixError = err; }
+  }
+
+  if (matrixResult) {
+    // v1.7.19: tab jadwal utama yang terlihat SELALU menjadi sumber utama
+    // bila berhasil dibaca. Hidden raw hanya melengkapi metadata yang tidak
+    // tersedia di matrix (catatan, gender, detail lembur), tidak boleh
+    // mengembalikan jadwal ke versi lama.
+    if (rawResult) {
+      const rawMap = new Map(rawResult.entries.map(row => [scheduleImportKey(row), row]));
+      const matrixKeys = new Set(matrixResult.entries.map(row => scheduleImportKey(row)));
+      let visibleChanges = 0;
+      let visibleAdded = 0;
+      const merged = matrixResult.entries.map(visible => {
+        const key = scheduleImportKey(visible);
+        const raw = rawMap.get(key);
+        if (!raw) visibleAdded++;
+        else if (!sameVisibleScheduleValue(raw, visible)) visibleChanges++;
+        return {
+          ...(raw || {}),
+          ...visible,
+          gender: visible.gender || raw?.gender || '',
+          notes: raw?.notes || visible.notes || '',
+          overtimeNote: visible.overtimeNote || raw?.overtimeNote || '',
+          overtimeType: visible.overtime ? (visible.overtimeType || raw?.overtimeType || 'Buka') : '',
+          role: visible.shift === 'Libur' ? '' : visible.role
+        };
+      });
+      const removedFromVisible = [...rawMap.keys()].filter(key => !matrixKeys.has(key)).length;
+      const warnings = [];
+      if (visibleChanges || visibleAdded || removedFromVisible) {
+        warnings.push(`Tab utama menjadi acuan: ${visibleChanges} jadwal berubah, ${visibleAdded} ditambah, ${removedFromVisible} tidak ada lagi dibanding data tersembunyi.`);
+      } else {
+        warnings.push('Tab utama dan data tersembunyi sama. Import akan menghasilkan jadwal yang sama jika Firestore juga belum berubah.');
+      }
+      return {
+        entries: merged,
+        skipped: matrixResult.skipped || 0,
+        sourceLabel: `${matrix.name} (tab utama)` ,
+        warnings,
+        visibleChanges,
+        visibleAdded,
+        visibleRemoved: removedFromVisible
+      };
+    }
+    return { ...matrixResult, warnings: matrixResult.warnings || [], sourceLabel: `${matrix.name} (tab utama)` };
+  }
+
+  // Jika tabel jadwal utama ADA tetapi gagal dibaca, JANGAN diam-diam memakai hidden/raw data.
+  // Hidden sheet bisa masih berisi versi lama setelah user mengedit matrix Google Sheet.
+  // Lebih aman menolak import daripada menulis ulang data lama sambil menampilkan status sukses.
+  if (matrix && matrixError) {
+    throw new Error(`Tab jadwal utama "${matrix.name}" ditemukan tetapi tidak bisa dibaca dengan aman. ${matrixError.message} Import dibatalkan agar data tersembunyi lama tidak menggantikan edit yang terlihat.`);
+  }
+
+  if (rawResult) return { ...rawResult, warnings: rawResult.warnings || [] };
+
+  const names = (wb.SheetNames || []).join(', ');
+  const reason = rawError?.message || '';
+  throw new Error(`Sheet jadwal tidak dikenali. Dicari data mentah SoWork (Tanggal/Crew/Gender/Shift/Role) atau tabel jadwal SoWork. Sheet yang ada: ${names || 'tidak ada'}.${reason ? ` Detail: ${reason}` : ''}`);
+}
+
+function scheduleImportKey(row) {
+  return `${String(row?.date || '').trim()}|${String(row?.crewName || '').trim().toLowerCase()}`;
+}
+
+function sameVisibleScheduleValue(a, b) {
+  const overtimeA = Boolean(a?.overtime);
+  const overtimeB = Boolean(b?.overtime);
+  return String(a?.shift || '') === String(b?.shift || '')
+    && String(a?.role || '').trim() === String(b?.role || '').trim()
+    && overtimeA === overtimeB
+    && (!overtimeA || String(a?.overtimeType || '').trim() === String(b?.overtimeType || '').trim());
+}
+
+function findScheduleRawDataSheet(wb) {
+  const candidates = [];
+  for (const name of wb.SheetNames || []) {
+    const sheet = wb.Sheets[name];
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header:1, defval:'', raw:true });
+    for (let r=0; r<Math.min(8, aoa.length); r++) {
+      const headers = (aoa[r] || []).map(v => text(v).trim().toLowerCase());
+      const hasDate = headers.includes('tanggal') || headers.includes('date');
+      const hasCrew = headers.includes('crew') || headers.includes('nama crew') || headers.includes('nama');
+      const hasGender = headers.includes('gender') || headers.includes('jenis kelamin');
+      const hasShift = headers.includes('shift') || headers.includes('jam kerja');
+      const hasRole = headers.includes('role') || headers.includes('posisi') || headers.includes('tugas');
+      if (!(hasDate && hasCrew && hasGender && hasShift && hasRole)) continue;
+      let score = 0;
+      const lowerName = String(name || '').toLowerCase();
+      if (lowerName.includes('sowork data')) score += 100;
+      if (lowerName.includes('jadwal data')) score += 80;
+      if (lowerName.includes('data')) score += 30;
+      if (headers.includes('format')) score += 20;
+      if (headers.includes('jenis lembur')) score += 10;
+      candidates.push({ name, sheet, headerRow:r, score });
+      break;
+    }
+  }
+  candidates.sort((a,b) => b.score - a.score || a.headerRow - b.headerRow);
+  return candidates[0] || null;
+}
+
+function sheetJsonFromHeaderRow(sheet, headerRow) {
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header:1, defval:'', raw:true });
+  const headers = (aoa[headerRow] || []).map(v => text(v).trim());
+  const rows = [];
+  for (let r=headerRow+1; r<aoa.length; r++) {
+    const values = aoa[r] || [];
+    if (!values.some(v => text(v) !== '')) continue;
+    const row = {};
+    headers.forEach((h,c) => { if (h) row[h] = values[c]; });
+    rows.push(row);
+  }
+  return rows;
+}
+
+function findScheduleMatrixSheet(wb) {
+  for (const name of wb.SheetNames || []) {
+    const sheet = wb.Sheets[name];
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header:1, defval:'', raw:true });
+    const first = (aoa[0] || []).map(v => text(v).toLowerCase());
+    if (first.includes('nama crew') && first.includes('gender') && first.includes('periode')) return { name, sheet };
+  }
+  return null;
+}
+
+function parseScheduleMatrix(sheet, sheetName) {
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header:1, defval:'', raw:true });
+  if (aoa.length < 3) throw new Error(`Sheet "${sheetName}" tidak berisi tabel jadwal yang lengkap.`);
+  const header = aoa[0] || [];
+  const periodText = [sheetName, ...aoa.slice(2, 8).map(r => text(r?.[3]))].join(' ');
+  const period = parseIndonesianMonthYear(periodText);
+  // Ambil semua kolom tanggal yang terlihat mulai kolom E. Google Sheets kadang
+  // mengekspor sebagian header dd mmm sebagai value/style yang tidak bisa diparse
+  // normal walau di layar terlihat benar. Jangan buang kolom itu diam-diam.
+  const visibleDateColumns = [];
+  for (let c=4;c<header.length;c++) {
+    const rawHeader = header[c];
+    const headerCell = sheet[XLSX.utils.encode_cell({ r:0, c })];
+    const formattedHeader = headerCell?.w ?? '';
+    const cellValue = headerCell?.v ?? rawHeader;
+    if (text(rawHeader) === '' && text(formattedHeader) === '' && cellValue !== 0) continue;
+    const parsedDate = matrixDateKey(rawHeader, period)
+      || matrixDateKey(formattedHeader, period)
+      || matrixDateKey(cellValue, period)
+      || '';
+    visibleDateColumns.push({ c, rawHeader, formattedHeader, date: parsedDate });
+  }
+
+  // v1.7.27: isi header yang gagal dari anchor tanggal tetangga. Ini penting
+  // untuk periode 26 bulan sebelumnya -> 25 bulan terpilih. Contoh: bila 01 Sep
+  // terbaca tetapi 26-31 Agu tidak, keenam kolom sebelumnya dihitung mundur.
+  const knownAnchors = visibleDateColumns
+    .map((col, index) => col.date ? { index, date: col.date } : null)
+    .filter(Boolean);
+  if (knownAnchors.length) {
+    const toUtcDate = key => {
+      const m = String(key || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      return m ? new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))) : null;
+    };
+    const fromUtcDate = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+    for (let i=0; i<visibleDateColumns.length; i++) {
+      if (visibleDateColumns[i].date) continue;
+      let anchor = knownAnchors[0];
+      for (const candidate of knownAnchors) {
+        if (Math.abs(candidate.index - i) < Math.abs(anchor.index - i)) anchor = candidate;
+      }
+      const base = toUtcDate(anchor.date);
+      if (!base) continue;
+      base.setUTCDate(base.getUTCDate() + (i - anchor.index));
+      visibleDateColumns[i].date = fromUtcDate(base);
+    }
+  }
+
+  const dateCols = visibleDateColumns.filter(col => col.date).map(({c,date}) => ({c,date}));
+  if (!dateCols.length) {
+    const samples = header.slice(4, 10).map(v => {
+      if (typeof v === 'number') return `serial:${v}`;
+      return text(v) || '(kosong)';
+    }).join(', ');
+    throw new Error(`Tanggal pada sheet "${sheetName}" tidak bisa dibaca. Header yang terbaca: ${samples || 'tidak ada'}. Gunakan file XLSX, bukan CSV.`);
+  }
+
+  // Pastikan hasil inferensi tidak menghasilkan tanggal duplikat / loncat. Bila
+  // ada, berhenti daripada mengimport periode yang salah.
+  const uniqueDates = new Set(dateCols.map(x => x.date));
+  if (uniqueDates.size !== dateCols.length) {
+    throw new Error(`Tanggal pada sheet "${sheetName}" ambigu setelah dibaca. Ditemukan ${dateCols.length} kolom tetapi hanya ${uniqueDates.size} tanggal unik.`);
+  }
+  for (let i=1; i<dateCols.length; i++) {
+    const prev = new Date(`${dateCols[i-1].date}T00:00:00Z`);
+    const cur = new Date(`${dateCols[i].date}T00:00:00Z`);
+    const gap = Math.round((cur - prev) / 86400000);
+    if (gap !== 1) {
+      throw new Error(`Urutan tanggal sheet "${sheetName}" tidak kontigu di ${dateCols[i-1].date} → ${dateCols[i].date}. Import dibatalkan agar periode tidak salah.`);
+    }
+  }
+
+  const entries=[];
+  let skipped=0;
+  for (let r=2;r<aoa.length;r++) {
+    const row=aoa[r] || [];
+    const crewName=text(row[1]);
+    const gender=text(row[2]);
+    if (!crewName) continue; // baris kedua merge / rekap / kosong
+    if (crewName.toLowerCase()==='nama' || crewName.toLowerCase().includes('shift 1')) break;
+
+    for (const {c,date} of dateCols) {
+      const raw=text(row[c]);
+      if (!raw) continue;
+      if (raw.toUpperCase()==='LIBUR') {
+        entries.push({date,crewName,gender,shift:'Libur',role:'',notes:'',overtime:false,overtimeType:'',overtimeNote:''});
+        continue;
+      }
+      const address = XLSX.utils.encode_cell({r,c});
+      const cell=sheet[address];
+      const overtime=/LEMBUR\s*:/i.test(raw);
+      const overtimeType=(raw.match(/LEMBUR\s*:\s*([^\n\r]+)/i)?.[1] || '').trim();
+      const role=raw.split(/\r?\n/)[0].trim();
+      let shift=shiftFromCellStyle(cell);
+      if (shift==='Lembur') shift=inferOvertimeShift(overtimeType);
+      if (!['S1','S2','Middle'].includes(shift)) {
+        const color = readableCellFill(cell);
+        const styleKeys = cell?.s && typeof cell.s === 'object' ? Object.keys(cell.s).slice(0,8).join(',') : '';
+        throw new Error(`Shift pada ${address} (${date} · ${crewName} · ${role || raw}) tidak bisa dikenali dari warna cell${color ? ` [${color}]` : ''}${!color && styleKeys ? ` [style:${styleKeys}]` : ''}. Pastikan warna shift tetap: hijau=S1, biru=S2, oranye=Middle, merah=Libur, lalu download sebagai Microsoft Excel (.xlsx).`);
+      }
+      entries.push({date,crewName,gender,shift,role: role==='-'?'':role,notes:'',overtime,overtimeType:overtime ? (overtimeType || 'Buka') : '',overtimeNote:''});
+    }
+  }
+  if (!entries.length) throw new Error(`Tabel "${sheetName}" terbaca, tetapi tidak ada entry jadwal valid.`);
+  return { entries, skipped:0, sourceLabel:`${sheetName} (matrix)` };
+}
+
+function normalizeRgb(value) {
+  // xlsx-js-style dapat mengembalikan rgb sebagai string maupun number.
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.trunc(value).toString(16).toUpperCase().padStart(6, '0').slice(-6);
+  }
+  let hex = String(value || '').trim().replace(/^#/, '').replace(/^0x/i, '').toUpperCase();
+  if (hex.length === 8) hex = hex.slice(-6); // ARGB -> RGB
+  return /^[0-9A-F]{6}$/.test(hex) ? hex : '';
+}
+function rgbTuple(hex) {
+  const h = normalizeRgb(hex);
+  return h ? [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)] : null;
+}
+function colorDistance(a,b) {
+  const x=rgbTuple(a), y=rgbTuple(b);
+  if(!x||!y) return Infinity;
+  return Math.sqrt((x[0]-y[0])**2 + (x[1]-y[1])**2 + (x[2]-y[2])**2);
+}
+function readableCellFill(cell) {
+  // Ada dua bentuk style yang umum saat XLSX dibaca:
+  // 1) writer-style: cell.s.fill.fgColor
+  // 2) parsed-style (termasuk file Google Sheets): cell.s.fgColor langsung
+  // Versi lama hanya membaca bentuk pertama sehingga warna terlihat di Excel,
+  // tetapi dianggap kosong oleh importer.
+  const style = cell?.s || {};
+  const fill = style?.fill || {};
+  const colors = [
+    fill?.fgColor, fill?.bgColor,
+    style?.fgColor, style?.bgColor,
+    style?.fill?.fgColor, style?.fill?.bgColor
+  ];
+  for (const color of colors) {
+    const rgb = normalizeRgb(color?.rgb ?? color?.argb ?? color);
+    if (rgb) return rgb;
+  }
+  return '';
+}
+function shiftFromCellStyle(cell) {
+  const rgb = readableCellFill(cell);
+  if (!rgb) return '';
+  const palette = [
+    ['S1','00E72D'],
+    ['S2','4285E8'],
+    ['Middle','FF9800'],
+    ['Libur','FF1616'],
+    ['Lembur','FFE500']
+  ];
+  let best = ['', Infinity];
+  for (const [shift, target] of palette) {
+    const d = colorDistance(rgb, target);
+    if (d < best[1]) best = [shift, d];
+  }
+  // Google Sheets kadang mengubah sedikit RGB saat export XLSX. Toleransi ini
+  // tetap cukup ketat supaya warna putih/abu tidak dianggap shift.
+  return best[1] <= 72 ? best[0] : '';
+}
+function inferOvertimeShift(type) {
+  const s=text(type).toLowerCase();
+  if (s.includes('11') || s.includes('tutup')) return 'S2';
+  if (s.includes('buka') || s.includes('08')) return 'S1';
+  return '';
+}
+function parseIndonesianMonthYear(value) {
+  const months={januari:1,februari:2,maret:3,april:4,mei:5,juni:6,juli:7,agustus:8,september:9,oktober:10,november:11,desember:12,jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,agu:8,ags:8,sep:9,okt:10,nov:11,des:12};
+  const s=text(value).toLowerCase();
+  for (const [name,month] of Object.entries(months)) {
+    const m=s.match(new RegExp(`\\b${name}\\s+(20\\d{2})\\b`,'i'));
+    if (m) return {month,year:Number(m[1])};
+  }
+  const iso=s.match(/(20\d{2})[-\/]?(0?[1-9]|1[0-2])/);
+  return iso ? {year:Number(iso[1]),month:Number(iso[2])} : null;
+}
+function matrixDateKey(value, period) {
+  // Google Sheets / Excel bisa menyimpan header yang terlihat seperti "26 Agu"
+  // sebagai serial date number. Jangan bergantung pada teks tampilan saja.
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const d = XLSX.SSF.parse_date_code(value);
+    if (d?.y && d?.m && d?.d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+  }
+
+  const raw=text(value);
+  if (!raw) return '';
+
+  // ISO / dd-mm-yyyy / dd/mm/yyyy juga diterima.
+  const direct=asDate(raw);
+  if (direct) return direct;
+
+  const s=raw.toLowerCase().replace(/\./g,'').replace(/\s+/g,' ').trim();
+  const m=s.match(/^(\d{1,2})\s+([a-z]+)(?:\s+(20\d{2}))?$/i);
+  if (!m) return '';
+  const map={
+    jan:1,januari:1,
+    feb:2,februari:2,
+    mar:3,maret:3,
+    apr:4,april:4,
+    mei:5,
+    jun:6,juni:6,
+    jul:7,juli:7,
+    agu:8,ags:8,agustus:8,
+    sep:9,september:9,
+    okt:10,oktober:10,
+    nov:11,november:11,
+    des:12,desember:12
+  };
+  const token=m[2].toLowerCase();
+  const month=map[token] || map[token.slice(0,3)];
+  if (!month) return '';
+
+  let year = m[3] ? Number(m[3]) : Number(period?.year || 0);
+  if (!year) return '';
+  if (!m[3] && period) {
+    // Periode 26 bulan sebelumnya -> 25 bulan terpilih harus aman lintas tahun.
+    if (month > period.month + 6) year -= 1;
+    else if (month + 6 < period.month) year += 1;
+  }
+  return `${year}-${String(month).padStart(2,'0')}-${String(Number(m[1])).padStart(2,'0')}`;
+}
+function findSheet(wb, aliases=[]) {
+  const target=aliases.map(normalizeSheetName);
+  for (const name of wb.SheetNames || []) {
+    if (target.includes(normalizeSheetName(name))) return {name,sheet:wb.Sheets[name]};
+  }
+  return null;
+}
+function normalizeSheetName(v){ return text(v).toLowerCase().replace(/[\s_-]+/g,''); }
+function pick(row, aliases=[]) {
+  for (const key of aliases) {
+    if (Object.prototype.hasOwnProperty.call(row || {}, key) && row[key] !== '') return row[key];
+  }
+  const normalized=Object.fromEntries(Object.entries(row || {}).map(([k,v])=>[String(k).trim().toLowerCase(),v]));
+  for (const key of aliases) {
+    const v=normalized[String(key).trim().toLowerCase()];
+    if (v !== undefined && v !== '') return v;
+  }
+  return '';
 }
 
 async function importChecklist(wb) {
@@ -231,7 +894,7 @@ async function importStockMaster(wb, existingItems) {
     local.push({ ...existing, id: savedId, name });
     count++;
   }
-  return { count, detail: `Stock Master ${count}` };
+  return { count, detail: `Stock Master ${count}`, items: local };
 }
 
 async function importStockIncoming(wb, context) {
@@ -432,7 +1095,7 @@ function stockAlertRows(analytics) {
 
 async function readWorkbook(file) {
   const data = await file.arrayBuffer();
-  return XLSX.read(data, { type: "array", cellDates: false });
+  return XLSX.read(data, { type: "array", cellDates: false, cellStyles: true });
 }
 function getRows(wb, sheetName, required = false) {
   const sheet = wb.Sheets[sheetName];

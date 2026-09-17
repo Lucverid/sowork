@@ -11,7 +11,10 @@ export const DEFAULT_APP_SETTINGS = {
   reportAutoFillSchedule: true,
   googleSheetWebAppUrl: "",
   googleSheetSpreadsheetUrl: "",
-  googleSheetSecret: ""
+  googleSheetSecret: "",
+  scheduleLastSavedMonth: "",
+  scheduleLastSavedIncludeCarryover: true,
+  scheduleLastSavedAt: ""
 };
 
 export function watchAppSettings(callback, onError) {
@@ -21,7 +24,7 @@ export function watchAppSettings(callback, onError) {
 }
 
 export async function saveAppSettings(settings) {
-  await setDoc(doc(db, "settings", "app"), {
+  const payload = {
     outletName: String(settings.outletName || "SoWork").trim(),
     branchName: String(settings.branchName || "Operations Hub").trim(),
     defaultPrimaryLocation: String(settings.defaultPrimaryLocation || "Gudang Utama").trim(),
@@ -33,7 +36,19 @@ export async function saveAppSettings(settings) {
     googleSheetSpreadsheetUrl: String(settings.googleSheetSpreadsheetUrl || "").trim(),
     googleSheetSecret: String(settings.googleSheetSecret || "").trim(),
     updatedAt: serverTimestamp()
-  }, { merge: true });
+  };
+
+  // Schedule period metadata bersifat opsional. Kalau form Settings umum tidak
+  // mengirim field ini, nilai yang sudah tersimpan tidak boleh terhapus.
+  if (Object.prototype.hasOwnProperty.call(settings, "scheduleLastSavedMonth")) {
+    payload.scheduleLastSavedMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(settings.scheduleLastSavedMonth || ""))
+      ? String(settings.scheduleLastSavedMonth)
+      : "";
+    payload.scheduleLastSavedIncludeCarryover = settings.scheduleLastSavedIncludeCarryover !== false;
+    payload.scheduleLastSavedAt = String(settings.scheduleLastSavedAt || "").trim();
+  }
+
+  await setDoc(doc(db, "settings", "app"), payload, { merge: true });
 }
 
 export async function updateProfileName(uid, name) {

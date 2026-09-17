@@ -51,6 +51,8 @@ export async function saveWasteItem(item) {
     costPerUnit:Math.max(0,Number(item.costPerUnit||0)),
     dailyWarningQty:Math.max(0,Number(item.dailyWarningQty||0)),
     monthlyTargetQty:Math.max(0,Number(item.monthlyTargetQty||0)),
+    planningSourceType:["product","production","stock"].includes(String(item.planningSourceType||"")) ? String(item.planningSourceType) : "none",
+    planningRefId:String(item.planningRefId||"").trim(),
     updatedAt:serverTimestamp()
   }, {merge:true});
   return id;

@@ -98,7 +98,7 @@ function createRequestId() {
 async function submitAndVerify(endpoint, payload, { timeoutMs = 25000 } = {}) {
   if (typeof document === "undefined") throw new Error("Pengiriman Google Sheet hanya tersedia di browser.");
 
-  // v1.6.5: tetap memakai hidden iframe POST, tetapi konfirmasi tidak lagi
+  // v1.7.14: tetap memakai hidden iframe POST, tetapi konfirmasi tidak lagi
   // mengandalkan event.source === iframe.contentWindow. Apps Script dapat
   // membungkus response di frame Google lain setelah redirect.
   const callbackToken = createRequestId();
@@ -154,7 +154,7 @@ function submitViaIframeBridge(endpoint, payload, { timeoutMs = 25000 } = {}) {
     };
 
     const onMessage = event => {
-      // v1.6.5: Apps Script dapat mengirim dari wrapper script.googleusercontent.com.
+      // v1.7.14: Apps Script dapat mengirim dari wrapper script.googleusercontent.com.
       // Keamanan tetap dijaga oleh origin Google + requestId + callbackToken acak.
       if (!isTrustedAppsScriptOrigin(event.origin)) return;
       const data = event.data;
@@ -167,8 +167,17 @@ function submitViaIframeBridge(endpoint, payload, { timeoutMs = 25000 } = {}) {
     };
 
     window.addEventListener("message", onMessage);
-    const timer = setTimeout(() => {
-      finish(new Error("Jadwal mungkin sudah terkirim, tetapi konfirmasi Apps Script tidak diterima. Pastikan Code.gs memakai bridge v1.6.5 lalu deploy New version."));
+    const timer = setTimeout(async () => {
+      // v1.7.14: fallback status check. Apps Script kadang berhasil menulis sheet tetapi
+      // postMessage dari iframe diblokir/terlambat oleh wrapper Google.
+      try {
+        const status = await waitForBridgeStatus(endpoint, payload.requestId, { attempts: 3, delayMs: 1200 });
+        if (status && !status.pending) {
+          if (!status.ok) return finish(new Error(status.error || "Apps Script menolak permintaan."));
+          return finish(null, { ...status, verified: true, verifiedVia: "status" });
+        }
+      } catch (_) {}
+      finish(new Error("Jadwal mungkin sudah terkirim, tetapi konfirmasi Apps Script tidak diterima. Pastikan Code.gs v1.7.14 sudah dipaste lalu deploy sebagai New version."));
     }, timeoutMs);
 
     document.body.appendChild(iframe);
@@ -178,6 +187,52 @@ function submitViaIframeBridge(endpoint, payload, { timeoutMs = 25000 } = {}) {
     } catch (error) {
       finish(error);
     }
+  });
+}
+
+
+async function waitForBridgeStatus(endpoint, requestId, { attempts = 3, delayMs = 1000 } = {}) {
+  let last = null;
+  for (let i = 0; i < attempts; i++) {
+    last = await readBridgeStatusJsonp(endpoint, requestId);
+    if (last && !last.pending) return last;
+    if (i < attempts - 1) await delay(delayMs);
+  }
+  return last;
+}
+
+function readBridgeStatusJsonp(endpoint, requestId) {
+  if (typeof document === "undefined") return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const callback = `__soworkSheetStatus_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const script = document.createElement("script");
+    let done = false;
+    let timer = null;
+    const cleanup = () => {
+      try { delete window[callback]; } catch (_) { window[callback] = undefined; }
+      script.remove();
+    };
+    const finish = (error, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      if (error) reject(error); else resolve(value);
+    };
+    window[callback] = value => finish(null, value || null);
+    script.onerror = () => finish(new Error("Status Apps Script tidak dapat dibaca."));
+    try {
+      const url = new URL(endpoint);
+      url.searchParams.set("action", "status");
+      url.searchParams.set("requestId", String(requestId || ""));
+      url.searchParams.set("callback", callback);
+      script.src = url.toString();
+    } catch (error) {
+      finish(error);
+      return;
+    }
+    timer = setTimeout(() => finish(new Error("Status Apps Script timeout.")), 6000);
+    document.head.appendChild(script);
   });
 }
 

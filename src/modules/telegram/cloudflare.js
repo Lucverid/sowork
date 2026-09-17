@@ -52,3 +52,11 @@ export function unpairTelegram(workerUrl) {
 export function sendTelegramStockReceiptBatch(workerUrl, payload) {
   return requestWorker(workerUrl, "/api/stock-receipt-batch", { method: "POST", body: JSON.stringify(payload || {}) });
 }
+
+export function sendTelegramStockOpname(workerUrl, payload) {
+  return requestWorker(workerUrl, "/api/stock-opname", { method: "POST", body: JSON.stringify(payload || {}) });
+}
+
+export function sendTelegramPlanningEvent(workerUrl, payload) {
+  return requestWorker(workerUrl, "/api/planning-event", { method: "POST", body: JSON.stringify(payload || {}) });
+}
