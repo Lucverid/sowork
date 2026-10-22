@@ -1,6 +1,6 @@
 // Build placeholders are replaced by scripts/vite-pwa.mjs.
-const PRECACHE = ["./","./index.html","./manifest.json","./icons/icon-192.png","./icons/icon-512.png","./icons/maskable-512.png","./icons/apple-touch-icon.png","./assets/index-eu9zJzZM.js","./assets/index-BX8KPSVo.css"];
-const RELEASE = "2.1.13-4d95747c3b1c";
+const PRECACHE = ["./","./index.html","./manifest.json","./icons/icon-192.png","./icons/icon-512.png","./icons/maskable-512.png","./icons/apple-touch-icon.png","./assets/index-CSG--2yy.js","./assets/index-BX8KPSVo.css"];
+const RELEASE = "2.1.15-c7b52fb07d9c";
 const SCOPE = new URL('./', self.location.href);
 const CACHE_PREFIX = `sowork:${SCOPE.pathname}:`;
 const CACHE_NAME = `${CACHE_PREFIX}${RELEASE}`;
